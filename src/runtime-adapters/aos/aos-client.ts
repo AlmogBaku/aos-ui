@@ -52,6 +52,9 @@ export type AosClientFailure =
   /** The provider no longer holds the bytes a published receipt points at. */
   | "artifact-missing"
 
+/** What an MCP App view is opened for: a tool call, or a published Artifact. */
+export type McpAppSubject = { toolCallId: string } | { artifactId: string }
+
 export class AosClientError extends Error {
   constructor(
     readonly kind: AosClientFailure,
@@ -105,7 +108,9 @@ export class AosRemoteClient {
   async #read<T>(
     path: string,
     schema: Schema<T>,
-    init?: RequestInit
+    init?: RequestInit,
+    /** How this route reads an absent resource; 503 always stays an outage. */
+    notFound: AosClientFailure = "proxy-failure"
   ): Promise<T> {
     let response: Response
     try {
@@ -123,7 +128,11 @@ export class AosRemoteClient {
     if (!response.ok) {
       const error = await normalizedError(response)
       throw new AosClientError(
-        response.status === 503 ? "provider-unavailable" : "proxy-failure",
+        response.status === 503
+          ? "provider-unavailable"
+          : response.status === 404
+            ? notFound
+            : "proxy-failure",
         error?.description,
         error?.code,
         response.status
@@ -222,18 +231,21 @@ export class AosRemoteClient {
     )
   }
 
-  /** The App view a flagged tool call renders; the proxy resolves its resource. */
+  /**
+   * The App view a flagged tool call renders, or the viewer a published
+   * Artifact opens in; the proxy resolves its resource. A published Artifact
+   * the provider has since pruned reads as `artifact-missing`, as its bytes do.
+   */
   async openMcpApp(
     sessionId: string,
-    toolCallId: string,
+    subject: McpAppSubject,
     signal?: AbortSignal
   ) {
     const view = await this.#read(
-      this.#mcpAppPath(sessionId, toolCallId),
+      this.#mcpAppPath(sessionId, subject),
       McpAppViewSchema,
-      {
-        signal,
-      }
+      { signal },
+      "artifactId" in subject ? "artifact-missing" : "proxy-failure"
     )
     return view.files
       ? { ...view, files: this.#absoluteFiles(view.files) }
@@ -241,10 +253,10 @@ export class AosRemoteClient {
   }
 
   /** Fresh addresses, each under a new pass, for the files a view reads. */
-  async renewMcpAppFiles(sessionId: string, toolCallId: string) {
+  async renewMcpAppFiles(sessionId: string, subject: McpAppSubject) {
     return this.#absoluteFiles(
       await this.#read(
-        this.#mcpAppPath(sessionId, toolCallId, "/files"),
+        this.#mcpAppPath(sessionId, subject, "/files"),
         McpAppFilesSchema,
         { method: "POST" }
       )
@@ -273,7 +285,7 @@ export class AosRemoteClient {
   ) {
     return this.#postMcpApp(
       sessionId,
-      toolCallId,
+      { toolCallId },
       "/tools/call",
       McpAppToolCallRequestSchema.safeParse(request),
       CallToolResultSchema
@@ -283,12 +295,12 @@ export class AosRemoteClient {
   /** A resource read the App view makes, answered by the proxy's MCP server. */
   async readMcpAppResource(
     sessionId: string,
-    toolCallId: string,
+    subject: McpAppSubject,
     request: McpAppResourceReadRequest
   ) {
     return this.#postMcpApp(
       sessionId,
-      toolCallId,
+      subject,
       "/resources/read",
       McpAppResourceReadRequestSchema.safeParse(request),
       ReadResourceResultSchema
@@ -365,25 +377,29 @@ export class AosRemoteClient {
     }
   }
 
-  #mcpAppPath(sessionId: string, toolCallId: string, suffix = "") {
-    if (!toolCallId.trim() || toolCallId.length > 512)
-      throw new AosClientError("proxy-failure", "Invalid tool call reference")
+  #mcpAppPath(sessionId: string, subject: McpAppSubject, suffix = "") {
+    const [collection, id] =
+      "toolCallId" in subject
+        ? ["tool-calls", subject.toolCallId]
+        : ["artifacts", subject.artifactId]
+    if (!id.trim() || id.length > 512)
+      throw new AosClientError("proxy-failure", "Invalid MCP App reference")
     return this.#sessionPath(
       sessionId,
-      `/tool-calls/${encodeURIComponent(toolCallId)}/app${suffix}`
+      `/${collection}/${encodeURIComponent(id)}/app${suffix}`
     )
   }
 
   async #postMcpApp<T>(
     sessionId: string,
-    toolCallId: string,
+    subject: McpAppSubject,
     suffix: string,
     request: { success: true; data: unknown } | { success: false },
     schema: Schema<T>
   ) {
     if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid MCP App request")
-    return this.#read(this.#mcpAppPath(sessionId, toolCallId, suffix), schema, {
+    return this.#read(this.#mcpAppPath(sessionId, subject, suffix), schema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request.data),

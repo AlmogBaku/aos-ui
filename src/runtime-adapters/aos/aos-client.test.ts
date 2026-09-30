@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
+
 import { McpAppFilesRefusedError } from "../contracts"
 import { AosClientError, AosRemoteClient } from "./aos-client"
 import { AosMcpAppAdapter } from "./aos-mcp-apps"
@@ -391,7 +393,9 @@ describe("MCP App routes", () => {
     const client = new AosRemoteClient({ fetcher })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
 
-    await expect(client.openMcpApp(SESSION_ID, "call/1")).resolves.toEqual({
+    await expect(
+      client.openMcpApp(SESSION_ID, { toolCallId: "call/1" })
+    ).resolves.toEqual({
       html: "<p>app</p>",
     })
     await expect(
@@ -401,9 +405,13 @@ describe("MCP App routes", () => {
       })
     ).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] })
     await expect(
-      client.readMcpAppResource(SESSION_ID, "call/1", {
-        uri: "ui://board/data",
-      })
+      client.readMcpAppResource(
+        SESSION_ID,
+        { toolCallId: "call/1" },
+        {
+          uri: "ui://board/data",
+        }
+      )
     ).resolves.toMatchObject({ contents: [{ uri: "ui://board/data" }] })
 
     const base = `/api/aos/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}`
@@ -430,7 +438,7 @@ describe("MCP App routes", () => {
     })
     client.adoptSessionOwnership("guest_ref", AGENT_ID)
 
-    await client.openMcpApp("guest_ref", "call/1")
+    await client.openMcpApp("guest_ref", { toolCallId: "call/1" })
 
     expect(String(fetcher.mock.calls[0]?.[0])).toBe(
       `/api/guest/v1/agents/researcher/sessions/guest_ref${APP_PATH}`
@@ -440,12 +448,61 @@ describe("MCP App routes", () => {
     ).toBe("Bearer invitation-token")
   })
 
+  it("addresses a published Artifact's view by its id and calls none of its tools", async () => {
+    const fetcher = appFetcher()
+    const client = new AosRemoteClient({ fetcher })
+    client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+    const adapter = new AosMcpAppAdapter(client)
+    const target = {
+      agentId: AGENT_ID,
+      sessionId: SESSION_ID,
+      artifactId: "artifact/1",
+    }
+
+    await adapter.open(target)
+    await adapter.readResource({ ...target, uri: "ui://aos-ui/artifact" })
+    await expect(
+      adapter.callTool({ ...target, name: "refresh", arguments: {} })
+    ).rejects.toThrow("calls no tool")
+
+    const base = `/api/aos/v1/agents/researcher/sessions/opaque-session-1/artifacts/artifact%2F1/app`
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
+      base,
+      `${base}/resources/read`,
+    ])
+  })
+
+  it.each<
+    [string, { toolCallId: string } | { artifactId: string }, number, boolean]
+  >([
+    ["a pruned Artifact", { artifactId: "artifact-1" }, 404, true],
+    ["an Artifact with no viewer", { artifactId: "artifact-1" }, 503, false],
+    ["a tool call the Session lacks", { toolCallId: "call-1" }, 404, false],
+  ])("reads opening %s as missing: %s", async (_, subject, status, missing) => {
+    const client = new AosRemoteClient({
+      fetcher: vi.fn(async () => Response.json({}, { status })),
+    })
+    client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+
+    const opened = new AosMcpAppAdapter(client).open({
+      agentId: AGENT_ID,
+      sessionId: SESSION_ID,
+      ...subject,
+    })
+
+    await expect(opened).rejects.toBeInstanceOf(
+      missing ? ArtifactMissingError : AosClientError
+    )
+  })
+
   it("refuses an empty tool call id before asking the proxy", async () => {
     const fetcher = appFetcher()
     const client = new AosRemoteClient({ fetcher })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
 
-    await expect(client.openMcpApp(SESSION_ID, "")).rejects.toMatchObject({
+    await expect(
+      client.openMcpApp(SESSION_ID, { toolCallId: "" })
+    ).rejects.toMatchObject({
       kind: "proxy-failure",
     })
     expect(fetcher).not.toHaveBeenCalled()
@@ -472,7 +529,9 @@ describe("MCP App routes", () => {
     })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
 
-    await expect(client.openMcpApp(SESSION_ID, "call/1")).resolves.toEqual({
+    await expect(
+      client.openMcpApp(SESSION_ID, { toolCallId: "call/1" })
+    ).resolves.toEqual({
       html: "<p>app</p>",
       files: {
         addresses: { path: `https://aos.example${files}/path?pass=first` },
@@ -480,7 +539,7 @@ describe("MCP App routes", () => {
       },
     })
     await expect(
-      client.renewMcpAppFiles(SESSION_ID, "call/1")
+      client.renewMcpAppFiles(SESSION_ID, { toolCallId: "call/1" })
     ).resolves.toEqual({
       addresses: { path: `https://aos.example${files}/path?pass=next` },
     })
