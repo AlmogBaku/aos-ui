@@ -4,6 +4,7 @@ import {
   applyDocumentTheme,
   applyHostFonts,
   applyHostStyleVariables,
+  type McpUiDisplayMode,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
@@ -18,12 +19,22 @@ import {
   type ViewLabels,
   type ViewLocale,
 } from "./locale"
+import { rateLimited } from "./rate-limit"
 import "./styles.css"
+
+/** The requests a view sends its page. */
+export type ViewApp = Pick<
+  App,
+  "readServerResource" | "downloadFile" | "openLink" | "requestDisplayMode"
+>
 
 export type ViewProps<T> = {
   value: T
   labels: ViewLabels
   locale: ViewLocale
+  app: ViewApp
+  /** What the page last reported, merged; a view reads its own keys from it. */
+  context?: McpUiHostContext
 }
 
 const FALLBACK_MARKER = "Structured fallback:\n"
@@ -96,6 +107,7 @@ function applyHostContext(
 
 type ViewState = {
   locale: ViewLocale
+  context?: McpUiHostContext
   input?: unknown
   result?: CallToolResult
   settled: boolean
@@ -111,23 +123,31 @@ function ViewRoot<T>({
   store,
   schema,
   View,
+  app,
 }: {
   store: ViewStore
   schema: z.ZodType<T>
   View: ComponentType<ViewProps<T>>
+  app: ViewApp
 }) {
-  const { locale, input, result, settled, cancelled } = useSyncExternalStore(
-    store.subscribe,
-    store.getState
-  )
+  const { locale, context, input, result, settled, cancelled } =
+    useSyncExternalStore(store.subscribe, store.getState)
   const labels = VIEW_LABELS[locale]
   const value = cancelled ? undefined : presentationValue(schema, input, result)
   if (value !== undefined)
-    return <View value={value} labels={labels} locale={locale} />
-  const waiting = input === undefined && !settled
+    return (
+      <View
+        value={value}
+        labels={labels}
+        locale={locale}
+        app={app}
+        context={context}
+      />
+    )
+  // An input that does not parse may still be followed by a result that does.
   return (
     <p className="p-3 text-sm text-muted-foreground" role="status">
-      {cancelled ? labels.cancelled : waiting ? labels.waiting : labels.invalid}
+      {cancelled ? labels.cancelled : settled ? labels.invalid : labels.waiting}
     </p>
   )
 }
@@ -141,15 +161,22 @@ function ViewRoot<T>({
 export function startView<T>(
   name: PresentationViewName,
   schema: z.ZodType<T>,
-  View: ComponentType<ViewProps<T>>
+  View: ComponentType<ViewProps<T>>,
+  displayModes: McpUiDisplayMode[] = ["inline"]
 ) {
   const root = document.getElementById("root")
   if (!root) throw new Error("The view document has no root")
   const app = new App(
     { name: `aos-ui-${name}`, version: "1.0.0" },
-    { availableDisplayModes: ["inline"] },
+    { availableDisplayModes: displayModes },
     { autoResize: true }
   )
+  const viewApp: ViewApp = {
+    readServerResource: rateLimited((params) => app.readServerResource(params)),
+    downloadFile: (params) => app.downloadFile(params),
+    openLink: (params) => app.openLink(params),
+    requestDisplayMode: (params) => app.requestDisplayMode(params),
+  }
   let state: ViewState = {
     locale: applyHostContext(root, undefined),
     settled: false,
@@ -167,8 +194,10 @@ export function startView<T>(
     },
     getState: () => state,
   }
-  const refresh = () =>
-    update({ locale: applyHostContext(root, app.getHostContext()) })
+  const refresh = () => {
+    const context = app.getHostContext()
+    update({ context, locale: applyHostContext(root, context) })
+  }
   const reactRoot = createRoot(root)
   app.ontoolinput = ({ arguments: input }) => update({ input })
   app.ontoolresult = (result) => update({ result, settled: true })
@@ -179,7 +208,9 @@ export function startView<T>(
     listeners.clear()
     return {}
   }
-  reactRoot.render(<ViewRoot store={store} schema={schema} View={View} />)
+  reactRoot.render(
+    <ViewRoot store={store} schema={schema} View={View} app={viewApp} />
+  )
   void app
     .connect(new PostMessageTransport(window.parent, window.parent))
     .then(refresh, () => undefined)

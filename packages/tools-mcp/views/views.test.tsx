@@ -1,15 +1,19 @@
 import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { ArtifactView } from "./artifact-view"
 import { ChartView } from "./chart-view"
 import { VIEW_LABELS, viewLocale, type ViewLocale } from "./locale"
 import { MapView } from "./map-view"
 import { StatsView } from "./stats-view"
-import { presentationValue, resultValue } from "./view"
+import { presentationValue, resultValue, type ViewApp } from "./view"
 import { render_chartSchema } from "../../../shared/presentation/tools"
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const chart = {
   title: "Enterprise AI spend",
@@ -38,8 +42,18 @@ const map = {
   ],
 }
 
+/** A page that grants every request a view sends it. */
+function fakeApp() {
+  return {
+    readServerResource: vi.fn(async () => ({ contents: [] })),
+    downloadFile: vi.fn(async () => ({})),
+    openLink: vi.fn(async () => ({})),
+    requestDisplayMode: vi.fn(async () => ({ mode: "inline" as const })),
+  } satisfies ViewApp
+}
+
 function props<T>(value: T, locale: ViewLocale = "en") {
-  return { value, locale, labels: VIEW_LABELS[locale] }
+  return { value, locale, labels: VIEW_LABELS[locale], app: fakeApp() }
 }
 
 describe("the value a view draws", () => {
@@ -155,6 +169,110 @@ describe("map view", () => {
     expect(
       screen.getByRole("list", { name: "Interview coverage — מיקומים" })
     ).toBeVisible()
+  })
+})
+
+describe("artifact view", () => {
+  const notes = { filename: "notes.txt" }
+
+  /** What the page reports: the file's current address, by argument name. */
+  function files(path: string) {
+    return { "aos/files": { path } }
+  }
+
+  it.each([
+    ["without a length", {}, 3],
+    ["with a length above the limit", { "content-length": "256" }, 0],
+  ])(
+    "stops reading a file %s at the limit and offers Download",
+    async (_case, headers, reads) => {
+      let pulled = 0
+      const cancel = vi.fn()
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulled += 1
+            controller.enqueue(new TextEncoder().encode("xxxx"))
+          },
+          cancel,
+        },
+        { highWaterMark: 0 }
+      )
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(body, { headers }))
+      )
+      const address = "https://aos.test/files/notes.txt?pass=one"
+      const view = props(notes)
+      render(
+        <ArtifactView {...view} context={files(address)} previewLimit={8} />
+      )
+
+      expect(
+        await screen.findByText("This file is too large to preview.")
+      ).toBeVisible()
+      expect(pulled).toBe(reads)
+      expect(cancel).toHaveBeenCalledOnce()
+      expect(screen.queryByText(/xxxx/u)).toBeNull()
+      await userEvent.click(screen.getByRole("button", { name: "Download" }))
+      expect(view.app.downloadFile).toHaveBeenCalledWith({
+        contents: [{ type: "resource_link", uri: address, name: "notes.txt" }],
+      })
+    }
+  )
+
+  it("fetches again once a renewed address follows a refused one, and links the current address", async () => {
+    const [first, second, third] = ["one", "two", "three"].map(
+      (pass) => `https://aos.test/files/notes.txt?pass=${pass}`
+    ) as [string, string, string]
+    const fetched: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (address: string) => {
+        fetched.push(address)
+        return address === first
+          ? new Response(null, { status: 401 })
+          : new Response("Quarterly notes")
+      })
+    )
+    const view = props(notes)
+    const { rerender } = render(
+      <ArtifactView {...view} context={files(first)} />
+    )
+    expect(await screen.findByText("Can't reach this file.")).toBeVisible()
+
+    rerender(<ArtifactView {...view} context={files(second)} />)
+    expect(await screen.findByText("Quarterly notes")).toBeVisible()
+    rerender(<ArtifactView {...view} context={files(third)} />)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open in new tab" })
+    )
+    expect(view.app.openLink).toHaveBeenCalledWith({ url: third })
+    expect(fetched).toEqual([first, second])
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }))
+    expect(await screen.findByText("Quarterly notes")).toBeVisible()
+    expect(fetched).toEqual([first, second, third])
+  })
+
+  it("shows HTML only in a frame that runs none of its scripts", async () => {
+    const html =
+      "<h1>Launch plan</h1><script>parent.postMessage('ran', '*')</script>"
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(html))
+    )
+    render(
+      <ArtifactView
+        {...props({ filename: "plan.html" })}
+        context={files("https://aos.test/files/plan.html?pass=one")}
+      />
+    )
+
+    const frame = await screen.findByTitle("HTML preview")
+    expect(frame).toHaveAttribute("sandbox", "")
+    expect(frame).toHaveAttribute("srcdoc", html)
+    expect(screen.queryByRole("heading", { name: "Launch plan" })).toBeNull()
   })
 })
 
