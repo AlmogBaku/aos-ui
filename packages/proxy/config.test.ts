@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import { isHttpsOrLoopback, parseProxyConfig } from "./config"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
+import { appFileSettings } from "./routes/app-files"
 
 const temporaryDirectories: string[] = []
 
@@ -554,5 +555,34 @@ describe("MCP App files", () => {
       expect(() => parseProxyConfig(withFolder(folder))).toThrow(
         "Invalid proxy configuration"
       )
+  })
+})
+
+describe("the Artifact viewer", () => {
+  const withViewer = (viewer: unknown) => ({
+    ...validConfig(),
+    mcpApps: { files: { viewer } },
+  })
+
+  it("defaults to aos-ui's artifact view and takes another server's ui:// resource", () => {
+    expect(appFileSettings(undefined).viewer).toEqual({
+      server: "aos-ui",
+      resource: "ui://aos-ui/artifact",
+    })
+    const viewer = { server: "files", resource: "ui://files/viewer" }
+    expect(parseProxyConfig(withViewer(viewer)).mcpApps?.files?.viewer).toEqual(
+      viewer
+    )
+  })
+
+  it.each([
+    ["a relative resource", { server: "aos-ui", resource: "artifact" }],
+    ["a non-ui resource", { server: "aos-ui", resource: "https://x.test/v" }],
+    ["no server", { server: "", resource: "ui://aos-ui/artifact" }],
+    ["no resource", { server: "aos-ui" }],
+  ])("rejects %s", (_, viewer) => {
+    expect(() => parseProxyConfig(withViewer(viewer))).toThrow(
+      "Invalid proxy configuration"
+    )
   })
 })

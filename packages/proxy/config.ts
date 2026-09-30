@@ -1,6 +1,8 @@
 import { isAbsolute } from "node:path"
 import { z } from "zod"
 
+import { isUiResourceUri } from "./mcp-apps/policy"
+
 /** The proxy log's levels, quietest last; `info` is the default. */
 export const PROXY_LOG_LEVELS = ["debug", "info", "warn", "error"] as const
 export type ProxyLogLevel = (typeof PROXY_LOG_LEVELS)[number]
@@ -299,6 +301,16 @@ const McpAppsSchema = z.strictObject({
       servers: z.array(z.string().min(1).max(256)).max(64).optional(),
       operator: McpAppFolderSetSchema.optional(),
       guest: McpAppFolderSetSchema.optional(),
+      /**
+       * The view a published Artifact opens in: one server's `ui://`
+       * resource, read without a tool call.
+       */
+      viewer: z
+        .strictObject({
+          server: z.string().min(1).max(256),
+          resource: z.string().max(2048).refine(isUiResourceUri),
+        })
+        .optional(),
     })
     .optional(),
 })

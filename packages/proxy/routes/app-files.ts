@@ -67,8 +67,9 @@ type FolderSetConfig = NonNullable<McpAppsConfig["files"]>["operator"]
 
 /**
  * The configured settings with their defaults filled: `aos-ui`'s calls, the
- * Agent folder for operators, nothing for guests, and each call's reads and
- * renewals limited per second apart from its view's own requests.
+ * Agent folder for operators, nothing for guests, `aos-ui`'s artifact view
+ * for published Artifacts, and each call's reads and renewals limited per
+ * second apart from its view's own requests.
  */
 export function appFileSettings(configured: McpAppsConfig["files"]) {
   const folders = (
@@ -83,6 +84,10 @@ export function appFileSettings(configured: McpAppsConfig["files"]) {
     servers: configured?.servers ?? ["aos-ui"],
     operator: folders(configured?.operator, true),
     guest: folders(configured?.guest, false),
+    viewer: configured?.viewer ?? {
+      server: "aos-ui",
+      resource: "ui://aos-ui/artifact",
+    },
     ratePerSecond: 50,
   }
 }
