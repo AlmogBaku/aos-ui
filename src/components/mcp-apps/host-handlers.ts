@@ -58,9 +58,23 @@ export function createRateLimiter(
   }
 }
 
-/** The display modes this host can give a view: in the message, or covering the viewport. */
-export const AVAILABLE_DISPLAY_MODES = ["inline", "fullscreen"] as const
-export type AppDisplayMode = (typeof AVAILABLE_DISPLAY_MODES)[number]
+/**
+ * The display modes this host can give a view: in its message, covering the
+ * viewport, or in the side panel beside the conversation.
+ */
+const DISPLAY_MODES = ["inline", "fullscreen", "pip"] as const
+export type AppDisplayMode = (typeof DISPLAY_MODES)[number]
+/** Where a view's frame sits; moving it between the two reloads the view. */
+export type AppPlacement = Exclude<AppDisplayMode, "fullscreen">
+
+/** The modes a view is offered: the side panel only where a host shows one. */
+export function offeredDisplayModes(
+  sidePanel: boolean
+): readonly AppDisplayMode[] {
+  return sidePanel
+    ? DISPLAY_MODES
+    : DISPLAY_MODES.filter((mode) => mode !== "pip")
+}
 
 /**
  * The mode a `ui/request-display-mode` leaves the view in: the one it asked
@@ -71,8 +85,9 @@ export type AppDisplayMode = (typeof AVAILABLE_DISPLAY_MODES)[number]
 export function grantDisplayMode(
   requested: string,
   current: AppDisplayMode,
+  offered: readonly AppDisplayMode[],
   declared?: readonly string[]
 ): AppDisplayMode {
   if (declared && !declared.includes(requested)) return current
-  return AVAILABLE_DISPLAY_MODES.find((mode) => mode === requested) ?? current
+  return offered.find((mode) => mode === requested) ?? current
 }

@@ -39,6 +39,10 @@ import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
 import { DocumentLocale } from "@/components/document-locale"
 import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
 import { ThemeProvider } from "@/components/theme-provider"
+import {
+  McpAppPipPanel,
+  useMcpAppPip,
+} from "@/components/mcp-apps/mcp-app-card"
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import {
@@ -239,6 +243,8 @@ function GuestConversationShell({
   connectionStatus?: ConnectionNotice
 }) {
   const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
+  // An App view moved to the side panel takes the Artifact viewer's place.
+  const pip = useMcpAppPip(locale)
   return (
     <WorkspaceConversationShell
       locale={locale}
@@ -262,10 +268,12 @@ function GuestConversationShell({
           </div>
         </header>
       }
-      artifactViewer={<ArtifactViewerContent />}
-      artifactViewerOpen={selectedArtifact !== null}
-      artifactViewerLabel={labels.viewerLabel}
-      onCloseArtifactViewer={closeArtifact}
+      artifactViewer={
+        pip ? <McpAppPipPanel locale={locale} /> : <ArtifactViewerContent />
+      }
+      artifactViewerOpen={pip !== undefined || selectedArtifact !== null}
+      artifactViewerLabel={pip?.title ?? labels.viewerLabel}
+      onCloseArtifactViewer={pip?.leave ?? closeArtifact}
     >
       <ArtifactDataUI />
       <WorkspaceStatusNotice
