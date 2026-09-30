@@ -40,7 +40,6 @@ import { storageReceipt } from "../../core/storage-receipt"
 import * as ids from "../../core/ids"
 import { createLink, type LinkOptions } from "../../core/link"
 import { defaultClock } from "../../../lifecycle"
-import { openClawArtifactReceipt, publicArtifactArgs } from "./artifacts"
 import type { OpenClawMcpToolNames } from "./mcp-tool-names"
 import { OpenClawClientRequestError } from "./client"
 import {
@@ -1988,13 +1987,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         active,
         toolCallId,
         name,
-        this.#toolEvents
-          ? safeJson(
-              name === "present_artifact"
-                ? publicArtifactArgs(data.args)
-                : data.args
-            )
-          : "{}",
+        this.#toolEvents ? safeJson(data.args) : "{}",
         epochMs(ts)
       )
       return
@@ -2021,27 +2014,16 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       this.#startTool(active, toolCallId, toolName(data.name, resolve), "{}")
     if (tool.ended) return
     const failed = data.isError === true
-    const artifact =
-      this.#toolEvents && tool.name === "present_artifact"
-        ? openClawArtifactReceipt(toolCallId, data.result)
-        : undefined
     this.#endTool(
       active,
       toolCallId,
       tool,
-      artifact
-        ? JSON.stringify(artifact.result)
-        : this.#toolEvents
-          ? safeJson(data.result)
-          : safeJson({ status: "completed", isError: failed }),
+      this.#toolEvents
+        ? safeJson(data.result)
+        : safeJson({ status: "completed", isError: failed }),
       failed,
       epochMs(ts)
     )
-    if (artifact)
-      active.queue.push({
-        kind: TurnEventKind.ArtifactPublished,
-        artifact: artifact.descriptor,
-      })
   }
 
   #startTool(

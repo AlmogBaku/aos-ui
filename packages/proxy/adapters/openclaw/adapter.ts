@@ -29,10 +29,8 @@ import {
   artifactMime,
   downloadBytes,
   isNativeArtifactId,
-  isReceiptArtifactId,
   OpenClawArtifactUnavailableError,
   OpenClawArtifactUnreadableError,
-  sessionFileBytes,
 } from "./artifacts"
 import { OpenClawContentPublicError } from "./content"
 import { openClawCapabilities } from "./capabilities"
@@ -53,9 +51,7 @@ import {
 import {
   OpenClawNativePayloadError,
   openClawArtifactDownloadParams,
-  openClawSessionFileParams,
   parseOpenClawArtifactDownload,
-  parseOpenClawSessionFile,
 } from "./native-schemas"
 import {
   createOpenClawWorkspace,
@@ -380,34 +376,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
   ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }> {
     await this.#start()
     await this.#workspace.getSession(agentId, publicSessionId)
-    return isReceiptArtifactId(artifactId)
-      ? this.#receiptArtifact(agentId, publicSessionId, artifactId)
-      : this.#nativeArtifact(agentId, publicSessionId, artifactId)
-  }
-
-  /** A `present_artifact` receipt's file, read through the Session workspace. */
-  async #receiptArtifact(agentId: string, sessionKey: string, id: string) {
-    const artifact = await this.#history.publishedArtifact(
-      agentId,
-      sessionKey,
-      id
-    )
-    if (!artifact) throw new OpenClawWorkspaceOwnershipError()
-    const file = parseOpenClawSessionFile(
-      await readable(() =>
-        this.#client.request(
-          "sessions.files.get",
-          openClawSessionFileParams(agentId, sessionKey, artifact.path)
-        )
-      )
-    )
-    const { filename, mimeType } = artifact.descriptor
-    const nativeMime = artifactMime(file.mimeType)
-    return {
-      bytes: sessionFileBytes(file),
-      ...(mimeType || nativeMime ? { mimeType: mimeType ?? nativeMime } : {}),
-      filename,
-    }
+    return this.#nativeArtifact(agentId, publicSessionId, artifactId)
   }
 
   /** OpenClaw's own transcript artifact; the gateway scopes it to the Session. */

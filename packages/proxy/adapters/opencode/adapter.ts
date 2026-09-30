@@ -23,26 +23,19 @@ import {
 } from "../../core/runtime"
 import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
-import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { validIdentifier } from "../../core/identifier"
 import { projectTodos, TODO_STATUS_ALIASES } from "../todos"
 import {
   OpenCodeClientError,
   type OpenCodeClient,
-  type OpenCodeFileContent,
   type OpenCodePageOptions,
 } from "./client"
 import { openCodeCapabilities } from "./capabilities"
-import {
-  OpenCodeContent,
-  OpenCodeContentUnavailableError,
-  OpenCodeContentUnreadableError,
-} from "./content"
+import { OpenCodeContent, OpenCodeContentUnavailableError } from "./content"
 import {
   openCodeHistoryToolNames,
   openCodeProjectedCount,
   projectOpenCodeHistory,
-  publishedOpenCodeArtifact,
   type NativeMessage,
 } from "./history"
 import {
@@ -113,32 +106,6 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   /** How many native pages one history read reaches; defaults to 100. */
   maxHistoryPages?: number
 }>
-
-/**
- * The bytes one native file read answered with. OpenCode answers a missing file
- * as empty text rather than an error, so empty text is unreadable; anything
- * malformed or over the artifact limit is an unusable answer, not a missing file.
- */
-function artifactBytes(file: OpenCodeFileContent) {
-  if (file.type === "text") {
-    if (!file.content) throw new OpenCodeContentUnreadableError()
-    const bytes = new TextEncoder().encode(file.content)
-    if (bytes.byteLength > MAX_ARTIFACT_BYTES)
-      throw new OpenCodeContentUnavailableError()
-    return bytes
-  }
-  if (
-    file.encoding !== "base64" ||
-    !file.content ||
-    file.content.length % 4 !== 0 ||
-    !/^[A-Za-z0-9+/]*={0,2}$/u.test(file.content)
-  )
-    throw new OpenCodeContentUnavailableError()
-  const bytes = new Uint8Array(Buffer.from(file.content, "base64"))
-  if (bytes.byteLength > MAX_ARTIFACT_BYTES)
-    throw new OpenCodeContentUnavailableError()
-  return bytes
-}
 
 function unavailableRuntimeInfo(): RuntimeInfo {
   return RuntimeInfoSchema.parse({
@@ -493,31 +460,8 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     publicSessionId: string,
     artifactId: string
   ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }> {
-    await this.getSession(agentId, publicSessionId)
-    const { raw } = await this.#readHistory(
-      agentId,
-      publicSessionId,
-      Number.POSITIVE_INFINITY
-    )
-    const artifact = publishedOpenCodeArtifact(raw, artifactId)
-    if (!artifact) throw new OpenCodeWorkspaceScopeError()
-    let file: OpenCodeFileContent
-    try {
-      file = await this.options.client.files.read(artifact.path)
-    } catch (error) {
-      if (
-        error instanceof OpenCodeClientError &&
-        (error.code === "not_found" || error.code === "invalid_request")
-      )
-        throw new OpenCodeContentUnreadableError()
-      throw error
-    }
-    const { filename, mimeType } = artifact.descriptor
-    return {
-      bytes: artifactBytes(file),
-      ...(mimeType ? { mimeType } : {}),
-      filename,
-    }
+    void [agentId, publicSessionId, artifactId]
+    throw new OpenCodeWorkspaceScopeError()
   }
 
   async transcribe(

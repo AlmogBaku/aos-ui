@@ -268,20 +268,6 @@ describe("projectHermesToolCall", () => {
     )
   })
 
-  it("keeps only the public artifact identity fields for present_artifact", () => {
-    expect(
-      projectHermesToolCall("present_artifact", {
-        id: "report-1",
-        title: "Report",
-        path: "/srv/hermes/private/report.md",
-        sizeBytes: 42,
-      })
-    ).toEqual({
-      toolName: "present_artifact",
-      args: { id: "report-1", title: "Report", sizeBytes: 42 },
-    })
-  })
-
   it("never carries provider session metadata or credentials into the public args", () => {
     expect(
       projectHermesToolCall("run_command", {
@@ -335,7 +321,7 @@ describe("projectHermesToolOutcome", () => {
     })
   })
 
-  it("reads a receipt Hermes stored inside its untrusted-data block", () => {
+  it("reads a tool result Hermes stored inside its untrusted-data block", () => {
     const wrapped = (name: string, value: unknown) =>
       `<untrusted_tool_result source="mcp__aos_ui__${name}">\n` +
       "The following content was retrieved from an external source.\n\n" +
@@ -348,30 +334,9 @@ describe("projectHermesToolOutcome", () => {
         wrapped("render_chart", chart)
       ).result
     ).toEqual(chart)
-    const artifact = projectHermesToolOutcome(
-      "call-2c",
-      "present_artifact",
-      wrapped("present_artifact", {
-        ok: true,
-        type: "aos.artifact",
-        artifact: { id: "report-1", filename: "report.md" },
-      })
-    )
-    expect(artifact.parts).toHaveLength(1)
   })
 
-  it("collapses an unpublishable artifact receipt to its status fields", () => {
-    const outcome = projectHermesToolOutcome("call-3", "present_artifact", {
-      ok: true,
-      type: "aos.artifact",
-      artifact: { id: "/srv/private/report.md", filename: "../report.md" },
-    })
-    expect(outcome.result).toEqual({ ok: true })
-    expect(outcome.parts).toEqual([])
-    expect(JSON.stringify(outcome)).not.toContain("/srv/private")
-  })
-
-  it("keeps an artifact receipt message's location and redacts a credential", () => {
+  it("keeps a present_artifact result's message and redacts a credential", () => {
     const message = "Could not write /home/alice/reports/report.md"
     expect(
       projectHermesToolOutcome("call-3b", "present_artifact", {
