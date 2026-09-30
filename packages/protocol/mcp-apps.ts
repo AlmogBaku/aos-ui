@@ -110,7 +110,7 @@ const LOOPBACK_SOURCES = (scheme: "http" | "ws") =>
 
 export const MCP_APP_SANDBOX_CSP = [
   "default-src 'none'",
-  "script-src 'self' 'unsafe-inline' https:",
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https:",
   "style-src 'self' 'unsafe-inline' https:",
   "img-src 'self' data: https:",
   "font-src 'self' data: https:",
