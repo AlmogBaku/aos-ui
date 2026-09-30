@@ -271,7 +271,7 @@ describe("bounded Hermes HTTP", () => {
     const { stream } = createHermesHttp({
       baseUrl: "http://hermes.test",
       credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
-      fetcher: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetcher: (async (input: string | URL | Request, init?: RequestInit) => {
         sent.push(init!.signal!)
         // A Hermes that never answers, then a body that never ends.
         if (String(input).endsWith("/stalled"))
@@ -282,7 +282,7 @@ describe("bounded Hermes HTTP", () => {
           }),
           { status: 206 }
         )
-      }),
+      }) as typeof fetch,
       timeoutMs: 1_000,
     })
     const caller = new AbortController()

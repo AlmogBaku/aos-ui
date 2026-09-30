@@ -19,7 +19,7 @@ import {
 } from "../../mcp-apps/tool-names"
 import { HERMES_MCP_TOOL_NAMES } from "./mcp-tool-names"
 import { isRecord, parseJson, trimmedText, unwrappedToolText } from "./native"
-import { projectHermesToolCall } from "./tool-data"
+import { projectHermesToolCall, unwrapToolCall } from "./tool-data"
 
 /**
  * MCP Apps for Hermes, which keeps no UI resources of its own: the proxy
@@ -110,17 +110,42 @@ export function storedHermesToolResult(
   return valid.success ? valid.data : undefined
 }
 
+/**
+ * The native name and arguments of the call `toolCallId` names in `rows`, as
+ * Hermes stored them. Hermes stores a call's row before the tool runs
+ * (`agent/turn_tool_round.py:118`), so a running call is there too.
+ */
+function nativeToolCall(rows: readonly unknown[], toolCallId: string) {
+  let call: { name: string; arguments: unknown } | undefined
+  for (const row of rows) {
+    if (
+      !isRecord(row) ||
+      row.role !== "assistant" ||
+      !Array.isArray(row.tool_calls)
+    )
+      continue
+    for (const raw of row.tool_calls) {
+      const fn = isRecord(raw) && isRecord(raw.function) ? raw.function : {}
+      const name = trimmedText(fn.name)
+      if (isRecord(raw) && trimmedText(raw.id) === toolCallId && name)
+        call = { name, arguments: fn.arguments }
+    }
+  }
+  return call
+}
+
 /** The call only if this Session's own rows hold it. */
 function storedCall(
   rows: readonly unknown[],
   toolCallId: string,
   resolve: ReturnType<McpToolNames["resolver"]>
 ): StoredMcpToolCall | undefined {
-  let call: StoredMcpToolCall | undefined
+  const call = nativeToolCall(rows, toolCallId)
+  if (!call) return undefined
   let result: CallToolResult | undefined
-  for (const row of rows) {
-    if (!isRecord(row)) continue
+  for (const row of rows)
     if (
+      isRecord(row) &&
       row.role === "tool" &&
       trimmedText(row.tool_call_id ?? row.toolCallId) === toolCallId
     )
@@ -128,21 +153,13 @@ function storedCall(
         row.content ?? row.result,
         row.is_error === true
       )
-    if (row.role !== "assistant" || !Array.isArray(row.tool_calls)) continue
-    for (const raw of row.tool_calls) {
-      const fn = isRecord(raw) && isRecord(raw.function) ? raw.function : {}
-      const name = trimmedText(fn.name)
-      if (!isRecord(raw) || trimmedText(raw.id) !== toolCallId || !name)
-        continue
-      // The view receives the arguments the browser already reads, redacted.
-      const projected = projectHermesToolCall(name, fn.arguments, resolve)
-      call = {
-        toolName: projected.toolName,
-        input: isRecord(projected.args) ? projected.args : {},
-      }
-    }
+  // The view receives the arguments the browser already reads, redacted.
+  const projected = projectHermesToolCall(call.name, call.arguments, resolve)
+  return {
+    toolName: projected.toolName,
+    input: isRecord(projected.args) ? projected.args : {},
+    ...(result ? { result } : {}),
   }
-  return call && { ...call, ...(result ? { result } : {}) }
 }
 
 export type HermesMcpApps = { mcpApps: ServerMcpApps; names: McpToolNames }
@@ -150,6 +167,11 @@ export type HermesMcpApps = { mcpApps: ServerMcpApps; names: McpToolNames }
 export function createHermesMcpApps(input: {
   servers: (profile: string) => Promise<unknown>
   rawHistory: (scope: SessionScope) => Promise<readonly unknown[]>
+  /** The first answer `find` gives, reading the Session's raw rows page by page. */
+  scanHistory<T>(
+    scope: SessionScope,
+    find: (rows: readonly unknown[]) => T | undefined
+  ): Promise<T | undefined>
   client: McpAppClient
   logger: Logger
 }): HermesMcpApps {
@@ -160,7 +182,7 @@ export function createHermesMcpApps(input: {
     HERMES_MCP_TOOL_NAMES,
     mcpToolCatalog(servers, input.client)
   )
-  const mcpApps = createMcpAppsFallback(
+  const fallback = createMcpAppsFallback(
     {
       servers: (scope) => servers.get(scope.agentId),
       async storedCall(scope, toolCallId) {
@@ -172,5 +194,23 @@ export function createHermesMcpApps(input: {
     input.client,
     input.logger
   )
-  return { mcpApps, names }
+  return {
+    mcpApps: {
+      ...fallback,
+      // The raw row's own arguments, never the projection the browser reads. A
+      // tool-search `tool_call` envelope, which defers MCP tools
+      // (`tools/tool_search.py:162`), stands for the one tool it selected.
+      async toolCall(scope, toolCallId) {
+        const call = await input.scanHistory(scope, (rows) =>
+          nativeToolCall(rows, toolCallId)
+        )
+        const args = call && parseJson(call.arguments)
+        if (!call || !isRecord(args)) return undefined
+        const tool = unwrapToolCall(call.name, args)
+        const split = await names.split(scope.agentId, tool.name)
+        return split && { ...split, input: tool.args }
+      },
+    },
+    names,
+  }
 }

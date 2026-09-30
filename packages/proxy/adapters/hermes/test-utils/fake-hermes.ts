@@ -1,8 +1,8 @@
 /**
  * fakeHermes — one in-memory Hermes holding one Session, for the runtime and
  * wire contracts: the socket RPCs and dashboard routes a create, a turn, a
- * read and an MCP App's file read reach, and the faults the runtime contract
- * drives. Pair it with the
+ * read, and an MCP App's call lookup and file read reach, and the faults the
+ * runtime contract drives. Pair it with the
  * real `HermesGateway` through `fakeHermesGateway`, so the gateway's own dial,
  * heal and refusal handling is what the contracts prove.
  *
@@ -146,6 +146,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   const folders = new Map<string, Readonly<Record<string, string>> | number>()
   /** The files a download serves the Session, by path. */
   const files = new Map<string, string>()
+  /** The profile's configured MCP servers, by name. */
+  const mcpServers: string[] = []
   /** Every dashboard request, as Hermes received it. */
   const httpRequests: { url: URL; headers: Headers }[] = []
 
@@ -439,6 +441,27 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         can_change_path: true,
       })
     }
+    // Each server as `_mcp_server_summary` reports it: one the proxy cannot
+    // dial, so only its name resolves a call's server
+    // (`hermes_cli/web_routers/mcp.py:94`, `web_server_mcp.py:84`).
+    if (url.pathname === "/api/mcp/servers")
+      return url.searchParams.get("profile") === PROFILE
+        ? json(200, {
+            servers: mcpServers.map((name) => ({
+              name,
+              transport: "stdio",
+              url: null,
+              command: "synthetic-mcp",
+              args: [],
+              env: {},
+              auth: null,
+              enabled: true,
+              tools: null,
+              source: "config",
+              plugin: null,
+            })),
+          })
+        : json(404)
     if (!listed) return json(404)
     // A download resolves its path in the Session's own folder and serves
     // the file whole, as an attachment (`hermes_cli/web_routers/files.py:733`).
@@ -466,10 +489,16 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         title: "Contract",
         estimated_cost_usd: 0.42,
       })
+    // `order=latest` pages back from the newest row, each page in order
+    // (`hermes_state_messages.py:1063`).
     if (url.pathname === `${base}/messages`) {
       const limit = Number(url.searchParams.get("limit"))
       const offset = Number(url.searchParams.get("offset"))
-      const page = rows.slice(offset, offset + limit)
+      const end =
+        url.searchParams.get("order") === "latest"
+          ? rows.length - offset
+          : offset + limit
+      const page = rows.slice(Math.max(0, end - limit), Math.max(0, end))
       return json(200, {
         session_id: STORED_ID,
         messages: page,
@@ -532,6 +561,30 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     /** A file a download serves the Session at `path`. */
     storeFile(path: string, body: string) {
       files.set(path, body)
+    },
+
+    /** An MCP server the profile configures. */
+    addMcpServer(name: string) {
+      mcpServers.push(name)
+    },
+
+    /**
+     * A call of the Session's, stored with no result yet: Hermes stores a
+     * call's row before the tool runs (`agent/turn_tool_round.py:118`).
+     */
+    storeToolCall(id: string, name: string, args: Record<string, unknown>) {
+      store({
+        role: "assistant",
+        content: "",
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id,
+            type: "function",
+            function: { name, arguments: JSON.stringify(args) },
+          },
+        ],
+      })
     },
 
     async progress() {
