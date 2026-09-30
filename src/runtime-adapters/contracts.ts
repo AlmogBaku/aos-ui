@@ -258,12 +258,14 @@ export type ArtifactAdapter = {
   resolve(input: ArtifactResolveOptions): Promise<Blob>
 }
 
-/** The tool call whose MCP App view a request addresses. */
+/**
+ * What an MCP App view shows: a tool call's own view, or a published Artifact
+ * (an attachment) shown in the deployment's configured file viewer App.
+ */
 export type McpAppTarget = {
   agentId: string
   sessionId: string
-  toolCallId: string
-}
+} & ({ toolCallId: string } | { artifactId: string })
 
 /**
  * The runtime refused to renew a view's file addresses, and asking again would
