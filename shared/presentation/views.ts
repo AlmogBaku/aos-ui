@@ -55,3 +55,18 @@ export const PDFJS_WORKER_FILE = "pdf.worker.js"
  * the real server when the app is built or served.
  */
 export const FIXTURE_AOS_UI_MCP_PATH = "/fixture/aos-ui-mcp.json"
+
+/** The path prefix for the synthetic files the fixture serves to the artifact view. */
+export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files"
+
+/**
+ * The three synthetic fixture files served at
+ * `FIXTURE_MCP_APP_FILES_PATH/<name>` for exercising the artifact view in
+ * fixture mode: a PDF with a CCITT Group 4 image, a PNG, and an HTML file
+ * whose visible effect confirms that scripts are off.
+ */
+export const FIXTURE_MCP_APP_FILES = {
+  pdf: "report.pdf",
+  png: "preview.png",
+  html: "test.html",
+} as const
