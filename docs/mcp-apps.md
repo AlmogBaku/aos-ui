@@ -84,10 +84,12 @@ The browser never talks to the MCP server.
 
 A view can show the files its tool call names, as `present_artifact`'s view
 shows the file it presents, without ever seeing a path. Each top-level
-argument that holds an absolute, normalized path names a file. Opening the
-view withholds those arguments from its `toolInput` and, for a call from one of
-[`mcpApps.files.servers`](configuration.md#mcp-app-files), offers `files`
-instead, with one address per argument:
+argument that holds an absolute, normalized path names a file. Opening any
+view withholds from its `toolInput` every top-level argument whose value
+starts with `/`, a file or not; a view that needs such a value reads it from
+its own result. For a call from one of
+[`mcpApps.files.servers`](configuration.md#mcp-app-files), the view gets
+`files` in their place, with one address per argument that names a file:
 
 ```json
 {

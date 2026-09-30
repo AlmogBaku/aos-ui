@@ -6,9 +6,9 @@ import type { FilePassScope, FilePassService } from "../auth/file-pass"
 import type { McpAppsConfig } from "../config"
 import {
   readablePath,
-  servableArguments,
   serverAllowed,
   servesFiles,
+  withheldArguments,
   type AppFileCall,
   type AppFileCalls,
   type AppFolderSet,
@@ -20,7 +20,7 @@ import { encodedFilename } from "./http"
 /**
  * The files an MCP App's tool call names, read by its view. `open` offers one
  * address per argument that names a file, all under one pass, and withholds
- * the paths themselves. A read is judged on every request: its pass, or the
+ * from the view every argument that starts with `/`. A read is judged on every request: its pass, or the
  * listener's own login without one, then the call, then the folder rules.
  * Every refusal answers one empty 404 and logs only its reason.
  */
@@ -182,9 +182,9 @@ export async function appFiles(
 }
 
 /**
- * `view` with every argument that names a file withheld from its `toolInput`,
- * the stored call's own included, and `files` in their place. A view that
- * names no file comes back as it was.
+ * `view` with every top-level argument that starts with `/` withheld from its
+ * `toolInput`, as are the stored call's servable ones whatever the view's copy
+ * holds, and `files` in their place. A view with none comes back as it was.
  */
 export async function offerAppFiles(
   view: McpAppView,
@@ -200,7 +200,7 @@ export async function offerAppFiles(
       context.request.signal
     ))
   const withheld = new Set([
-    ...servableArguments(view.toolInput ?? {}).keys(),
+    ...withheldArguments(view.toolInput ?? {}),
     ...(call?.servable.keys() ?? []),
   ])
   if (withheld.size === 0) return view

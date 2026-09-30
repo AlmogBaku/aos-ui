@@ -431,6 +431,11 @@ mcpApps:
   reports it, the real path the runtime will read, so a symbolic link cannot
   lead out of an allowed folder. Both are judged again on every request. A
   guest reads files only on a runtime that reports real paths.
+- The folders themselves are compared as written, and a link among them is
+  never followed. Where the runtime reports real paths, a folder that sits
+  behind a symbolic link, the Agent's own included, serves nothing until its
+  real location is in `allow` too, in both sets for a guest. The log records
+  each such refusal as `real_path_denied`.
 
 ### Web Push (optional)
 

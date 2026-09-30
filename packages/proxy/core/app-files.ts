@@ -142,6 +142,16 @@ export function servableArguments(
   )
 }
 
+/**
+ * The top-level arguments no view receives: each string that starts with `/`,
+ * servable or not, so no spelling of a path reaches a view.
+ */
+export function withheldArguments(input: Readonly<Record<string, unknown>>) {
+  return Object.entries(input).flatMap(([name, value]) =>
+    typeof value === "string" && value.startsWith("/") ? [name] : []
+  )
+}
+
 /** Whether `server` is one of `servers`; `aos-ui` also names a harness's `aos_ui`. */
 export function serverAllowed(servers: readonly string[], server: string) {
   return servers.some(

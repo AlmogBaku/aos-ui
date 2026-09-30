@@ -859,6 +859,8 @@ describe("MCP App files", () => {
     const input = (scope: SessionScope) => ({
       path: paths[scope.providerSessionId],
       title: "Q3",
+      // A path the route never serves is withheld all the same.
+      draft: "/srv/agent/./draft.pdf",
     })
     toolCall.mockImplementation(async (scope) => ({
       ...reportCall,
