@@ -24,6 +24,10 @@ import { encodedFilename } from "./http"
  * request: its pass, or the listener's own login without one, then the call,
  * then the folder rules. A bad pass or login answers 401; every other refusal
  * answers one empty 404 and logs only its reason.
+ *
+ * A published Artifact opens in the configured viewer the same way, with one
+ * address, `path`, for its own bytes. Those are read by id as the listener's
+ * content route reads them, so no folder rule applies.
  */
 
 /** The file route's settings, and the services its passes and lookups use. */
@@ -44,18 +48,42 @@ export type AppFileGrant = {
   requiresRealPath: boolean
 }
 
-/** The tool call a request names, as its path carries it. */
-export type AppCallTarget = {
-  agentId: string
-  sessionId: string
-  toolCallId: string
+/** What a view opened on: one tool call, or one published Artifact. */
+export type AppSubjectId = { toolCallId: string } | { artifactId: string }
+
+/** The view a request names, as its path carries it. */
+export type AppTarget = { agentId: string; sessionId: string } & AppSubjectId
+
+/** A published Artifact as its listener read it by id. */
+export type PublishedArtifact = Awaited<ReturnType<ServerRuntime["artifact"]>>
+
+/**
+ * A view's subject as a route resolved it. An Artifact comes with `read`, the
+ * listener's own way to read it by id, which throws as gone for one the
+ * Session lacks.
+ */
+export type AppSubject =
+  | { toolCallId: string }
+  | {
+      artifactId: string
+      read: (scope: SessionScope) => Promise<PublishedArtifact>
+    }
+
+/** The subject's id alone, as a pass and a log line name it. */
+export function subjectId(subject: AppSubject): AppSubjectId {
+  return "toolCallId" in subject
+    ? { toolCallId: subject.toolCallId }
+    : { artifactId: subject.artifactId }
 }
 
-/** A view's call as an MCP App route resolved it. */
+/** The one address an Artifact's view gets: the name its viewer reads. */
+export const ARTIFACT_FILE_ARGUMENT = "path"
+
+/** A view's subject as an MCP App route resolved it. */
 export type AppFileContext = {
   runtime: ServerRuntime
   scope: SessionScope
-  toolCallId: string
+  subject: AppSubject
   request: Request
   /** Absent where the listener serves no files; paths are withheld all the same. */
   files?: AppFileGrant
@@ -135,6 +163,53 @@ function discard(response: Response) {
   response.body?.cancel().catch(() => undefined)
 }
 
+/** One address per name under one pass for the subject, for the listener's role. */
+async function addressed(
+  context: AppFileContext,
+  grant: AppFileGrant,
+  names: readonly string[]
+): Promise<McpAppFiles> {
+  const { scope } = context
+  const subject = subjectId(context.subject)
+  const { pass, expiresAt } = await grant.options.passes.issue(
+    {
+      role: grant.role,
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      ...subject,
+    },
+    context.notAfter
+  )
+  const base = [
+    grant.root,
+    "agents",
+    encodeURIComponent(scope.agentId),
+    "sessions",
+    encodeURIComponent(scope.sessionId),
+    ...("toolCallId" in subject
+      ? ["tool-calls", encodeURIComponent(subject.toolCallId)]
+      : ["artifacts", encodeURIComponent(subject.artifactId)]),
+    "app/files",
+  ].join("/")
+  return {
+    addresses: Object.fromEntries(
+      names.map((name) => [
+        name,
+        `${base}/${encodeURIComponent(name)}?pass=${pass}`,
+      ])
+    ),
+    expiresAt: new Date(expiresAt * 1_000).toISOString(),
+  }
+}
+
+/** The one address an Artifact's view reads its bytes from. */
+export function artifactFiles(
+  context: AppFileContext,
+  grant: AppFileGrant
+): Promise<McpAppFiles> {
+  return addressed(context, grant, [ARTIFACT_FILE_ARGUMENT])
+}
+
 /**
  * The files `call` offers its view: one address per servable argument, under
  * one pass for the listener's role. Empty where the listener reads none.
@@ -144,7 +219,7 @@ export async function appFiles(
   grant: AppFileGrant,
   call: AppFileCall
 ): Promise<McpAppFiles> {
-  const { runtime, scope, toolCallId } = context
+  const { runtime, scope } = context
   const reader = runtime.readFile
   if (
     call.servable.size === 0 ||
@@ -157,34 +232,7 @@ export async function appFiles(
     )
   )
     return { addresses: {} }
-  const { pass, expiresAt } = await grant.options.passes.issue(
-    {
-      role: grant.role,
-      agentId: scope.agentId,
-      sessionId: scope.sessionId,
-      toolCallId,
-    },
-    context.notAfter
-  )
-  const base = [
-    grant.root,
-    "agents",
-    encodeURIComponent(scope.agentId),
-    "sessions",
-    encodeURIComponent(scope.sessionId),
-    "tool-calls",
-    encodeURIComponent(toolCallId),
-    "app/files",
-  ].join("/")
-  return {
-    addresses: Object.fromEntries(
-      [...call.servable.keys()].map((name) => [
-        name,
-        `${base}/${encodeURIComponent(name)}?pass=${pass}`,
-      ])
-    ),
-    expiresAt: new Date(expiresAt * 1_000).toISOString(),
-  }
+  return addressed(context, grant, [...call.servable.keys()])
 }
 
 /**
@@ -194,9 +242,10 @@ export async function appFiles(
  */
 export async function offerAppFiles(
   view: McpAppView,
-  context: AppFileContext
+  context: AppFileContext,
+  toolCallId: string
 ): Promise<McpAppView> {
-  const { runtime, scope, toolCallId, files } = context
+  const { runtime, scope, files } = context
   const call =
     files &&
     (await files.options.calls.lookup(
@@ -223,25 +272,44 @@ export async function offerAppFiles(
   }
 }
 
+/** Names a file answer's type and filename; a PDF drops the sandbox policy. */
+function describedFile(
+  headers: Headers,
+  reported: string | null | undefined,
+  filename: string
+) {
+  const type = servedType(reported ?? null)
+  headers.set("content-type", type)
+  headers.set(
+    "content-disposition",
+    `inline; filename*=UTF-8''${encodedFilename(filename)}`
+  )
+  // A browser shows no PDF under `sandbox`; the listener's policy holds.
+  if (type === "application/pdf") headers.delete("content-security-policy")
+}
+
 /**
- * One file request, whichever listener it reached. Only the runtime's 200,
- * 206, or 416 reaches the client, with only the headers `PASSED_HEADERS`
- * names and a type `servedType` narrows; its body streams, and stops with
- * the client.
+ * One file request, whichever listener it reached. For a tool call, only the
+ * runtime's 200, 206, or 416 reaches the client, with only the headers
+ * `PASSED_HEADERS` names and a type `servedType` narrows; its body streams,
+ * and stops with the client. An Artifact answers its whole bytes, typed the
+ * same way.
  */
 export async function answerAppFile(input: {
   request: Request
   runtime: ServerRuntime
   grant: AppFileGrant
-  target: AppCallTarget
+  target: { agentId: string; sessionId: string }
+  subject: AppSubject
   argument: string
-  allow: (target: AppCallTarget) => boolean
+  allow: (target: AppTarget) => boolean
   /** Whether the listener's own login admits a request that sent no pass. */
   login: () => Promise<boolean>
   /** The Session the target names; one the runtime lacks throws as gone. */
   scope: () => Promise<SessionScope>
 }): Promise<Response> {
-  const { request, runtime, grant, target } = input
+  const { request, runtime, grant, subject } = input
+  const target: AppTarget = { ...input.target, ...subjectId(subject) }
   const { logger, passes, calls, servers } = grant.options
   const pass = new URL(request.url).searchParams.get("pass")
   const headers = new Headers({ "content-security-policy": SANDBOX })
@@ -264,13 +332,24 @@ export async function answerAppFile(input: {
   if (!input.allow(target)) return empty(429)
   try {
     const scope = await input.scope()
+    if ("read" in subject) {
+      if (input.argument !== ARTIFACT_FILE_ARGUMENT)
+        return refused("argument_not_servable")
+      const artifact = await subject.read(scope)
+      headers.set("content-length", String(artifact.bytes.byteLength))
+      describedFile(headers, artifact.mimeType, artifact.filename)
+      return new Response(
+        request.method === "HEAD" ? null : Buffer.from(artifact.bytes),
+        { status: 200, headers }
+      )
+    }
     const reader = runtime.readFile
     if (!reader || (grant.requiresRealPath && !reader.realPath))
       return refused("no_reader")
     const call = await calls.lookup(
       runtime.mcpApps,
       scope,
-      target.toolCallId,
+      subject.toolCallId,
       request.signal
     )
     if (!call) return refused("call_unknown")
@@ -309,14 +388,11 @@ export async function answerAppFile(input: {
       headers.delete("content-length")
       return empty(416)
     }
-    const type = servedType(upstream.headers.get("content-type"))
-    headers.set("content-type", type)
-    headers.set(
-      "content-disposition",
-      `inline; filename*=UTF-8''${encodedFilename(posix.basename(written))}`
+    describedFile(
+      headers,
+      upstream.headers.get("content-type"),
+      posix.basename(written)
     )
-    // A browser shows no PDF under `sandbox`; the listener's policy holds.
-    if (type === "application/pdf") headers.delete("content-security-policy")
     if (request.method === "HEAD") {
       discard(upstream)
       return new Response(null, { status: upstream.status, headers })

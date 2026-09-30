@@ -7,11 +7,40 @@ import {
   SessionTranscriptionRequestSchema,
   SessionTranscriptionResponseSchema,
 } from "../../../protocol"
+import type { GuestAuthorization } from "../../auth/guest-invitation"
 import { projectGuestOutbound } from "../../auth/guest-projection"
 import { MAXIMUM_STAGE_REQUEST_BYTES } from "../../core/attachment-stages"
+import type { PublishedArtifact } from "../../routes/app-files"
 import { recordingBytes } from "../../routes/content"
 import { boundedJson, encodedFilename } from "../../routes/http"
 import { emptyError, invitationError, type GuestRoutes } from "../context"
+
+/**
+ * An Artifact as a guest may see it: its name, type, and size, projected
+ * like every guest answer; `undefined` when the projection refuses it.
+ */
+export function projectedArtifact(
+  artifact: PublishedArtifact,
+  agentId: string,
+  ref: string,
+  authorization: GuestAuthorization
+) {
+  const projected = projectGuestOutbound(
+    {
+      transport: "artifact",
+      agentId,
+      sessionId: ref,
+      payload: {
+        type: "artifact",
+        name: artifact.filename,
+        mediaType: artifact.mimeType ?? "application/octet-stream",
+        sizeBytes: artifact.bytes.byteLength,
+      },
+    },
+    authorization
+  )
+  return projected?.payload.type === "artifact" ? projected.payload : undefined
+}
 
 export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
   app.post(
@@ -250,26 +279,18 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
           resolved.providerSessionId,
           context.req.param("artifactId")
         )
-        const projected = projectGuestOutbound(
-          {
-            transport: "artifact",
-            agentId,
-            sessionId: ref,
-            payload: {
-              type: "artifact",
-              name: artifact.filename,
-              mediaType: artifact.mimeType ?? "application/octet-stream",
-              sizeBytes: artifact.bytes.byteLength,
-            },
-          },
+        const projected = projectedArtifact(
+          artifact,
+          agentId,
+          ref,
           authorization
         )
-        if (projected?.payload.type !== "artifact") return emptyError(503)
+        if (!projected) return emptyError(503)
         return new Response(Buffer.from(artifact.bytes), {
           headers: {
-            "content-type": projected.payload.mediaType,
-            "content-length": String(projected.payload.sizeBytes),
-            "content-disposition": `attachment; filename*=UTF-8''${encodedFilename(projected.payload.name)}`,
+            "content-type": projected.mediaType,
+            "content-length": String(projected.sizeBytes),
+            "content-disposition": `attachment; filename*=UTF-8''${encodedFilename(projected.name)}`,
           },
         })
       } catch (error) {

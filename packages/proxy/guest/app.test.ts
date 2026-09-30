@@ -711,6 +711,11 @@ function guestApp(toolCallId = "call-1") {
   return `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
 }
 
+/** The invited Session's published Artifact's view path on the guest listener. */
+function guestArtifact(artifactId = "artifact-1") {
+  return `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/artifacts/${artifactId}/app`
+}
+
 /**
  * A guest app under `configured` file settings whose invited Session holds
  * `call-1`, an `aos-ui` call naming a file in the Agent folder `/srv/agent`
@@ -747,6 +752,11 @@ function fileHarness(
     ),
     callTool: vi.fn(async () => ({ content: [] })),
     readResource: vi.fn(async () => ({ contents: [] })),
+    serverResource: vi.fn(async (_scope, _server, uri) => ({
+      contents: [
+        { uri, mimeType: "text/html;profile=mcp-app", text: "<p>viewer</p>" },
+      ],
+    })),
   }
   const reader: ServerFileReader = realPath
     ? { read, realPath: async (_: SessionScope, path: string) => path }
@@ -903,17 +913,61 @@ describe("guest MCP App files", () => {
     const subject = fileHarness({ guest: { agentFolder: true } })
     const login = await sent()
 
-    const file = await subject.app.request(`${guestApp()}/files/path`, {
-      headers: login,
-    })
-    const renewal = await subject.app.request(`${guestApp()}/files`, {
-      method: "POST",
-      headers: { ...login, origin: ORIGIN },
+    // A call's view and a published Artifact's view guard their files alike.
+    for (const base of [guestApp(), guestArtifact()]) {
+      const file = await subject.app.request(`${base}/files/path`, {
+        headers: login,
+      })
+      const renewal = await subject.app.request(`${base}/files`, {
+        method: "POST",
+        headers: { ...login, origin: ORIGIN },
+      })
+
+      expect(file.status).toBe(401)
+      expect(await file.text()).toBe("")
+      expect(renewal.status).toBe(401)
+    }
+    expect(
+      (await subject.app.request(guestArtifact(), { headers: login })).status
+    ).toBe(401)
+    expect(subject.read).not.toHaveBeenCalled()
+    expect(subject.artifact).not.toHaveBeenCalled()
+  })
+
+  it("opens the invited Session's published Artifact in the viewer, and a pass alone reads its bytes", async () => {
+    const subject = fileHarness({ guest: { agentFolder: true } })
+    const invite = await token(subject.invitationService)
+
+    const opened = await subject.app.request(guestArtifact(), {
+      headers: headers(invite),
     })
 
-    expect(file.status).toBe(401)
-    expect(await file.text()).toBe("")
-    expect(renewal.status).toBe(401)
-    expect(subject.read).not.toHaveBeenCalled()
+    expect(opened.status).toBe(200)
+    const view = (await opened.json()) as McpAppView
+    expect(view.html).toBe("<p>viewer</p>")
+    expect(view.toolResult?.structuredContent).toEqual({
+      ok: true,
+      type: "aos.presentation",
+      value: { filename: "briefing.mp3", mimeType: "audio/mpeg" },
+    })
+    expect(subject.artifact).toHaveBeenLastCalledWith(
+      AGENT,
+      STORED,
+      "artifact-1"
+    )
+    const bytes = await subject.app.request(
+      `${ORIGIN}${view.files?.addresses.path}`
+    )
+    expect(bytes.status).toBe(200)
+    expect(new Uint8Array(await bytes.arrayBuffer())).toEqual(
+      Uint8Array.of(9, 8, 7)
+    )
+    // A call's pass names the call, so it opens no Artifact file.
+    const callPass = (await subject.files.passes.issue(pass)).pass
+    const crossed = await subject.app.request(
+      `${guestArtifact("call-1")}/files/path?pass=${callPass}`
+    )
+    expect(crossed.status).toBe(401)
+    expect(await crossed.text()).toBe("")
   })
 })

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { captureLogs } from "../../test/support/log-capture"
-import type { McpAppFiles, McpAppView } from "../protocol/mcp-apps"
+import type {
+  McpAppFiles,
+  McpAppView,
+  ReadResourceResult,
+} from "../protocol/mcp-apps"
 import { createProxyApp, type ProxyAppOptions } from "./app"
 import {
   HermesAuthenticationError,
@@ -441,11 +445,25 @@ function passOf(address: string) {
   return new URL(address, origin).searchParams.get("pass") ?? ""
 }
 
+/** The Artifact Session `stored` publishes as `artifact-1`. */
+const NOTES = {
+  bytes: new TextEncoder().encode("# Notes"),
+  mimeType: "text/markdown",
+  filename: "notes.md",
+}
+
+/** One published Artifact's MCP App path on the operator listener. */
+function artifactPath(sessionId = "stored", artifactId = "artifact-1") {
+  return `/api/aos/v1/agents/researcher/sessions/${sessionId}/artifacts/${artifactId}/app`
+}
+
 /**
  * An operator app serving files under the default settings, over a runtime
  * whose Session `stored` holds `call-1` as `call` describes it: `null` is a
  * call no server matches, and a `null` reader a runtime that reads no files.
- * Its view gets the call's own input unless `viewInput` differs.
+ * Its view gets the call's own input unless `viewInput` differs. The Session
+ * publishes NOTES as `artifact-1`, and any server's `ui://` resource reads
+ * as one viewer page unless `viewer` is `null`, a runtime that reads none.
  */
 function fileProxy(
   setup: {
@@ -454,6 +472,7 @@ function fileProxy(
     reader?: ServerFileReader | null
     files?: Partial<AppFileOptions>
     clock?: () => number
+    viewer?: null
   } = {}
 ) {
   const runtime = new HermesServerAdapter({ request: vi.fn() })
@@ -472,14 +491,28 @@ function fileProxy(
     html: "<p>view</p>",
     toolInput: setup.viewInput ?? (call ?? reportCall).input,
   }))
+  const serverResource = vi.fn<NonNullable<ServerMcpApps["serverResource"]>>(
+    async (_scope, _server, uri) => ({
+      contents: [
+        { uri, mimeType: "text/html;profile=mcp-app", text: "<p>viewer</p>" },
+      ],
+    })
+  )
   const mcpApps: ServerMcpApps = {
     describe: vi.fn(async () => true),
     open,
     toolCall,
     callTool: vi.fn(async () => ({ content: [] })),
     readResource: vi.fn(async () => ({ contents: [] })),
+    ...(setup.viewer === null ? {} : { serverResource }),
   }
   Object.defineProperty(runtime, "mcpApps", { value: mcpApps })
+  const artifact = vi
+    .spyOn(runtime, "artifact")
+    .mockImplementation(async (_agentId, sessionId, artifactId) => {
+      if (sessionId === "stored" && artifactId === "artifact-1") return NOTES
+      throw new ServerSessionNotFoundError()
+    })
   const read = vi.fn<ServerFileReader["read"]>(
     async () =>
       new Response("%PDF-1", {
@@ -502,7 +535,17 @@ function fileProxy(
     logger: logs.logger,
     ...(setup.clock ? { clock: setup.clock } : {}),
   })
-  return { proxy, getSession, toolCall, open, read, files, logs }
+  return {
+    proxy,
+    getSession,
+    toolCall,
+    open,
+    read,
+    files,
+    logs,
+    artifact,
+    serverResource,
+  }
 }
 
 /** Opens `call-1`'s view in `sessionId`, as the workspace does. */
@@ -940,5 +983,187 @@ describe("MCP App files", () => {
       body: "",
     })
     expect(read).not.toHaveBeenCalled()
+  })
+})
+
+describe("Published Artifact views", () => {
+  const pass: FilePassScope = {
+    role: "operator",
+    agentId: "researcher",
+    sessionId: "stored",
+    artifactId: "artifact-1",
+  }
+  const post = (proxy: ReturnType<typeof app>, path: string, body?: unknown) =>
+    proxy.request(`${origin}${path}`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+
+  it("opens an Artifact in the viewer with its server-side name and type, and serves its bytes", async () => {
+    const { proxy, serverResource, logs } = fileProxy()
+
+    const response = await proxy.request(`${origin}${artifactPath()}`)
+    expect(response.status).toBe(200)
+    const view = (await response.json()) as McpAppView
+    expect(view).toEqual({
+      html: "<p>viewer</p>",
+      toolInput: {},
+      toolResult: {
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining(
+              'Structured fallback:\n{"filename":"notes.md","mimeType":"text/markdown"}'
+            ),
+          },
+        ],
+        structuredContent: {
+          ok: true,
+          type: "aos.presentation",
+          value: { filename: "notes.md", mimeType: "text/markdown" },
+        },
+      },
+      files: {
+        addresses: {
+          path: expect.stringMatching(
+            /^\/api\/aos\/v1\/agents\/researcher\/sessions\/stored\/artifacts\/artifact-1\/app\/files\/path\?pass=[\w.-]+$/u
+          ),
+        },
+        expiresAt: expect.any(String),
+      },
+    })
+    expect(serverResource).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "stored" }),
+      "aos-ui",
+      "ui://aos-ui/artifact",
+      expect.any(AbortSignal)
+    )
+    const address = view.files?.addresses.path ?? ""
+
+    expect(await observed(await proxy.request(`${origin}${address}`))).toEqual({
+      status: 200,
+      headers: {
+        ...LISTENER_HEADERS,
+        "access-control-allow-origin": "null",
+        "content-disposition": "inline; filename*=UTF-8''notes.md",
+        "content-length": "7",
+        "content-security-policy": SANDBOX,
+        "content-type": "text/plain",
+      },
+      body: "# Notes",
+    })
+    // Its view's own reads reach the viewer's server alone.
+    const read = await post(proxy, `${artifactPath()}/resources/read`, {
+      uri: "ui://aos-ui/pdfjs/pdf.worker.js",
+    })
+    expect(read.status).toBe(200)
+    expect(serverResource.mock.lastCall?.slice(1, 3)).toEqual([
+      "aos-ui",
+      "ui://aos-ui/pdfjs/pdf.worker.js",
+    ])
+    const renewed = await post(proxy, `${artifactPath()}/files`)
+    expect(await renewed.json()).toEqual(view.files)
+    expect(JSON.stringify(logs.records())).not.toContain(passOf(address))
+  })
+
+  it.each<[string, Parameters<typeof fileProxy>[0], string, "get" | "post"]>([
+    ["a view's tool call", {}, `${artifactPath()}/tools/call`, "post"],
+    [
+      "an Artifact the Session lacks",
+      {},
+      artifactPath("stored", "gone"),
+      "get",
+    ],
+    ["another Session's Artifact", {}, artifactPath("other"), "get"],
+    [
+      "a gone Artifact, even with no viewer",
+      { viewer: null },
+      artifactPath("stored", "gone"),
+      "get",
+    ],
+  ])("answers %s with 404", async (_, setup, path, method) => {
+    const { proxy, serverResource } = fileProxy(setup)
+
+    const response =
+      method === "get"
+        ? await proxy.request(`${origin}${path}`)
+        : await post(proxy, path, { name: "refresh", arguments: {} })
+
+    expect(response.status).toBe(404)
+    if (setup.viewer !== null) expect(serverResource).not.toHaveBeenCalled()
+  })
+
+  it.each<
+    [
+      string,
+      Parameters<typeof fileProxy>[0],
+      Error | ReadResourceResult | undefined,
+    ]
+  >([
+    ["a runtime with no viewer", { viewer: null }, undefined],
+    ["a viewer server out of reach", {}, new McpAppNotFoundError()],
+    [
+      "a viewer resource that is no App",
+      {},
+      { contents: [{ uri: "ui://aos-ui/artifact", text: "plain" }] },
+    ],
+  ])(
+    "answers an Artifact that is there with 503, not 404, under %s",
+    async (_, setup, answer) => {
+      const { proxy, serverResource } = fileProxy(setup)
+      if (answer instanceof Error) serverResource.mockRejectedValue(answer)
+      else if (answer) serverResource.mockResolvedValue(answer)
+
+      const response = await proxy.request(`${origin}${artifactPath()}`)
+
+      expect(response.status).toBe(503)
+    }
+  )
+
+  it.each<[string, Partial<FilePassScope>, string]>([
+    ["another Artifact's", { artifactId: "artifact-2" }, artifactPath()],
+    ["another Session's", { sessionId: "other" }, artifactPath()],
+    ["another Agent's", { agentId: "writer" }, artifactPath()],
+    ["a guest's", { role: "guest" }, artifactPath()],
+    ["an Artifact's pass on a tool call", { artifactId: "call-1" }, appPath()],
+  ])(
+    "refuses %s pass with an empty 401 and no bytes",
+    async (_, other, path) => {
+      const { proxy, files, artifact, read } = fileProxy()
+      const forged = (await files.passes.issue({ ...pass, ...other })).pass
+
+      const response = await proxy.request(
+        `${origin}${path}/files/path?pass=${forged}`
+      )
+
+      expect(await observed(response)).toEqual({
+        status: 401,
+        headers: { ...REFUSAL.headers, "access-control-allow-origin": "null" },
+        body: "",
+      })
+      expect(artifact).not.toHaveBeenCalled()
+      expect(read).not.toHaveBeenCalled()
+    }
+  )
+
+  it("refuses a tool call's pass on the Artifact of the same id", async () => {
+    const { proxy, files, artifact } = fileProxy()
+    const { role, agentId, sessionId } = pass
+    const forged = (
+      await files.passes.issue({
+        role,
+        agentId,
+        sessionId,
+        toolCallId: "artifact-1",
+      })
+    ).pass
+
+    const response = await proxy.request(
+      `${origin}${artifactPath()}/files/path?pass=${forged}`
+    )
+
+    expect(response.status).toBe(401)
+    expect(artifact).not.toHaveBeenCalled()
   })
 })

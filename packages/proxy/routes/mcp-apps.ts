@@ -4,19 +4,26 @@ import {
   McpAppToolCallRequestSchema,
   McpAppViewSchema,
   ReadResourceResultSchema,
+  type CallToolResult,
 } from "../../protocol/mcp-apps"
+import type { PresentArtifactResult } from "../../../shared/presentation/tools"
 import type { ProxyAppOptions } from "../app"
+import { coreFailure } from "../core/failures"
 import * as ids from "../core/ids"
-import type { ServerRuntime } from "../core/runtime"
-import { McpAppResourceError } from "../mcp-apps/client"
+import type { ServerMcpApps, ServerRuntime } from "../core/runtime"
+import { appResourceOf, McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
 import {
   answerAppFile,
   appFiles,
+  artifactFiles,
   offerAppFiles,
-  type AppCallTarget,
+  subjectId,
   type AppFileContext,
   type AppFileGrant,
+  type AppSubject,
+  type AppTarget,
+  type PublishedArtifact,
 } from "./app-files"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
@@ -24,10 +31,13 @@ import type { ProxyRouteApp } from "./types"
 /**
  * MCP App views, keyed by the tool call that opened them. The browser names no
  * server, tool, or resource URI to open a view; a view's own requests reach
- * only the server its tool call came from.
+ * only the server its tool call came from. A published Artifact opens in the
+ * configured viewer instead, with no tool call: its view reads only the
+ * viewer server's `ui://` resources and calls no tool.
  */
 
-export const MCP_APP_PATH = "/tool-calls/:toolCallId/app"
+const MCP_APP_PATH = "/tool-calls/:toolCallId/app"
+const ARTIFACT_APP_PATH = "/artifacts/:artifactId/app"
 const MAX_REQUEST_BYTES = 256 * 1024
 const RATE_WINDOW_MS = 1_000
 const RATE_MAX_PER_WINDOW = 10
@@ -62,8 +72,12 @@ function createMcpAppRateLimit(
   max = RATE_MAX_PER_WINDOW
 ) {
   const windows = new Map<string, { start: number; count: number }>()
-  return ({ agentId, sessionId, toolCallId }: AppCallTarget) => {
-    const key = `${agentId}\u0000${sessionId}\u0000${toolCallId}`
+  return (target: AppTarget) => {
+    const subject =
+      "toolCallId" in target
+        ? `call\u0000${target.toolCallId}`
+        : `artifact\u0000${target.artifactId}`
+    const key = `${target.agentId}\u0000${target.sessionId}\u0000${subject}`
     const at = now()
     const current = windows.get(key)
     if (!current || at - current.start >= RATE_WINDOW_MS) {
@@ -88,28 +102,111 @@ export function createMcpAppLimits(now?: () => number, fileRate?: number) {
 }
 
 /**
+ * An Artifact's result as its viewer reads it: the shape `aos-ui`'s artifact
+ * tool answers, built from the server-side descriptor alone.
+ */
+function artifactResult({
+  filename,
+  mimeType,
+}: PublishedArtifact): CallToolResult {
+  const value: PresentArtifactResult = {
+    filename,
+    ...(mimeType && { mimeType }),
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${filename} is ready for display.\n\nStructured fallback:\n${JSON.stringify(value)}`,
+      },
+    ],
+    structuredContent: { ok: true, type: "aos.presentation", value },
+  }
+}
+
+type McpAppInput = AppFileContext & {
+  operation: McpAppOperation
+  allow: (target: AppTarget) => boolean
+}
+
+/**
+ * One request of an Artifact's view. `open` and `files` read the Artifact
+ * first, so one the Session lacks answers 404, as its content route does; the
+ * view's reads reach only the viewer's server. An Artifact that is there with
+ * no viewer to open it in (a listener serving no files, a runtime that reads
+ * no server's resource without a call, or a viewer out of reach) answers 503,
+ * so the browser never mistakes it for a pruned one.
+ */
+async function handleArtifactRequest(
+  input: McpAppInput,
+  apps: ServerMcpApps,
+  subject: Extract<AppSubject, { artifactId: string }>
+): Promise<McpAppOutcome> {
+  const { scope, operation, request, files } = input
+  if (operation === "tools/call") return failure.not_found
+  const artifact = await subject.read(scope)
+  const serverResource = apps.serverResource?.bind(apps)
+  if (!files || !serverResource) return failure.unavailable
+  const { viewer } = files.options
+  const read = (uri: string) =>
+    serverResource(scope, viewer.server, uri, request.signal)
+  if (operation === "resources/read") {
+    const body = McpAppResourceReadRequestSchema.safeParse(
+      await boundedJson(request, MAX_REQUEST_BYTES)
+    )
+    if (!body.success) return failure.invalid_request
+    return {
+      ok: true,
+      body: ReadResourceResultSchema.parse(await read(body.data.uri)),
+    }
+  }
+  if (operation === "files")
+    return { ok: true, body: await artifactFiles(input, files) }
+  let resource: ReturnType<typeof appResourceOf>
+  try {
+    resource = appResourceOf(await read(viewer.resource), viewer.resource)
+  } catch (error) {
+    if (
+      error instanceof McpAppNotFoundError ||
+      error instanceof McpAppResourceError
+    )
+      return failure.unavailable
+    throw error
+  }
+  return {
+    ok: true,
+    body: McpAppViewSchema.parse({
+      ...resource,
+      toolInput: {},
+      toolResult: artifactResult(artifact),
+      files: await artifactFiles(input, files),
+    }),
+  }
+}
+
+/**
  * One MCP App request, listener-neutral. The caller has already authorized the
  * Session and resolved `scope`; this reads the body, applies the view's rate
  * limit, and maps every failure to an answer that never names a native detail.
  */
 export async function handleMcpAppRequest(
-  input: AppFileContext & {
-    operation: McpAppOperation
-    allow: (call: AppCallTarget) => boolean
-  }
+  input: McpAppInput
 ): Promise<McpAppOutcome> {
-  const { runtime, scope, toolCallId, operation, request } = input
+  const { runtime, scope, subject, operation, request } = input
   const apps = runtime.mcpApps
   if (!apps) return failure.not_found
   if (
     !input.allow({
       agentId: scope.agentId,
       sessionId: scope.sessionId,
-      toolCallId,
+      ...subjectId(subject),
     })
   )
     return failure.rate_limited
   try {
+    if ("read" in subject)
+      return await handleArtifactRequest(input, apps, subject)
+    const { toolCallId } = subject
     if (operation === "open")
       return {
         ok: true,
@@ -117,7 +214,8 @@ export async function handleMcpAppRequest(
           McpAppViewSchema.parse(
             await apps.open(scope, toolCallId, request.signal)
           ),
-          input
+          input,
+          toolCallId
         ),
       }
     if (operation === "files") {
@@ -162,7 +260,7 @@ export async function handleMcpAppRequest(
     if (
       error instanceof McpAppNotFoundError ||
       error instanceof McpAppResourceError ||
-      runtime.publicError(error)?.kind === "gone"
+      (coreFailure(error) ?? runtime.publicError(error))?.kind === "gone"
     )
       return failure.not_found
     if (error instanceof McpAppRefusedError) return failure.forbidden
@@ -170,12 +268,44 @@ export async function handleMcpAppRequest(
   }
 }
 
-/** The three identifiers every MCP App route carries in its path. */
-export function mcpAppParams(params: Record<string, string | undefined>) {
-  const { agentId, sessionId, toolCallId } = params
-  return agentId && sessionId && toolCallId
-    ? { agentId, sessionId, toolCallId }
-    : undefined
+/** The Agent, Session, and subject every MCP App route carries in its path. */
+export function mcpAppParams(
+  params: Record<string, string | undefined>
+): AppTarget | undefined {
+  const { agentId, sessionId, toolCallId, artifactId } = params
+  if (!agentId || !sessionId) return undefined
+  if (toolCallId) return { agentId, sessionId, toolCallId }
+  return artifactId ? { agentId, sessionId, artifactId } : undefined
+}
+
+type McpAppRoute = [method: "get" | "post", path: string, McpAppOperation]
+
+/**
+ * One listener's MCP App routes under its Session path: a tool call's view
+ * and a published Artifact's view. Only a tool call's view calls tools;
+ * `filePaths` are where each view reads a file, on a listener serving files.
+ */
+export function mcpAppRoutes(
+  sessionPath: string,
+  servesFiles: boolean
+): { routes: McpAppRoute[]; filePaths: string[] } {
+  const call = `${sessionPath}${MCP_APP_PATH}`
+  const bases = [call, `${sessionPath}${ARTIFACT_APP_PATH}`]
+  return {
+    routes: [
+      ["post", `${call}/tools/call`, "tools/call"],
+      ...bases.flatMap((base): McpAppRoute[] => [
+        ["get", base, "open"],
+        ["post", `${base}/resources/read`, "resources/read"],
+        ...(servesFiles
+          ? [["post", `${base}/files`, "files"] satisfies McpAppRoute]
+          : []),
+      ]),
+    ],
+    filePaths: servesFiles
+      ? bases.map((base) => `${base}/files/:argument`)
+      : [],
+  }
 }
 
 export function registerMcpAppRoutes(
@@ -188,14 +318,7 @@ export function registerMcpAppRoutes(
     sessionId: string
   ) => Promise<ids.ProviderSessionId>
 ) {
-  const base = `/api/aos/v1/agents/:agentId/sessions/:sessionId${MCP_APP_PATH}`
   const limit = createMcpAppLimits(options.clock, options.files?.ratePerSecond)
-  const routes: Array<[method: "get" | "post", path: string, McpAppOperation]> =
-    [
-      ["get", base, "open"],
-      ["post", `${base}/tools/call`, "tools/call"],
-      ["post", `${base}/resources/read`, "resources/read"],
-    ]
   const files: AppFileGrant | undefined = options.files && {
     options: options.files,
     role: "operator",
@@ -203,34 +326,48 @@ export function registerMcpAppRoutes(
     sets: [options.files.operator],
     requiresRealPath: false,
   }
-  if (files) {
-    routes.push(["post", `${base}/files`, "files"])
-    app.get(`${base}/files/:argument`, async (context) => {
-      const runtime = await requireRuntime(context.req.raw)
-      const target = mcpAppParams(context.req.param())
-      const argument = context.req.param("argument")
-      if (!target || !argument) return errorResponse("not_found", 404)
-      return answerAppFile({
-        request: context.req.raw,
-        runtime,
-        grant: files,
-        target,
-        argument,
-        allow: limit("files"),
-        // The operator listener has no login of its own.
-        login: async () => true,
-        scope: async () => ({
-          agentId: target.agentId,
-          providerSessionId: await requireScopedSession(
-            runtime,
-            target.agentId,
-            target.sessionId
-          ),
-          sessionId: ids.sessionId(target.sessionId),
-        }),
+  const { routes, filePaths } = mcpAppRoutes(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId",
+    Boolean(files)
+  )
+  /** The subject a path names; an Artifact reads as the content route reads it. */
+  const subjectOf = (runtime: ServerRuntime, target: AppTarget): AppSubject =>
+    "toolCallId" in target
+      ? { toolCallId: target.toolCallId }
+      : {
+          artifactId: target.artifactId,
+          read: (scope) =>
+            runtime.artifact(scope.agentId, scope.sessionId, target.artifactId),
+        }
+  if (files)
+    for (const path of filePaths)
+      app.get(path, async (context) => {
+        const runtime = await requireRuntime(context.req.raw)
+        const target = mcpAppParams(context.req.param())
+        const argument = context.req.param("argument")
+        if (!target || !argument) return errorResponse("not_found", 404)
+        const { agentId, sessionId } = target
+        return answerAppFile({
+          request: context.req.raw,
+          runtime,
+          grant: files,
+          target: { agentId, sessionId },
+          subject: subjectOf(runtime, target),
+          argument,
+          allow: limit("files"),
+          // The operator listener has no login of its own.
+          login: async () => true,
+          scope: async () => ({
+            agentId,
+            providerSessionId: await requireScopedSession(
+              runtime,
+              agentId,
+              sessionId
+            ),
+            sessionId: ids.sessionId(sessionId),
+          }),
+        })
       })
-    })
-  }
   for (const [method, path, operation] of routes)
     app[method](path, async (context) => {
       const runtime = await requireRuntime(context.req.raw)
@@ -239,22 +376,16 @@ export function registerMcpAppRoutes(
         context.req.header("origin") !== options.publicOrigin
       )
         return errorResponse("forbidden", 403)
-      const params = mcpAppParams(context.req.param())
-      if (!params) return errorResponse("not_found", 404)
-      const { agentId, sessionId, toolCallId } = params
+      const target = mcpAppParams(context.req.param())
+      if (!target) return errorResponse("not_found", 404)
+      const { agentId, sessionId } = target
       const providerSessionId = await requireScopedSession(
         runtime,
         agentId,
         sessionId
       )
       options.logger.info(
-        {
-          requestId: context.get("requestId"),
-          operation,
-          agentId,
-          sessionId,
-          toolCallId,
-        },
+        { requestId: context.get("requestId"), operation, ...target },
         "mcp_app.request"
       )
       const outcome = await handleMcpAppRequest({
@@ -264,7 +395,7 @@ export function registerMcpAppRoutes(
           providerSessionId,
           sessionId: ids.sessionId(sessionId),
         },
-        toolCallId,
+        subject: subjectOf(runtime, target),
         operation,
         request: context.req.raw,
         allow: limit(operation),
