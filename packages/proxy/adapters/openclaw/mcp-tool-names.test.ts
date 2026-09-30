@@ -89,4 +89,40 @@ describe("OpenClaw MCP tool names", () => {
     })
     expect(resolve()).toEqual({ server: "github", tool: "search_issues" })
   })
+
+  it("resolves a Session's names once its first load returns, however slow the catalog", async () => {
+    const request = vi.fn(
+      () => new Promise((resolve) => setImmediate(() => resolve(effective)))
+    )
+    const names = createOpenClawMcpToolNames({ request } as never)
+
+    await names.load("research", "agent:research:main")
+
+    expect(
+      names.resolver("research", "agent:research:main")("github__search_issues")
+    ).toEqual({ server: "github", tool: "search_issues" })
+  })
+
+  it("gives a name a server only once the Session's catalog lists it", async () => {
+    vi.useFakeTimers()
+    let tools: unknown[] = []
+    const request = vi.fn(async () => ({
+      ...effective,
+      groups: [{ id: "mcp", label: "MCP", source: "mcp", tools }],
+      notices: [{ ...effective.notices[0], servers: ["a"] }],
+    }))
+    const names = createOpenClawMcpToolNames({ request } as never)
+    const listed = () =>
+      names.listed("research", "agent:research:main", "a__b__c")
+
+    const prefixed = await listed()
+    tools = [entry("a__b__c", { mcpServer: "a__b", mcpToolName: "c" })]
+    vi.advanceTimersByTime(31_000)
+    const found = await listed()
+    vi.useRealTimers()
+
+    // A configured server `a` is no listing: `a__b__c` could be `a` or `a__b`.
+    expect(prefixed).toBeUndefined()
+    expect(found).toEqual({ server: "a__b", tool: "c" })
+  })
 })

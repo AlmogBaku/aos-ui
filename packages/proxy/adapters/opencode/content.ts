@@ -1,7 +1,3 @@
-import { createHash } from "node:crypto"
-
-import { safeArtifactPath } from "../../core/artifact-path"
-
 const MAX_ATTACHMENTS = 16
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024
@@ -22,18 +18,6 @@ export class OpenCodeContentUnavailableError extends Error {
   constructor() {
     super("OpenCode content operation is unavailable")
     this.name = "OpenCodeContentUnavailableError"
-  }
-}
-
-/**
- * The provider answered that it cannot read an artifact's file: it is missing,
- * outside the project OpenCode confines reads to, or denied. Retrying cannot
- * change that, so it is not an outage.
- */
-export class OpenCodeContentUnreadableError extends Error {
-  constructor() {
-    super("OpenCode could not read this output")
-    this.name = "OpenCodeContentUnreadableError"
   }
 }
 
@@ -159,68 +143,5 @@ export class OpenCodeContent {
       )
     )
     return stage
-  }
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined
-}
-
-function parsedRecord(text: string) {
-  try {
-    return record(JSON.parse(text))
-  } catch {
-    return undefined
-  }
-}
-
-function artifactId(toolCallId: string, path: string) {
-  const digest = createHash("sha256")
-    .update(toolCallId)
-    .update("\0")
-    .update(path)
-    .digest("hex")
-    .slice(0, 32)
-  return `opencode-artifact-${digest}`
-}
-
-/**
- * The opaque artifact one `aos-ui` `present_artifact` receipt publishes. The
- * MCP server names an absolute path and no id, so the id derives from the call
- * and the path; only `path` holds the native location, and it never becomes
- * public: `source.reference` is the id a content read resolves back through
- * this Session's history.
- */
-export function openCodeArtifactReceipt(toolCallId: string, text: string) {
-  const receipt = parsedRecord(text)
-  const artifact =
-    receipt?.ok === true && receipt.type === "aos.artifact"
-      ? record(receipt.artifact)
-      : undefined
-  const path =
-    typeof artifact?.path === "string"
-      ? safeArtifactPath(artifact.path)
-      : undefined
-  const filename = safeFilename(artifact?.filename)
-  const mimeType =
-    artifact?.mimeType === undefined ? undefined : safeMime(artifact.mimeType)
-  if (
-    !toolCallId ||
-    !path ||
-    !filename ||
-    (artifact?.mimeType !== undefined && !mimeType)
-  )
-    return undefined
-  const id = artifactId(toolCallId, path)
-  const published = { id, filename, ...(mimeType ? { mimeType } : {}) }
-  return {
-    path,
-    descriptor: {
-      ...published,
-      source: { type: "provider" as const, reference: id },
-    },
-    result: { ok: true, type: "aos.artifact", artifact: published },
   }
 }

@@ -1,4 +1,4 @@
-import { isAbsolute, relative } from "node:path"
+import { isAbsolute } from "node:path"
 
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import type {
@@ -199,14 +199,6 @@ export type OpenCodeClient = Readonly<{
       ): Promise<void>
     }>
   }>
-  files: Readonly<{
-    /**
-     * One file's content, as OpenCode's project file route answers it. OpenCode
-     * confines the route to its project directory, so a path outside the
-     * configured directory is not found without asking it.
-     */
-    read(path: string, signal?: AbortSignal): Promise<OpenCodeFileContent>
-  }>
   /**
    * The server's own push, `GET /api/event`: the one stream that carries a
    * Session's questions and permissions as OpenCode asks and ends them, which
@@ -219,14 +211,6 @@ export type OpenCodeClient = Readonly<{
    */
   credentialRefused(): Promise<boolean>
   close(): Promise<void>
-}>
-
-/** The fields of the native `FileContent` an artifact read relies on. */
-export type OpenCodeFileContent = Readonly<{
-  type: "text" | "binary"
-  content: string
-  encoding?: "base64"
-  mimeType?: string
 }>
 
 type OpenCodeSdk = ReturnType<typeof createOpencodeClient>
@@ -279,24 +263,6 @@ function todoList(value: unknown): unknown[] {
   const envelope = record(value)
   if (envelope && Array.isArray(envelope.data)) return envelope.data
   throw new OpenCodeClientError("invalid_response")
-}
-
-function fileContent(value: unknown): OpenCodeFileContent {
-  const file = record(value)
-  if (
-    !file ||
-    (file.type !== "text" && file.type !== "binary") ||
-    typeof file.content !== "string" ||
-    (file.encoding !== undefined && file.encoding !== "base64") ||
-    (file.mimeType !== undefined && typeof file.mimeType !== "string")
-  )
-    throw new OpenCodeClientError("invalid_response")
-  return {
-    type: file.type,
-    content: file.content,
-    ...(file.encoding === undefined ? {} : { encoding: file.encoding }),
-    ...(file.mimeType === undefined ? {} : { mimeType: file.mimeType }),
-  }
 }
 
 function text(value: unknown) {
@@ -802,25 +768,6 @@ class Facade implements OpenCodeClient {
           signal
         ),
     },
-  }
-
-  readonly files: OpenCodeClient["files"] = {
-    read: (path, signal) =>
-      this.#request(
-        (request) => {
-          const inside = isAbsolute(path) ? relative(this.#directory, path) : ""
-          if (
-            !inside ||
-            inside === ".." ||
-            inside.startsWith("../") ||
-            isAbsolute(inside)
-          )
-            throw new OpenCodeClientError("not_found")
-          return this.#sdk.file.read({ path: inside }, request)
-        },
-        fileContent,
-        signal
-      ),
   }
 
   events(signal?: AbortSignal): Promise<OpenCodeServerEvents> {

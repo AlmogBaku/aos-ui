@@ -10,8 +10,6 @@ import {
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
   SessionsDeleteParamsSchema,
-  SessionsFilesGetParamsSchema,
-  SessionsFilesGetResultSchema,
   SessionsListParamsSchema,
   SessionsPatchParamsSchema,
 } from "@openclaw/gateway-protocol"
@@ -329,14 +327,6 @@ export function openClawModelsParams(agentId: string, sessionKey: string) {
   return official(ModelsListParamsSchema, { agentId, sessionKey })
 }
 
-export function openClawSessionFileParams(
-  agentId: string,
-  sessionKey: string,
-  path: string
-) {
-  return official(SessionsFilesGetParamsSchema, { agentId, sessionKey, path })
-}
-
 export function openClawArtifactDownloadParams(
   agentId: string,
   sessionKey: string,
@@ -347,18 +337,6 @@ export function openClawArtifactDownloadParams(
     sessionKey,
     artifactId,
   })
-}
-
-export type OpenClawSessionFile = Readonly<{
-  missing: boolean
-  content?: string
-  contentEncoding?: "utf8" | "base64"
-  mimeType?: string
-}>
-
-export function parseOpenClawSessionFile(value: unknown): OpenClawSessionFile {
-  official(SessionsFilesGetResultSchema, value)
-  return (value as { file: OpenClawSessionFile }).file
 }
 
 export type OpenClawArtifactDownload = Readonly<{

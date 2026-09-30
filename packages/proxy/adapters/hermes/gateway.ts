@@ -39,6 +39,7 @@ import {
   type HermesCredentials,
   type HermesHttp,
   type HermesHttpInit,
+  type HermesStreamInit,
 } from "./http"
 import {
   guardedHermesSocket,
@@ -132,6 +133,7 @@ export interface HermesRpcTransport {
     options?: HermesRpcOptions
   ): Promise<unknown>
   http?(path: string, init?: HermesHttpInit): Promise<unknown>
+  stream?(path: string, init: HermesStreamInit): Promise<Response>
   subscribeEvents?(listener: (event: unknown) => void): () => void
   subscribeRequests?(handler: ServerRequestHandler): () => void
   subscribeConnection?(handler: HermesConnectionHandler): () => void
@@ -794,6 +796,10 @@ export class HermesGateway implements HermesRpcTransport {
 
   http(path: string, init?: HermesHttpInit): Promise<unknown> {
     return this.#httpClient.http(path, init)
+  }
+
+  stream(path: string, init: HermesStreamInit): Promise<Response> {
+    return this.#httpClient.stream(path, init)
   }
 
   /** One vendored `onAny` subscription fans out to every listener, forever. */

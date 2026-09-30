@@ -3,7 +3,11 @@ import {
   McpAppViewSchema,
   ReadResourceResultSchema,
 } from "../../../protocol/mcp-apps"
-import type { ServerMcpApps, SessionScope } from "../../core/runtime"
+import type {
+  McpToolCall,
+  ServerMcpApps,
+  SessionScope,
+} from "../../core/runtime"
 import {
   OpenClawClientRequestError,
   type OpenClawGatewayClient,
@@ -44,6 +48,12 @@ export type OpenClawMcpAppAuthority = Readonly<{
     sessionKey: string,
     toolCallId: string
   ): Promise<string | undefined>
+  /** This Session's own stored `toolCallId` call, when its names list the tool. */
+  mcpToolCall(
+    agentId: string,
+    sessionKey: string,
+    toolCallId: string
+  ): Promise<McpToolCall | undefined>
 }>
 
 /**
@@ -148,6 +158,14 @@ export function createOpenClawMcpApps(input: {
           ...(await viewParams(scope, toolCallId)),
           uri,
         })
+      )
+    },
+    async toolCall(scope, toolCallId) {
+      await input.start()
+      return input.authority.mcpToolCall(
+        scope.agentId,
+        scope.providerSessionId,
+        toolCallId
       )
     },
   }

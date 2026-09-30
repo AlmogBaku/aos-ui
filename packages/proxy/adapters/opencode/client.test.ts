@@ -191,28 +191,6 @@ describe("OpenCodeClient", () => {
     }
   })
 
-  it("reads a file inside the configured directory through the native file route", async () => {
-    const paths: string[] = []
-    await withSubject(
-      (request) => {
-        expect(request.url.pathname).toBe("/file/content")
-        expect(request.directory).toBe("/workspaces/aos")
-        paths.push(request.url.searchParams.get("path") ?? "")
-        return Response.json({ type: "text", content: "# Notes" })
-      },
-      async (subject) => {
-        await expect(
-          subject.files.read("/workspaces/aos/out/notes.md")
-        ).resolves.toEqual({ type: "text", content: "# Notes" })
-        for (const outside of ["/workspaces/other/notes.md", "/etc/passwd"])
-          await expect(subject.files.read(outside)).rejects.toMatchObject({
-            code: "not_found",
-          })
-        expect(paths).toEqual(["out/notes.md"])
-      }
-    )
-  })
-
   it("switches an exact native model with the same uncertain acknowledgement fence", async () => {
     await withSubject(
       async (request) => {
@@ -384,12 +362,6 @@ describe("OpenCodeClient", () => {
       body: "a Todo body that is neither a bare nor an enveloped array",
       answer: { todos: [] },
       call: (subject: Subject) => subject.sessions.todos("session-1"),
-    },
-    {
-      body: "a file body that is not file content",
-      answer: { type: "folder" },
-      call: (subject: Subject) =>
-        subject.files.read("/workspaces/aos/out/notes.md"),
     },
   ])(
     "rejects $body before a converter can consume it",

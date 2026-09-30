@@ -172,10 +172,9 @@ as the required `cwd` for `session/new` and `session/resume`.
 
 ## Artifacts
 
-A completed `present_artifact` receipt publishes an Artifact. The proxy reads
-its bytes through OpenCode's `GET /file/content`, confined to the configured
-project directory: a receipt path outside that directory reads as unavailable.
-Only a receipt the Session still holds grants read access.
+OpenCode 1.18.29 cannot call MCP tools, so `present_artifact` is not callable
+and the App shows "Can't reach this file". `open` returns no file addresses.
+There is no file read or call lookup on this runtime yet.
 
 ## Agent icons
 

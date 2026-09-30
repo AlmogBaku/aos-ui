@@ -1039,34 +1039,6 @@ describe("server-side Hermes history projection", () => {
     expect(message?.completedAt).toBeUndefined()
   })
 
-  it("stores a published artifact right after the call that published it", () => {
-    const messages = projectHermesHistory([
-      assistantToolCall("a1", [
-        { toolCallId: "c1", name: "present_artifact", args: { path: "r.md" } },
-        { toolCallId: "c2", name: "read_file", args: { path: "a.txt" } },
-      ]),
-      toolRow("c1", "present_artifact", {
-        ok: true,
-        type: "aos.artifact",
-        artifact: {
-          id: "report-1",
-          filename: "report.md",
-          mimeType: "text/markdown",
-          sizeBytes: 42,
-        },
-      }),
-      toolRow("c2", "read_file", { ok: true }),
-    ])
-
-    // The later call's result still patches the part it belongs to, which the
-    // inserted artifact moved along.
-    expect(messages[0]?.content).toMatchObject([
-      { type: "tool-call", toolCallId: "c1" },
-      { type: "data", name: "aos.artifact", data: { id: "report-1" } },
-      { type: "tool-call", toolCallId: "c2", result: { ok: true } },
-    ])
-  })
-
   it("keeps a stored edit's kind, location, and diff", () => {
     const path = "/home/operator/project/notes.md"
     const diff = `--- a${path}\n+++ b${path}\n@@ -1 +1 @@\n-old\n+new\n`

@@ -34,9 +34,9 @@ holds the exact commands. The manual steps follow.
 
 AOS UI ships its own stateless MCP server, `packages/tools-mcp`, with
 `render_chart`, `render_map`, `render_stats`, and
-`present_artifact({path, title?, mimeType?})`. The first three are
-[MCP Apps](#mcp-apps), so charts, maps, and stats render only while the Gateway
-has `mcp.apps.enabled: true`. Run it on the Gateway host with
+`present_artifact({path, title?, mimeType?})`. All four are
+[MCP Apps](#mcp-apps) and render only while the Gateway has
+`mcp.apps.enabled: true`. Run it on the Gateway host with
 `bun run tools-mcp:serve` (loopback, port `4110`), or use the Compose stack's
 `tools-mcp` service, published on `127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`.
 
@@ -105,14 +105,31 @@ definition, the creator runs `openclaw agents add` as the skill's
 `reference/harness-openclaw.md` describes, so it needs OpenClaw's command
 execution tool.
 
-### Artifacts
+### MCP App file reads
 
-- A `present_artifact` receipt is read through `sessions.files.get`: only
-  files in the Session's workspace, at most 256 KiB, and only text or common
-  image types (PNG, JPEG, GIF, WebP, AVIF). Anything else reads as
-  unavailable.
-- OpenClaw's own `MEDIA:` media is read through `artifacts.download`. These
-  Artifacts appear after the Session is reloaded, not while the turn streams.
+The proxy reads a file named by a `present_artifact` App view through the
+Control UI's media route:
+`GET <basePath>/__openclaw__/assistant-media?source=<path>&sessionKey=<key>&agentId=<id>`.
+The request carries the device token as Bearer, `Accept: application/octet-stream`,
+`Accept-Encoding: identity`, and follows no redirects. The base path comes
+from `gateway.controlUi.basePath`, read through `config.get`; a changed base
+path takes effect only after the Gateway restarts. File reads are only available
+when both the Gateway origin and a device token are configured.
+
+OpenClaw checks its own roots against the path. The proxy's operator rules and
+deny list judge only the written path, so a symbolic link inside OpenClaw's
+roots can reach a file those rules would otherwise deny. Guests get
+no file addresses on OpenClaw. A sandboxed Session, or one running on another
+machine, answers 404. A call is not found when its assistant row exceeds
+128 KiB. OpenClaw stores a redacted copy of the arguments, so a path that
+looks like a secret reads masked (404).
+
+To look up the call's input, the proxy scans the paged history from
+`chat.history`. A tool name counts as an MCP call only when `tools.effective`
+lists it by its exact name.
+
+OpenClaw's own native media is read through `artifacts.download` and appears
+after the Session is reloaded, not while the turn streams.
 
 ## Run locally
 

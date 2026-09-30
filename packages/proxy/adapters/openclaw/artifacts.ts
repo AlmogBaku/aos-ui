@@ -1,13 +1,6 @@
-import { createHash } from "node:crypto"
+import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
+import type { OpenClawArtifactDownload } from "./native-schemas"
 
-import { MAX_ARTIFACT_BYTES, safeArtifactPath } from "../../core/artifact-path"
-import type {
-  OpenClawArtifactDownload,
-  OpenClawSessionFile,
-} from "./native-schemas"
-
-/** The id prefix of an artifact a `present_artifact` receipt publishes. */
-const RECEIPT_ID_PREFIX = "openclaw-artifact-"
 /** OpenClaw's own transcript artifact ids (`artifact_managed_image_…` and kin). */
 const NATIVE_ARTIFACT_ID = /^artifact_[A-Za-z0-9_-]{1,240}$/u
 /** The only gateway route a download URL may name: ticketed outgoing media. */
@@ -62,14 +55,6 @@ export function artifactMime(value: unknown) {
     : undefined
 }
 
-function parsedRecord(text: string) {
-  try {
-    return record(JSON.parse(text))
-  } catch {
-    return undefined
-  }
-}
-
 function descriptor(
   id: string,
   filename: string,
@@ -85,85 +70,8 @@ function descriptor(
   }
 }
 
-export function isReceiptArtifactId(artifactId: string) {
-  return artifactId.startsWith(RECEIPT_ID_PREFIX)
-}
-
 export function isNativeArtifactId(artifactId: string) {
   return NATIVE_ARTIFACT_ID.test(artifactId)
-}
-
-function receiptArtifactId(toolCallId: string, path: string) {
-  const digest = createHash("sha256")
-    .update(toolCallId)
-    .update("\0")
-    .update(path)
-    .digest("hex")
-    .slice(0, 32)
-  return `${RECEIPT_ID_PREFIX}${digest}`
-}
-
-function parsedReceipt(toolCallId: string, text: string) {
-  const receipt = parsedRecord(text)
-  const artifact =
-    receipt?.ok === true && receipt.type === "aos.artifact"
-      ? record(receipt.artifact)
-      : undefined
-  const path =
-    typeof artifact?.path === "string"
-      ? safeArtifactPath(artifact.path)
-      : undefined
-  const filename = safeFilename(artifact?.filename)
-  const mimeType =
-    artifact?.mimeType === undefined
-      ? undefined
-      : artifactMime(artifact.mimeType)
-  if (!path || !filename || (artifact?.mimeType !== undefined && !mimeType))
-    return undefined
-  const id = receiptArtifactId(toolCallId, path)
-  return {
-    path,
-    descriptor: descriptor(id, filename, mimeType),
-    result: {
-      ok: true,
-      type: "aos.artifact",
-      artifact: { id, filename, ...(mimeType ? { mimeType } : {}) },
-    },
-  }
-}
-
-/**
- * The artifact one `aos-ui` `present_artifact` result publishes. OpenClaw
- * projects the MCP result into text blocks, one of which is the compact
- * receipt; it names an absolute path and no id, so the id derives from the
- * call and the path. Only `path` holds the native location, and it never
- * becomes public: `result` is the receipt with the path replaced by the id.
- */
-export function openClawArtifactReceipt(toolCallId: string, result: unknown) {
-  const content = record(result)?.content
-  if (!toolCallId || !Array.isArray(content)) return undefined
-  for (const block of content) {
-    const text =
-      record(block)?.type === "text" ? record(block)?.text : undefined
-    const receipt =
-      typeof text === "string" ? parsedReceipt(toolCallId, text) : undefined
-    if (receipt) return receipt
-  }
-  return undefined
-}
-
-/** The `present_artifact` arguments that name no native location. */
-const PUBLIC_ARTIFACT_ARG_KEYS = ["title", "filename", "mimeType"] as const
-
-/** `present_artifact` arguments without the absolute path they carry. */
-export function publicArtifactArgs(args: unknown) {
-  const source = record(args) ?? {}
-  return Object.fromEntries(
-    PUBLIC_ARTIFACT_ARG_KEYS.filter((key) => key in source).map((key) => [
-      key,
-      source[key],
-    ])
-  )
 }
 
 /**
@@ -213,19 +121,6 @@ function base64Bytes(value: string) {
   if ((value.length / 4) * 3 > MAX_ARTIFACT_BYTES + 2)
     throw new OpenClawArtifactUnavailableError()
   return bounded(new Uint8Array(Buffer.from(value, "base64")))
-}
-
-/**
- * The bytes `sessions.files.get` answered with. The gateway previews text and
- * browser images only, so a missing file, and one it answers without content
- * (a binary or anything over its preview cap), is unreadable.
- */
-export function sessionFileBytes(file: OpenClawSessionFile) {
-  if (file.missing || file.content === undefined)
-    throw new OpenClawArtifactUnreadableError()
-  return file.contentEncoding === "base64"
-    ? base64Bytes(file.content)
-    : bounded(encoder.encode(file.content))
 }
 
 /**

@@ -211,7 +211,7 @@ describe("Hermes server adapter", () => {
     )
   })
 
-  it("stages owned attachments and reads only a published same-Session artifact", async () => {
+  it("stages owned attachments and reads the attached image through its artifact id", async () => {
     const router = rpcRouter({
       "session.resume": async () => ({
         session_id: "live-secret",
@@ -224,37 +224,8 @@ describe("Hermes server adapter", () => {
       }),
     })
     const http = ownedSessionHttp(undefined, (path) => {
-      // Hermes saves the image's user row only once its turn starts, and the
-      // receipt sits one full page back.
-      if (path.includes("/messages?") && path.includes("offset=0"))
-        return {
-          session_id: "stored",
-          messages: Array.from({ length: 500 }, () => ({
-            role: "user",
-            content: "later",
-          })),
-        }
-      if (path.includes("/messages?"))
-        return {
-          session_id: "stored",
-          messages: [
-            {
-              role: "tool",
-              content: JSON.stringify({
-                ok: true,
-                type: "aos.artifact",
-                artifact: {
-                  id: "artifact-1",
-                  workdir: "/home/agent/scratch",
-                  path: "reports/result.txt",
-                  filename: "result.txt",
-                },
-              }),
-            },
-          ],
-        }
       if (path.startsWith("/api/fs/read-data-url?"))
-        return { dataUrl: "data:text/plain;base64,aGVsbG8=" }
+        return { dataUrl: "data:image/png;base64,aGVsbG8=" }
       throw new Error(`unexpected ${path}`)
     })
     const adapter = new HermesServerAdapter({ ...router, http })
@@ -281,56 +252,11 @@ describe("Hermes server adapter", () => {
     expect(http.mock.calls.at(-1)?.[0]).toContain(
       `path=${encodeURIComponent("/private/image.png")}`
     )
-
-    await expect(
-      adapter.artifact("researcher", sessionId, "artifact-1")
-    ).resolves.toEqual({
-      bytes: Uint8Array.from([104, 101, 108, 108, 111]),
-      filename: "result.txt",
-      mimeType: "text/plain",
-    })
-    expect(http.mock.calls.at(-1)?.[0]).toContain(
-      `path=${encodeURIComponent("/home/agent/scratch/reports/result.txt")}&profile=researcher&session_id=stored`
-    )
-    expect(http.mock.calls.at(-1)?.[1]).toEqual({
-      maxResponseBytes: 26_214_400,
-    })
   })
 
-  it("reads what the aos-ui MCP tool and an assistant MEDIA line published", async () => {
-    const reportPath = "/home/alice/reports/q3.pdf"
+  it("reads what an assistant MEDIA line published", async () => {
     const chartPath = "/home/alice/reports/chart.png"
     const messages = [
-      {
-        id: "assistant-present",
-        role: "assistant",
-        tool_calls: [
-          {
-            id: "present-call",
-            function: {
-              name: "mcp__aos_ui__present_artifact",
-              arguments: JSON.stringify({ path: reportPath }),
-            },
-          },
-        ],
-      },
-      {
-        role: "tool",
-        tool_call_id: "present-call",
-        tool_name: "mcp__aos_ui__present_artifact",
-        // Hermes wraps an MCP tool's text content as `{"result": <text>}`.
-        content: JSON.stringify({
-          result: JSON.stringify({
-            ok: true,
-            type: "aos.artifact",
-            artifact: {
-              path: reportPath,
-              filename: "q3.pdf",
-              mimeType: "application/pdf",
-            },
-          }),
-        }),
-      },
       {
         id: "assistant-final",
         role: "assistant",
@@ -355,49 +281,26 @@ describe("Hermes server adapter", () => {
       )
     )
 
-    expect(artifacts.map(({ filename }) => filename)).toEqual([
-      "q3.pdf",
-      "chart.png",
-    ])
+    expect(artifacts.map(({ filename }) => filename)).toEqual(["chart.png"])
     expect(JSON.stringify(history)).not.toContain("/home/alice")
-    for (const [artifact, path] of [
-      [artifacts[0]!, reportPath],
-      [artifacts[1]!, chartPath],
-    ] as const) {
-      await expect(
-        adapter.artifact("researcher", "stored", artifact.id)
-      ).resolves.toMatchObject({ filename: artifact.filename })
-      expect(http.mock.calls.at(-1)?.[0]).toContain(
-        `path=${encodeURIComponent(path)}&profile=researcher`
-      )
-    }
+    await expect(
+      adapter.artifact("researcher", "stored", artifacts[0]!.id)
+    ).resolves.toMatchObject({ filename: "chart.png" })
+    expect(http.mock.calls.at(-1)?.[0]).toContain(
+      `path=${encodeURIComponent(chartPath)}&profile=researcher`
+    )
   })
 
-  it("reports an output the provider can no longer read as not found", async () => {
+  it("reports a media artifact the provider can no longer read as not found", async () => {
     // A default `text_to_speech` delivery lands in the media cache Hermes prunes
     // at a 24-hour age, so its receipt outlives its bytes and `read-data-url`
-    // answers 404. The Session's published artifact reads from the same
-    // endpoint and must stay unaffected.
+    // answers 404.
     const audioPath = "/home/alice/.hermes/cache/audio/tts_20260915_184023.mp3"
     const messages = [
       {
         id: "assistant-tools",
         role: "assistant",
         tool_calls: [
-          {
-            id: "artifact-call",
-            function: {
-              name: "tool_call",
-              arguments: JSON.stringify({
-                name: "present_artifact",
-                arguments: {
-                  mimeType: "text/markdown",
-                  path: "interview-brief.md",
-                  title: "Interview Brief",
-                },
-              }),
-            },
-          },
           {
             id: "tts-call",
             function: {
@@ -406,23 +309,6 @@ describe("Hermes server adapter", () => {
             },
           },
         ],
-      },
-      {
-        role: "tool",
-        tool_call_id: "artifact-call",
-        tool_name: "present_artifact",
-        content: JSON.stringify({
-          ok: true,
-          type: "aos.artifact",
-          artifact: {
-            id: "hermes-artifact-3d43f638eb6049e8aaf7cb0c8d96ad3b",
-            workdir: "/home/alice/interviews",
-            path: "interview-brief.md",
-            filename: "Interview Brief — VP AI",
-            sizeBytes: 11_102,
-            mimeType: "text/markdown",
-          },
-        }),
       },
       {
         role: "tool",
@@ -450,7 +336,7 @@ describe("Hermes server adapter", () => {
     const http = ownedSessionHttp(messages, (path) => {
       if (path.startsWith("/api/fs/read-data-url?")) {
         if (path.includes(encodeURIComponent(audioPath))) throw audioFailure
-        return { dataUrl: "data:text/markdown;base64,IyBCcmllZg==" }
+        throw new Error(`unexpected ${path}`)
       }
       throw new Error(`unexpected ${path}`)
     })
@@ -476,19 +362,6 @@ describe("Hermes server adapter", () => {
     expect(unreadable).toBeInstanceOf(HermesContentUnreadableError)
     expect(adapter.publicError(unreadable)?.kind).toBe("gone")
     expect(String(unreadable)).not.toContain(audioPath)
-
-    // The same endpoint still serves the artifact the tool published.
-    await expect(
-      adapter.artifact(
-        "researcher",
-        "stored",
-        "hermes-artifact-3d43f638eb6049e8aaf7cb0c8d96ad3b"
-      )
-    ).resolves.toEqual({
-      bytes: Uint8Array.from([35, 32, 66, 114, 105, 101, 102]),
-      filename: "Interview Brief — VP AI",
-      mimeType: "text/markdown",
-    })
 
     // A file Hermes refuses on its own merits answers 403, not 401: reporting
     // that as a credential failure would send the operator to fix a gateway
