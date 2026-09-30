@@ -55,11 +55,8 @@ import {
 import type { WorkspaceShellProps } from "@/components/workspace/workspace-shell"
 import {
   ArtifactDataUI,
-  ArtifactOutputs,
-  ArtifactViewerContent,
   ArtifactWorkspaceProvider,
   createArtifactMessageStabilizer,
-  useArtifactWorkspace,
 } from "@/components/artifacts"
 import { ManageAgents } from "@/components/workspace/manage-agents"
 import { useWorkspaceNavigation } from "@/components/workspace/use-workspace-navigation"
@@ -188,7 +185,6 @@ function ArtifactWorkspaceBridge({
   bundle,
   locale,
   agentId,
-  artifactHtmlAssetOrigins,
   artifactMessageProjector,
   children,
   ...shell
@@ -196,7 +192,6 @@ function ArtifactWorkspaceBridge({
   bundle: HarnessRuntime
   locale: Locale
   agentId: string
-  artifactHtmlAssetOrigins: readonly string[]
   artifactMessageProjector?: (
     messages: readonly ArtifactMessage[]
   ) => readonly ArtifactMessage[]
@@ -218,7 +213,6 @@ function ArtifactWorkspaceBridge({
       agentId={agentId}
       sessionId={artifactThreadId}
       messages={artifactMessages}
-      artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
       <McpAppHostProvider
         adapter={bundle.mcpApps}
@@ -237,24 +231,16 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
   children,
   ...shell
 }: WorkspaceShellProps) {
-  const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
   // An App view moved to the side panel takes the Artifact viewer's place.
   const pip = useMcpAppPip(shell.locale)
 
   return (
     <WorkspaceShell
       {...shell}
-      artifactOutputs={<ArtifactOutputs />}
-      artifactViewer={
-        pip ? (
-          <McpAppPipPanel locale={shell.locale} />
-        ) : (
-          <ArtifactViewerContent />
-        )
-      }
-      artifactViewerOpen={pip !== undefined || selectedArtifact !== null}
-      artifactViewerLabel={pip?.title ?? labels.viewerLabel}
-      onCloseArtifactViewer={pip?.leave ?? closeArtifact}
+      sidePanel={pip ? <McpAppPipPanel locale={shell.locale} /> : null}
+      sidePanelOpen={pip !== undefined}
+      sidePanelLabel={pip?.title}
+      onCloseSidePanel={pip?.leave}
     >
       <ArtifactDataUI />
       {children}
@@ -492,7 +478,6 @@ function WorkspaceContent({
   } = bundle
   const assistantInstructions = bundle.assistantConfig?.instructions
   const assistantToolkit = bundle.assistantConfig?.toolkit
-  const artifactHtmlAssetOrigins = bundle.artifacts?.htmlAssetOrigins ?? []
   const artifactMessageProjector = bundle.artifacts?.projectMessages
   const assistantConfig = useMemo(
     () =>
@@ -674,7 +659,6 @@ function WorkspaceContent({
         bundle={bundle}
         locale={locale}
         agentId={selectedAgentId ?? ""}
-        artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
         artifactMessageProjector={artifactMessageProjector}
         activity={activity}
         browserSettings={

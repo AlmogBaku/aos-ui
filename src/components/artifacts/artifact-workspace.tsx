@@ -1,22 +1,13 @@
 "use client"
 
 import { makeAssistantDataUI, useAui, useAuiState } from "@assistant-ui/react"
-import {
-  ChevronDownIcon,
-  CopyIcon,
-  DownloadIcon,
-  FileIcon,
-  Loader2Icon,
-  RotateCcwIcon,
-  XIcon,
-} from "lucide-react"
+import { DownloadIcon, FileIcon, Loader2Icon } from "lucide-react"
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -27,8 +18,6 @@ import {
   SystemNotice,
   type SystemNoticeTone,
 } from "@/components/ui/system-notice"
-import { HighlightedCode } from "@/components/code/syntax-highlighter"
-import { syntaxLanguageFromFilename } from "@/components/code/syntax-language"
 import {
   ArtifactMissingError,
   ArtifactUnavailableError,
@@ -49,35 +38,18 @@ import type {
   ArtifactDescriptor,
 } from "@/runtime-adapters/contracts"
 
-import {
-  artifactMediaKind,
-  classifyArtifactPreview,
-  parseCsvPreview,
-  type ArtifactMediaKind,
-  type ArtifactPreviewKind,
-} from "./artifact-renderers"
-import { injectArtifactHtmlCsp } from "./artifact-frame-policy"
-import { ArtifactMarkdown } from "./artifact-markdown"
+import { artifactMediaKind, type ArtifactMediaKind } from "./artifact-renderers"
 
-export const MAX_ARTIFACT_PREVIEW_BYTES = 25 * 1024 * 1024
-export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
+export const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 
 export type ArtifactPreviewFailure =
-  "load" | "unavailable" | "missing" | "file-too-large" | "text-too-large"
+  "load" | "unavailable" | "missing" | "file-too-large"
 
 export type ArtifactPreviewState =
   | { status: "idle" }
   | { status: "loading" }
-  | {
-      status: "error"
-      reason: ArtifactPreviewFailure
-    }
-  | {
-      status: "ready"
-      kind: ArtifactPreviewKind
-      text?: string
-      url?: string
-    }
+  | { status: "error"; reason: ArtifactPreviewFailure }
+  | { status: "ready"; url: string }
 
 type ArtifactWorkspaceContextValue = {
   locale: Locale
@@ -86,7 +58,6 @@ type ArtifactWorkspaceContextValue = {
   agentId: string
   sessionId: string
   occurrences: ArtifactOccurrence[]
-  artifactHtmlAssetOrigins: readonly string[]
   selectedArtifact: ArtifactDescriptor | null
   openArtifact: (
     artifact: ArtifactDescriptor,
@@ -116,11 +87,8 @@ export type ArtifactWorkspaceProviderProps = {
   agentId: string
   sessionId: string
   messages: readonly ArtifactMessage[]
-  artifactHtmlAssetOrigins?: readonly string[]
   children: ReactNode
 }
-
-const NO_ASSET_ORIGINS: readonly string[] = []
 
 function sameArtifactDescriptor(
   previousArtifact: ArtifactDescriptor,
@@ -191,7 +159,6 @@ export function ArtifactWorkspaceProvider({
   agentId,
   sessionId,
   messages,
-  artifactHtmlAssetOrigins = NO_ASSET_ORIGINS,
   children,
 }: ArtifactWorkspaceProviderProps) {
   const [selection, setSelection] = useState<{
@@ -321,7 +288,6 @@ export function ArtifactWorkspaceProvider({
       agentId,
       sessionId,
       occurrences,
-      artifactHtmlAssetOrigins,
       selectedArtifact,
       openArtifact,
       closeArtifact,
@@ -330,7 +296,6 @@ export function ArtifactWorkspaceProvider({
     [
       adapter,
       agentId,
-      artifactHtmlAssetOrigins,
       closeArtifact,
       downloadArtifact,
       labels,
@@ -362,7 +327,6 @@ function previewFailureMessage(
   labels: Dictionary["artifacts"]
 ) {
   if (reason === "file-too-large") return labels.fileTooLarge
-  if (reason === "text-too-large") return labels.textTooLarge
   if (reason === "unavailable") return labels.unavailable
   if (reason === "missing") return labels.missing
   return labels.loadFailed
@@ -674,96 +638,6 @@ function ArtifactInlineMedia({
   )
 }
 
-export function ArtifactOutputs({ className = "" }: { className?: string }) {
-  const { labels, locale, occurrences } = useArtifactWorkspace()
-  const titleId = useId()
-
-  return (
-    <details
-      className={`group ${className}`}
-      dir={locale === "he" ? "rtl" : "ltr"}
-      role="region"
-      aria-label={labels.outputs}
-    >
-      <summary className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-        <ChevronDownIcon
-          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none"
-          aria-hidden="true"
-        />
-        <h2 id={titleId} className="text-sm font-semibold">
-          {labels.outputs}
-        </h2>
-      </summary>
-      <div aria-labelledby={titleId}>
-        {occurrences.length === 0 ? (
-          <p className="mt-1.5 text-xs text-muted-foreground">{labels.empty}</p>
-        ) : (
-          <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
-            {occurrences.toReversed().map(({ key, artifact }) => (
-              <ArtifactCard
-                key={key}
-                artifact={artifact}
-                occurrenceKey={key}
-                compact
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </details>
-  )
-}
-
-function isTextPreview(kind: ArtifactPreviewKind) {
-  return ["markdown", "text", "code", "json", "csv", "html"].includes(kind)
-}
-
-// HTML renders inside the sandboxed frame, so only text this page lays out
-// itself needs the tighter text budget.
-function hasTextPreviewBudget(kind: ArtifactPreviewKind) {
-  return isTextPreview(kind) && kind !== "html"
-}
-
-function ArtifactCopyButton({
-  labels,
-  text,
-}: {
-  labels: Dictionary["artifacts"]
-  text: string
-}) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
-    "idle"
-  )
-
-  const copyText = async () => {
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("Clipboard unavailable")
-      }
-      await navigator.clipboard.writeText(text)
-      setCopyState("copied")
-    } catch {
-      setCopyState("failed")
-    }
-  }
-
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      onClick={() => void copyText()}
-      className="[@media(pointer:coarse)]:min-h-11"
-    >
-      <CopyIcon data-icon="inline-start" />
-      {copyState === "copied"
-        ? labels.copied
-        : copyState === "failed"
-          ? labels.copyFailed
-          : labels.copy}
-    </Button>
-  )
-}
-
 /**
  * The same descriptor for as long as its bytes are the same. A re-projected
  * conversation hands an inline player a new object for an artifact that has not
@@ -781,7 +655,7 @@ function useArtifactByValue(artifact: ArtifactDescriptor | null) {
   return settled ? held : artifact
 }
 
-/** Loads one artifact's bytes: the opened viewer by default, or an inline player. */
+/** Loads an inline media artifact's bytes as an object URL. */
 export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
   const { adapter, agentId, selectedArtifact, sessionId } =
     useArtifactWorkspace()
@@ -796,26 +670,20 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
   } | null>(null)
   const [retryToken, setRetryToken] = useState(0)
 
-  const kind = previewArtifact
-    ? classifyArtifactPreview(
-        previewArtifact.mimeType,
-        previewArtifact.filename
-      )
-    : "unsupported"
+  const isMedia = previewArtifact
+    ? artifactMediaKind(previewArtifact.mimeType, previewArtifact.filename) !==
+      null
+    : false
   const preflightState: ArtifactPreviewState | null = !previewArtifact
     ? { status: "idle" }
     : !adapter
       ? { status: "error", reason: "unavailable" }
-      : hasTextPreviewBudget(kind) &&
-          previewArtifact.sizeBytes !== undefined &&
-          previewArtifact.sizeBytes > MAX_TEXT_PREVIEW_BYTES
-        ? { status: "error", reason: "text-too-large" }
-        : previewArtifact.sizeBytes !== undefined &&
-            previewArtifact.sizeBytes > MAX_ARTIFACT_PREVIEW_BYTES
-          ? { status: "error", reason: "file-too-large" }
-          : kind === "unsupported"
-            ? { status: "ready", kind }
-            : null
+      : previewArtifact.sizeBytes !== undefined &&
+          previewArtifact.sizeBytes > MAX_ARTIFACT_BYTES
+        ? { status: "error", reason: "file-too-large" }
+        : !isMedia
+          ? { status: "idle" }
+          : null
   const shouldResolve = preflightState === null
 
   useEffect(() => {
@@ -841,23 +709,14 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
         sessionId,
         signal: controller.signal,
       })
-      .then(async (blob) => {
+      .then((blob) => {
         if (!active) return
-        if (hasTextPreviewBudget(kind) && blob.size > MAX_TEXT_PREVIEW_BYTES) {
-          finish({ status: "error", reason: "text-too-large" })
-          return
-        }
-        if (blob.size > MAX_ARTIFACT_PREVIEW_BYTES) {
+        if (blob.size > MAX_ARTIFACT_BYTES) {
           finish({ status: "error", reason: "file-too-large" })
           return
         }
-        if (isTextPreview(kind)) {
-          const text = await blob.text()
-          if (active) finish({ status: "ready", kind, text })
-          return
-        }
         objectUrl = URL.createObjectURL(blob)
-        finish({ status: "ready", kind, url: objectUrl })
+        finish({ status: "ready", url: objectUrl })
       })
       .catch((error: unknown) => {
         if (active && !controller.signal.aborted) {
@@ -881,7 +740,7 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
   }, [
     adapter,
     agentId,
-    kind,
+    isMedia,
     previewArtifact,
     retryToken,
     shouldResolve,
@@ -906,378 +765,13 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
   }
 }
 
-export function ArtifactViewerContent({
-  className = "",
-  showCloseButton = true,
-}: {
-  className?: string
-  showCloseButton?: boolean
-}) {
-  const {
-    adapter,
-    closeArtifact,
-    downloadArtifact,
-    labels,
-    locale,
-    selectedArtifact,
-  } = useArtifactWorkspace()
-  const { retry, state } = useArtifactPreviewController()
-  const [downloadFailed, setDownloadFailed] = useState(false)
-  const closeButtonRef = useRef<HTMLButtonElement>(null)
-
-  useEffect(() => {
-    closeButtonRef.current?.focus()
-  }, [])
-
-  if (!selectedArtifact) return null
-
-  return (
-    <section
-      className={`flex h-full min-h-0 flex-col overflow-hidden bg-background ${className}`}
-      dir={locale === "he" ? "rtl" : "ltr"}
-      aria-label={labels.viewerLabel}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return
-        event.preventDefault()
-        event.stopPropagation()
-        closeArtifact()
-      }}
-    >
-      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-base font-medium" dir="auto">
-            {selectedArtifact.filename}
-          </h2>
-          <p className="truncate text-sm text-muted-foreground">
-            {selectedArtifact.mimeType ?? labels.unsupported}
-          </p>
-        </div>
-        {state.status === "ready" && isTextPreview(state.kind) && (
-          <ArtifactCopyButton labels={labels} text={state.text ?? ""} />
-        )}
-        {!isArtifactGone(state) && (
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={!adapter}
-            onClick={() => {
-              setDownloadFailed(false)
-              void downloadArtifact(selectedArtifact).catch(() =>
-                setDownloadFailed(true)
-              )
-            }}
-            className="[@media(pointer:coarse)]:min-h-11"
-          >
-            <DownloadIcon data-icon="inline-start" />
-            {labels.download}
-          </Button>
-        )}
-        {showCloseButton && (
-          <Button
-            ref={closeButtonRef}
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={closeArtifact}
-            aria-label={labels.close}
-            className="[@media(pointer:coarse)]:size-11"
-          >
-            <XIcon />
-          </Button>
-        )}
-      </header>
-      {downloadFailed && (
-        <SystemNotice
-          className="mx-4 mt-3"
-          locale={locale}
-          title={labels.downloadFailed}
-          tone="error"
-        />
-      )}
-      <div className="min-h-64 flex-1 overflow-auto bg-muted/30 p-4">
-        <ArtifactPreview
-          state={state}
-          labels={labels}
-          locale={locale}
-          artifact={selectedArtifact}
-          onRetry={retry}
-        />
-      </div>
-    </section>
-  )
-}
-
-function ArtifactPreview({
-  state,
-  labels,
-  locale,
-  artifact,
-  onRetry,
-}: {
-  state: ArtifactPreviewState
-  labels: Dictionary["artifacts"]
-  locale: Locale
-  artifact: ArtifactDescriptor
-  onRetry: () => void
-}) {
-  const { filename } = artifact
-  if (state.status === "idle") return null
-  if (state.status === "loading") {
-    return (
-      <div
-        className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground"
-        role="status"
-      >
-        <Loader2Icon className="size-4 motion-safe:animate-spin" />
-        {labels.loading}
-      </div>
-    )
-  }
-  if (state.status === "error") {
-    return (
-      <div className="flex min-h-56 flex-col items-center justify-center">
-        <SystemNotice
-          detail={previewFailureDetail(state.reason, labels, artifact)}
-          locale={locale}
-          title={previewFailureMessage(state.reason, labels)}
-          tone={previewFailureTone(state.reason)}
-        >
-          {state.reason === "load" && (
-            <Button type="button" variant="outline" onClick={onRetry}>
-              <RotateCcwIcon data-icon="inline-start" />
-              {labels.retry}
-            </Button>
-          )}
-        </SystemNotice>
-      </div>
-    )
-  }
-
-  if (state.kind === "unsupported") {
-    return (
-      <p className="py-16 text-center text-sm text-muted-foreground">
-        {labels.unsupported}
-      </p>
-    )
-  }
-  if (state.kind === "image") {
-    return (
-      <img
-        src={state.url}
-        alt={filename}
-        className="mx-auto max-h-[70dvh] max-w-full object-contain"
-      />
-    )
-  }
-  if (state.kind === "pdf") {
-    return (
-      <iframe
-        src={`${state.url}#toolbar=1&view=FitH&page=1`}
-        title={labels.pdfPreviewTitle}
-        referrerPolicy="no-referrer"
-        className="h-[70dvh] w-full rounded-xl bg-background"
-      />
-    )
-  }
-  if (state.kind === "audio") {
-    return (
-      <div className="mx-auto flex min-h-56 max-w-2xl items-center rounded-2xl bg-background p-5 shadow-sm">
-        <audio src={state.url} controls className="w-full" />
-      </div>
-    )
-  }
-  if (state.kind === "video") {
-    return (
-      <video
-        src={state.url}
-        controls
-        className="mx-auto aspect-video max-h-[70dvh] w-full rounded-xl bg-black object-contain"
-      />
-    )
-  }
-  if (state.kind === "csv") {
-    return <CsvPreview text={state.text ?? ""} labels={labels} />
-  }
-  if (state.kind === "html") {
-    return <HtmlPreview text={state.text ?? ""} labels={labels} />
-  }
-  if (state.kind === "markdown") {
-    return <ArtifactMarkdown source={state.text ?? ""} />
-  }
-
-  let text = state.text ?? ""
-  if (state.kind === "json") {
-    try {
-      text = JSON.stringify(JSON.parse(text), null, 2)
-    } catch {
-      // Preserve malformed JSON as inspectable source.
-    }
-  }
-  if (state.kind === "code" || state.kind === "json") {
-    return (
-      <HighlightedCode
-        code={text}
-        language={
-          state.kind === "json" ? "json" : syntaxLanguageFromFilename(filename)
-        }
-        className="rounded-xl border-t bg-background shadow-sm"
-      />
-    )
-  }
-  return (
-    <pre
-      className={`overflow-auto rounded-xl bg-background p-5 text-sm leading-6 whitespace-pre-wrap shadow-sm ${state.kind === "text" ? "font-sans" : "font-mono"}`}
-      dir="auto"
-    >
-      {text}
-    </pre>
-  )
-}
-
-function CsvPreview({
-  text,
-  labels,
-}: {
-  text: string
-  labels: Dictionary["artifacts"]
-}) {
-  const preview = useMemo(() => parseCsvPreview(text), [text])
-  const [header, ...rows] = preview.rows
-  return (
-    <div className="overflow-auto rounded-xl bg-background shadow-sm">
-      <table className="w-full border-collapse text-sm tabular-nums">
-        {header && (
-          <thead className="sticky top-0 bg-muted">
-            <tr>
-              {header.map((cell, index) => (
-                <th
-                  key={index}
-                  scope="col"
-                  className="border-b border-border px-3 py-2 text-start font-medium"
-                  dir="auto"
-                >
-                  {cell}
-                </th>
-              ))}
-            </tr>
-          </thead>
-        )}
-        <tbody>
-          {rows.map((row, rowIndex) => (
-            <tr
-              key={rowIndex}
-              className="border-b border-border/60 last:border-b-0"
-            >
-              {row.map((cell, cellIndex) => (
-                <td
-                  key={cellIndex}
-                  className="px-3 py-2 align-top whitespace-pre-wrap"
-                  dir="auto"
-                >
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {preview.truncated && (
-        <p className="border-t border-border p-3 text-xs text-muted-foreground">
-          {labels.csvTruncated}
-        </p>
-      )}
-    </div>
-  )
-}
-
-function HtmlPreview({
-  text,
-  labels,
-}: {
-  text: string
-  labels: Dictionary["artifacts"]
-}) {
-  const { artifactHtmlAssetOrigins } = useArtifactWorkspace()
-  const [tab, setTab] = useState<"preview" | "source">("preview")
-  const previewTabId = useId()
-  const sourceTabId = useId()
-  const panelId = useId()
-  const html = useMemo(
-    () => injectArtifactHtmlCsp(text, artifactHtmlAssetOrigins),
-    [artifactHtmlAssetOrigins, text]
-  )
-
-  const selectTab = (next: "preview" | "source") => {
-    setTab(next)
-    document
-      .getElementById(next === "preview" ? previewTabId : sourceTabId)
-      ?.focus()
-  }
-
-  return (
-    <div className="grid gap-3">
-      <div
-        role="tablist"
-        aria-label={labels.htmlView}
-        className="inline-flex w-fit rounded-lg bg-muted p-1"
-        onKeyDown={(event) => {
-          if (event.key === "Home") selectTab("preview")
-          else if (event.key === "End") selectTab("source")
-          else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-            selectTab(tab === "preview" ? "source" : "preview")
-          } else return
-          event.preventDefault()
-        }}
-      >
-        <button
-          id={previewTabId}
-          type="button"
-          role="tab"
-          aria-selected={tab === "preview"}
-          aria-controls={panelId}
-          tabIndex={tab === "preview" ? 0 : -1}
-          onClick={() => setTab("preview")}
-          className="rounded-md px-3 py-1.5 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring aria-selected:bg-background aria-selected:shadow-sm [@media(pointer:coarse)]:min-h-11"
-        >
-          {labels.preview}
-        </button>
-        <button
-          id={sourceTabId}
-          type="button"
-          role="tab"
-          aria-selected={tab === "source"}
-          aria-controls={panelId}
-          tabIndex={tab === "source" ? 0 : -1}
-          onClick={() => setTab("source")}
-          className="rounded-md px-3 py-1.5 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring aria-selected:bg-background aria-selected:shadow-sm [@media(pointer:coarse)]:min-h-11"
-        >
-          {labels.source}
-        </button>
-      </div>
-      <div
-        id={panelId}
-        role="tabpanel"
-        aria-labelledby={tab === "preview" ? previewTabId : sourceTabId}
-      >
-        {tab === "preview" ? (
-          <iframe
-            title={labels.htmlPreviewTitle}
-            srcDoc={html}
-            sandbox="allow-scripts"
-            referrerPolicy="no-referrer"
-            className="h-[68dvh] w-full rounded-xl bg-background shadow-sm"
-          />
-        ) : (
-          <pre
-            className="max-h-[68dvh] overflow-auto rounded-xl bg-background p-5 font-mono text-sm leading-6 whitespace-pre-wrap shadow-sm"
-            dir="auto"
-          >
-            {text}
-          </pre>
-        )}
-      </div>
-    </div>
-  )
+/**
+ * @deprecated The side viewer is removed. This stub satisfies the import in
+ * src/runtime-adapters/aos/guest-composition.tsx until lane C's merge cleans
+ * it up.
+ */
+export function ArtifactViewerContent() {
+  return null
 }
 
 export function ArtifactToolResultCard({

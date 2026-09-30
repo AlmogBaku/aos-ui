@@ -29,10 +29,7 @@ import {
   createFixtureWorkspace,
   type FixtureWorkspace,
 } from "./fixture-workspace"
-import {
-  createFixtureArtifactAdapter,
-  FIXTURE_ARTIFACT_CATALOG,
-} from "./fixture-artifacts"
+import { createFixtureArtifactAdapter } from "./fixture-artifacts"
 import { fixtureSlashCommand } from "./fixture-slash-commands"
 
 const fixtureAttachmentAdapter = new CompositeAttachmentAdapter([
@@ -127,11 +124,6 @@ function messagesFor(sessionId: string): readonly ThreadMessageLike[] {
             id: "fixture-market-source",
             title: "Planning dataset methodology",
             url: "https://example.com/planning-dataset-methodology",
-          },
-          {
-            type: "data",
-            name: "aos.artifact",
-            data: FIXTURE_ARTIFACT_CATALOG.examples.markdown,
           },
           {
             type: "text",

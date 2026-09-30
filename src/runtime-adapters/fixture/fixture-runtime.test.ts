@@ -238,7 +238,6 @@ describe("fixture Assistant UI thread adapter", () => {
       expect.arrayContaining([
         expect.objectContaining({ type: "reasoning" }),
         expect.objectContaining({ type: "source", sourceType: "url" }),
-        expect.objectContaining({ type: "data", name: "aos.artifact" }),
         expect.objectContaining({
           type: "tool-call",
           toolName: "render_chart",

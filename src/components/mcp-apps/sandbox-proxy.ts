@@ -1,4 +1,3 @@
-import { injectHtmlCsp } from "@/components/artifacts/artifact-frame-policy"
 import { MCP_APP_SANDBOX_PATH } from "@aos/protocol/mcp-apps"
 
 /**
@@ -10,6 +9,24 @@ import { MCP_APP_SANDBOX_PATH } from "@aos/protocol/mcp-apps"
  * between the host and that frame alone. Neither frame may navigate the top
  * window, open popups, or submit forms.
  */
+/**
+ * Prepends a CSP meta so the policy governs every script the document holds;
+ * `decorate` may adjust the parsed document before it is serialized.
+ */
+export function injectHtmlCsp(
+  html: string,
+  policy: string,
+  decorate?: (document: Document) => void
+): string {
+  const document = new DOMParser().parseFromString(html, "text/html")
+  const meta = document.createElement("meta")
+  meta.httpEquiv = "Content-Security-Policy"
+  meta.content = policy
+  document.head.prepend(meta)
+  decorate?.(document)
+  return `<!doctype html>${document.documentElement.outerHTML}`
+}
+
 export const SANDBOX_PROXY_SANDBOX = "allow-scripts"
 
 /** The sandbox proxy page, told which features the App frame may use. */

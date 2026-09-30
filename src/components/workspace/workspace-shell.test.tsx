@@ -199,9 +199,9 @@ describe("WorkspaceShell", () => {
         locale="en"
         dictionary={en}
         header={<header>Invited by Northwind</header>}
-        artifactViewer={<div>Artifact preview body</div>}
-        artifactViewerOpen
-        artifactViewerLabel="Output preview"
+        sidePanel={<div>Artifact preview body</div>}
+        sidePanelOpen
+        sidePanelLabel="Output preview"
       >
         <div>Assistant UI conversation</div>
       </WorkspaceConversationShell>
@@ -223,9 +223,9 @@ describe("WorkspaceShell", () => {
 
   it("keeps the regular workspace artifact default independent", () => {
     renderShell({
-      artifactViewer: <div>Artifact</div>,
-      artifactViewerOpen: true,
-      artifactViewerLabel: "Output preview",
+      sidePanel: <div>Artifact</div>,
+      sidePanelOpen: true,
+      sidePanelLabel: "Output preview",
     })
 
     expect(screen.getByRole("dialog", { name: "Output preview" })).toBeVisible()
@@ -239,9 +239,9 @@ describe("WorkspaceShell", () => {
         locale="en"
         dictionary={en}
         header={<header>Guest</header>}
-        artifactViewer={<div>Artifact</div>}
-        artifactViewerOpen
-        artifactViewerLabel="Output preview"
+        sidePanel={<div>Artifact</div>}
+        sidePanelOpen
+        sidePanelLabel="Output preview"
       >
         <div>Conversation</div>
       </WorkspaceConversationShell>
@@ -262,9 +262,9 @@ describe("WorkspaceShell", () => {
 
     view.unmount()
     renderShell({
-      artifactViewer: <div>Artifact</div>,
-      artifactViewerOpen: true,
-      artifactViewerLabel: "Output preview",
+      sidePanel: <div>Artifact</div>,
+      sidePanelOpen: true,
+      sidePanelLabel: "Output preview",
     })
     expect(
       Number(
@@ -280,9 +280,9 @@ describe("WorkspaceShell", () => {
     renderShell({
       locale: "he",
       dictionary: he,
-      artifactViewer: <div>Artifact</div>,
-      artifactViewerOpen: true,
-      artifactViewerLabel: "תצוגה מקדימה של התוצר",
+      sidePanel: <div>Artifact</div>,
+      sidePanelOpen: true,
+      sidePanelLabel: "תצוגה מקדימה של התוצר",
     })
     const separator = screen.getByRole("separator", {
       name: "שינוי רוחב תצוגה מקדימה של התוצר",
@@ -295,29 +295,23 @@ describe("WorkspaceShell", () => {
     expect(afterRight).not.toBe(initialWidth)
   })
 
-  it("shows Session Outputs in the inspector and replaces them with an open artifact", () => {
+  it("replaces the inspector with the side panel when open", () => {
     stubWideResizeObserver()
-    const { rerender, props } = renderShell({
-      artifactOutputs: <div>Published outputs</div>,
-    })
-    let inspector = screen.getByRole("complementary", {
-      name: "Agent details",
-    })
-    expect(within(inspector).getByText("Published outputs")).toBeVisible()
+    const { rerender, props } = renderShell({})
+    let inspector = screen.getByRole("complementary", { name: "Agent details" })
+    expect(inspector).toBeVisible()
 
     rerender(
       <WorkspaceShell
         {...props}
-        artifactOutputs={<div>Published outputs</div>}
-        artifactViewer={<div>Artifact preview body</div>}
-        artifactViewerOpen
-        artifactViewerLabel="Output preview"
-        onCloseArtifactViewer={vi.fn()}
+        sidePanel={<div>Artifact preview body</div>}
+        sidePanelOpen
+        sidePanelLabel="Output preview"
+        onCloseSidePanel={vi.fn()}
       />
     )
     inspector = screen.getByRole("complementary", { name: "Output preview" })
     expect(within(inspector).getByText("Artifact preview body")).toBeVisible()
-    expect(within(inspector).queryByText("Published outputs")).toBeNull()
   })
 
   it("searches the selected Agent's open Sessions and history in the desktop inspector", () => {
