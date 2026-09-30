@@ -163,6 +163,8 @@ function fallback(
           url: options.weatherUrl ?? "http://weather.test/mcp",
         },
         { name: "notes", url: "http://notes.test/mcp" },
+        { name: "aos_ui", url: "http://aos-ui.test/mcp" },
+        { name: "unreachable" },
       ],
       storedCall: async (_scope, toolCallId) => stored[toolCallId],
     },
@@ -228,6 +230,26 @@ describe("MCP Apps fallback host", () => {
     await expect(
       apps.callTool(scope, "call-elsewhere", "refresh_forecast", {})
     ).rejects.toBeInstanceOf(McpAppNotFoundError)
+  })
+
+  it("reads a named server's ui:// resource without a tool call", async () => {
+    const { apps, seen } = fallback()
+
+    await expect(
+      apps.serverResource!(scope, "aos-ui", "ui://aos-ui/artifact")
+    ).resolves.toMatchObject({
+      contents: [
+        { uri: "ui://aos-ui/artifact", text: "<!doctype html><p>Forecast</p>" },
+      ],
+    })
+    expect(seen.urls).toEqual(new Set(["http://aos-ui.test/mcp"]))
+    await expect(
+      apps.serverResource!(scope, "aos-ui", "https://aos-ui.test/secret")
+    ).rejects.toBeInstanceOf(McpAppRefusedError)
+    for (const server of ["absent", "unreachable"])
+      await expect(
+        apps.serverResource!(scope, server, "ui://aos-ui/artifact")
+      ).rejects.toBeInstanceOf(McpAppNotFoundError)
   })
 
   it("takes the view a stored result names without listing tools", async () => {

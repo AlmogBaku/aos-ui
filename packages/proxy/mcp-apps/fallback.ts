@@ -2,6 +2,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 
 import type { Logger } from "../../lifecycle"
 import type { CallToolResult } from "../../protocol/mcp-apps"
+import { serverAllowed } from "../core/app-files"
 import { isAosToolName, isAosUiServerName } from "../core/aos-tool-names"
 import type {
   LiveMcpToolCall,
@@ -156,11 +157,14 @@ export function createMcpAppsFallback(
     return { call, resolved }
   }
 
-  /** What one view request reached upstream; never its arguments. */
+  /**
+   * What one view request reached upstream; never its arguments. A read
+   * without a tool call logs no `toolCallId`.
+   */
   function logged(
     scope: SessionScope,
-    toolCallId: string,
-    resolved: Resolved,
+    toolCallId: string | undefined,
+    resolved: Pick<Resolved, "server">,
     fields: {
       operation: "open" | "tools/call" | "resources/read"
       tool?: string
@@ -171,7 +175,7 @@ export function createMcpAppsFallback(
       {
         agentId: scope.agentId,
         sessionId: scope.sessionId,
-        toolCallId,
+        ...(toolCallId === undefined ? {} : { toolCallId }),
         server: resolved.server,
         ...fields,
       },
@@ -238,6 +242,20 @@ export function createMcpAppsFallback(
       if (!isUiResourceUri(uri)) throw new McpAppRefusedError()
       logged(scope, toolCallId, resolved, { operation: "resources/read", uri })
       return client.readResource(resolved.endpoint, uri)
+    },
+    async serverResource(scope, server, uri) {
+      if (!isUiResourceUri(uri)) throw new McpAppRefusedError()
+      const found = (await source.servers(scope)).find(({ name }) =>
+        serverAllowed([server], name)
+      )
+      if (!found?.url) throw new McpAppNotFoundError()
+      logged(
+        scope,
+        undefined,
+        { server: found.name },
+        { operation: "resources/read", uri }
+      )
+      return client.readResource({ name: found.name, url: found.url }, uri)
     },
     reportSessionGone(agentId, providerSessionId) {
       live.delete(sessionKey(agentId, providerSessionId))

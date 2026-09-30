@@ -521,6 +521,18 @@ export type ServerMcpApps = {
     uri: string
   ): Promise<ReadResourceResult>
   /**
+   * One `ui://` resource of the server this Session's Agent names `server`
+   * (`aos-ui` also matching `aos_ui`), read without a tool call: the view a
+   * published Artifact opens in, and that view's own reads. Absent when the
+   * runtime reaches views only through a call.
+   */
+  serverResource?(
+    scope: SessionScope,
+    server: string,
+    uri: string,
+    signal?: AbortSignal
+  ): Promise<ReadResourceResult>
+  /**
    * Frees the running calls `observe` kept for this Session, once the proxy
    * deleted it or a recover found it gone.
    */

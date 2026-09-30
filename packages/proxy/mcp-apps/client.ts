@@ -67,6 +67,37 @@ export class McpAppResourceError extends Error {
   }
 }
 
+/**
+ * The App view `uri` names in a `resources/read` result: its HTML and the
+ * `_meta.ui` it declared, sanitized. Anything but `text/html;profile=mcp-app`
+ * is refused.
+ */
+export function appResourceOf(
+  { contents }: ReadResourceResult,
+  uri: string
+): McpAppResource {
+  const entry = contents.find((candidate) => candidate.uri === uri)
+  if (!entry || entry.mimeType !== MCP_APP_MIME_TYPE)
+    throw new McpAppResourceError("mime type")
+  const html =
+    "text" in entry
+      ? entry.text
+      : Buffer.from(entry.blob, "base64").toString("utf8")
+  const ui = entry._meta?.ui
+  const meta =
+    typeof ui === "object" && ui !== null ? (ui as Record<string, unknown>) : {}
+  const csp = sanitizeCsp(meta.csp)
+  const permissions = sanitizePermissions(meta.permissions)
+  return {
+    html,
+    ...(csp ? { csp } : {}),
+    ...(permissions ? { permissions } : {}),
+    ...(typeof meta.prefersBorder === "boolean"
+      ? { prefersBorder: meta.prefersBorder }
+      : {}),
+  }
+}
+
 /** Configured headers never travel in the clear beyond this machine. */
 export class McpAppConnectionRefusedError extends Error {
   constructor() {
@@ -188,29 +219,7 @@ export function createMcpAppClient(
     refreshTools: (server) => toolCache.refresh(keyOf(server)),
     readResource,
     async appResource(server, uri) {
-      const { contents } = await readResource(server, uri)
-      const entry = contents.find((candidate) => candidate.uri === uri)
-      if (!entry || entry.mimeType !== MCP_APP_MIME_TYPE)
-        throw new McpAppResourceError("mime type")
-      const html =
-        "text" in entry
-          ? entry.text
-          : Buffer.from(entry.blob, "base64").toString("utf8")
-      const ui = entry._meta?.ui
-      const meta =
-        typeof ui === "object" && ui !== null
-          ? (ui as Record<string, unknown>)
-          : {}
-      const csp = sanitizeCsp(meta.csp)
-      const permissions = sanitizePermissions(meta.permissions)
-      return {
-        html,
-        ...(csp ? { csp } : {}),
-        ...(permissions ? { permissions } : {}),
-        ...(typeof meta.prefersBorder === "boolean"
-          ? { prefersBorder: meta.prefersBorder }
-          : {}),
-      }
+      return appResourceOf(await readResource(server, uri), uri)
     },
     async callTool(server, name, args) {
       return CallToolResultSchema.parse(
