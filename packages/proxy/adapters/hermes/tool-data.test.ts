@@ -336,28 +336,6 @@ describe("projectHermesToolOutcome", () => {
     ).toEqual(chart)
   })
 
-  it("keeps a present_artifact result's message and redacts a credential", () => {
-    const message = "Could not write /home/alice/reports/report.md"
-    expect(
-      projectHermesToolOutcome("call-3b", "present_artifact", {
-        ok: false,
-        status: "failed",
-        message,
-      }).result
-    ).toEqual({ ok: false, status: "failed", message })
-    expect(
-      projectHermesToolOutcome("call-3c", "present_artifact", {
-        ok: false,
-        status: "failed",
-        message: "Upload rejected: token=ghp_leaked",
-      }).result
-    ).toEqual({
-      ok: false,
-      status: "failed",
-      message: "Upload rejected: token=[REDACTED]",
-    })
-  })
-
   it("collapses a text_to_speech receipt to a status and trusts its media", () => {
     const audio = "/home/alice/voice/brief.mp3"
     const outcome = projectHermesToolOutcome("call-4", "text_to_speech", {

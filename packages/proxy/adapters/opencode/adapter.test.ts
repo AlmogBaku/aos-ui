@@ -560,7 +560,7 @@ describe("OpenCode server adapter", () => {
       await expect(
         adapter.workspaceCapabilities("research", "session-1")
       ).resolves.toMatchObject({
-        content: { artifacts: { status: "available", scope: "session" } },
+        content: { artifacts: { status: "unavailable" } },
       })
     })
   })

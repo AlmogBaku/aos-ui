@@ -21,18 +21,6 @@ export class OpenCodeContentUnavailableError extends Error {
   }
 }
 
-/**
- * The provider answered that it cannot read an artifact's file: it is missing,
- * outside the project OpenCode confines reads to, or denied. Retrying cannot
- * change that, so it is not an outage.
- */
-export class OpenCodeContentUnreadableError extends Error {
-  constructor() {
-    super("OpenCode could not read this output")
-    this.name = "OpenCodeContentUnreadableError"
-  }
-}
-
 const promptFiles = new WeakMap<
   object,
   readonly { uri: string; name?: string }[]

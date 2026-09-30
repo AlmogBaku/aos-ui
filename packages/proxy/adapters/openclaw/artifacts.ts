@@ -1,8 +1,5 @@
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
-import type {
-  OpenClawArtifactDownload,
-  OpenClawSessionFile,
-} from "./native-schemas"
+import type { OpenClawArtifactDownload } from "./native-schemas"
 
 /** OpenClaw's own transcript artifact ids (`artifact_managed_image_…` and kin). */
 const NATIVE_ARTIFACT_ID = /^artifact_[A-Za-z0-9_-]{1,240}$/u
@@ -124,19 +121,6 @@ function base64Bytes(value: string) {
   if ((value.length / 4) * 3 > MAX_ARTIFACT_BYTES + 2)
     throw new OpenClawArtifactUnavailableError()
   return bounded(new Uint8Array(Buffer.from(value, "base64")))
-}
-
-/**
- * The bytes `sessions.files.get` answered with. The gateway previews text and
- * browser images only, so a missing file, and one it answers without content
- * (a binary or anything over its preview cap), is unreadable.
- */
-export function sessionFileBytes(file: OpenClawSessionFile) {
-  if (file.missing || file.content === undefined)
-    throw new OpenClawArtifactUnreadableError()
-  return file.contentEncoding === "base64"
-    ? base64Bytes(file.content)
-    : bounded(encoder.encode(file.content))
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { safeArtifactPath, safeRelativeArtifactPath } from "./artifact-path"
+import { safeArtifactPath } from "./artifact-path"
 
 const SENSITIVE_NAMES = [
   ".env",
@@ -59,26 +59,5 @@ describe("safeArtifactPath", () => {
   it("accepts names that only resemble a sensitive one", () => {
     expect(safeArtifactPath("/home/agent/credentials.txt")).toBeDefined()
     expect(safeArtifactPath("/home/agent/environment.md")).toBeDefined()
-  })
-})
-
-describe("safeRelativeArtifactPath", () => {
-  it("accepts a relative path unchanged", () => {
-    expect(safeRelativeArtifactPath("reports/memo.pdf")).toBe(
-      "reports/memo.pdf"
-    )
-  })
-
-  it.each([
-    "",
-    "/home/agent/memo.pdf",
-    "\\share\\memo.pdf",
-    "C:memo.pdf",
-    "reports/../../etc/passwd",
-    ".env",
-    "pairing/memo.pdf",
-    "reports/me\u0000mo.pdf",
-  ])("rejects %j", (path) => {
-    expect(safeRelativeArtifactPath(path)).toBeUndefined()
   })
 })

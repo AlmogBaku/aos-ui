@@ -87,7 +87,6 @@ export type OpenCodeAdapterClient = Readonly<{
     | "permissions"
   >
   events: OpenCodeClient["events"]
-  files: Pick<OpenCodeClient["files"], "read">
   credentialRefused: OpenCodeClient["credentialRefused"]
   close(): Promise<void>
 }>
