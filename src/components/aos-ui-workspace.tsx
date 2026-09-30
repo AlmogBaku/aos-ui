@@ -232,7 +232,7 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
   children,
   ...shell
 }: WorkspaceShellProps) {
-  // An App view moved to the side panel takes the Artifact viewer's place.
+  // The side panel holds the pip view when one is active.
   const pip = useMcpAppPip(shell.locale)
 
   return (

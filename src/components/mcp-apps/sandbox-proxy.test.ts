@@ -1,34 +1,19 @@
-// @vitest-environment jsdom
-
 import { describe, expect, it } from "vitest"
 
 import { injectHtmlCsp } from "./sandbox-proxy"
 
 describe("injectHtmlCsp", () => {
-  it("injects the policy into the document head before executable content", () => {
-    const html =
-      "<!doctype html><html><head><script>run()</script></head><body>Hi</body></html>"
-    const secured = injectHtmlCsp(html, "default-src 'none'")
-
-    expect(secured.indexOf("Content-Security-Policy")).toBeGreaterThan(-1)
-    expect(secured.indexOf("Content-Security-Policy")).toBeLessThan(
-      secured.indexOf("<script>")
-    )
-    expect(secured).toContain("default-src 'none'")
-  })
-
-  it("places CSP in the real head despite decoy tags in comments and scripts", () => {
+  it("places the CSP as the real head's first child, before any scripts", () => {
     const secured = injectHtmlCsp(
       '<!-- <head>decoy</head> --><script>const value = "<head>"</script><p>Body</p>',
       "default-src 'none'"
     )
     const parsed = new DOMParser().parseFromString(secured, "text/html")
-
-    expect(
-      parsed.head.querySelector(
-        'meta[http-equiv="Content-Security-Policy"]:first-child'
-      )
-    ).not.toBeNull()
+    const meta = parsed.head.querySelector(
+      'meta[http-equiv="Content-Security-Policy"]:first-child'
+    )
+    expect(meta).not.toBeNull()
+    expect((meta as HTMLMetaElement | null)?.content).toBe("default-src 'none'")
     expect(parsed.body.textContent).toContain("Body")
   })
 })

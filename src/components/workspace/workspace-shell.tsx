@@ -162,14 +162,6 @@ export type WorkspaceShellProps = {
   sidePanelOpen?: boolean
   sidePanelLabel?: string
   onCloseSidePanel?: () => void
-  /** @deprecated Use sidePanel */
-  artifactViewer?: ReactNode
-  /** @deprecated Use sidePanelOpen */
-  artifactViewerOpen?: boolean
-  /** @deprecated Use sidePanelLabel */
-  artifactViewerLabel?: string
-  /** @deprecated Use onCloseSidePanel */
-  onCloseArtifactViewer?: () => void
   conversationHeader?: ReactNode
   navigationHidden?: boolean
   children: ReactNode
@@ -183,10 +175,6 @@ export type WorkspaceConversationShellProps = Pick<
   | "sidePanelOpen"
   | "sidePanelLabel"
   | "onCloseSidePanel"
-  | "artifactViewer"
-  | "artifactViewerOpen"
-  | "artifactViewerLabel"
-  | "onCloseArtifactViewer"
   | "children"
 > & {
   header: ReactNode
@@ -1171,24 +1159,14 @@ export function WorkspaceShell({
   agentFocusRequest,
   onActionError,
   tabUndo,
-  sidePanel: sidePanelProp,
-  sidePanelOpen: sidePanelOpenProp = false,
-  sidePanelLabel: sidePanelLabelProp,
-  onCloseSidePanel: onCloseSidePanelProp,
-  // Deprecated aliases kept for src/runtime-adapters/aos/guest-composition.tsx
-  // until lane C merges.
-  artifactViewer,
-  artifactViewerOpen = false,
-  artifactViewerLabel,
-  onCloseArtifactViewer,
+  sidePanel,
+  sidePanelOpen = false,
+  sidePanelLabel,
+  onCloseSidePanel,
   conversationHeader,
   navigationHidden = false,
   children,
 }: WorkspaceShellProps) {
-  const sidePanel = sidePanelProp ?? artifactViewer
-  const sidePanelOpen = sidePanelOpenProp || artifactViewerOpen
-  const sidePanelLabel = sidePanelLabelProp ?? artifactViewerLabel
-  const onCloseSidePanel = onCloseSidePanelProp ?? onCloseArtifactViewer
   const shellRef = useRef<HTMLElement>(null)
   const artifactPanelRef = useRef<HTMLElement>(null)
   const [artifactWidth, setArtifactWidth] = useState<number | null>(
@@ -1723,7 +1701,7 @@ export function WorkspaceShell({
                 onPointerMove={onArtifactResizePointerMove}
               />
             ) : null}
-            {sidePanelOpen && sidePanel ? (
+            {sidePanelOpen && desktopLayout && sidePanel ? (
               sidePanel
             ) : (
               <InspectorPanel

@@ -199,8 +199,8 @@ external reverse proxy is optional.
 - `packages/tools-mcp` is the stateless `aos-ui` MCP server every harness
   registers for `render_chart`, `render_map`, `render_stats`, and
   `present_artifact`; it never reads files. The first three are MCP Apps whose
-  single-file views live in `packages/tools-mcp/views`; `present_artifact` has
-  no view. `shared/presentation` defines the tool schemas and view resources
+  single-file views live in `packages/tools-mcp/views`; `present_artifact`'s
+  view shows the file it presents. `shared/presentation` defines the tool schemas and view resources
   it serves. `shared/invite-link` and `shared/agent-creator` are
   plain skills operators install into a harness. The proxy names the four
   `aos-ui` tools bare and every other MCP tool `mcp__<server>__<tool>` in

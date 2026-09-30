@@ -334,7 +334,6 @@ export type HarnessRuntime = {
     projectMessages?: (
       messages: readonly ArtifactMessage[]
     ) => readonly ArtifactMessage[]
-    htmlAssetOrigins?: readonly string[]
   }
   /** Present only where the runtime hosts MCP App views. */
   mcpApps?: McpAppAdapter

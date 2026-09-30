@@ -765,15 +765,6 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
   }
 }
 
-/**
- * @deprecated The side viewer is removed. This stub satisfies the import in
- * src/runtime-adapters/aos/guest-composition.tsx until lane C's merge cleans
- * it up.
- */
-export function ArtifactViewerContent() {
-  return null
-}
-
 export function ArtifactToolResultCard({
   result,
   occurrenceKey,

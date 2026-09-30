@@ -314,6 +314,48 @@ describe("WorkspaceShell", () => {
     expect(within(inspector).getByText("Artifact preview body")).toBeVisible()
   })
 
+  it("mounts the side panel once: in the inspector on wide, in the drawer on narrow", () => {
+    // Wide: content appears in the inspector aside, not the drawer.
+    stubWideResizeObserver()
+    const { unmount } = renderShell({
+      sidePanel: <div>pip-content</div>,
+      sidePanelOpen: true,
+      sidePanelLabel: "Output preview",
+    })
+    expect(screen.getAllByText("pip-content")).toHaveLength(1)
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "Output preview" })
+      ).getByText("pip-content")
+    ).toBeVisible()
+    unmount()
+
+    // Narrow: content appears in the drawer, not the inspector aside.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe() {
+          this.callback(
+            [{ contentRect: { width: 375 } } as ResizeObserverEntry],
+            this as unknown as ResizeObserver
+          )
+        }
+        unobserve() {}
+        disconnect() {}
+      }
+    )
+    renderShell({
+      sidePanel: <div>pip-content</div>,
+      sidePanelOpen: true,
+      sidePanelLabel: "Output preview",
+    })
+    expect(screen.getAllByText("pip-content")).toHaveLength(1)
+    expect(
+      screen.queryByRole("complementary", { name: "Output preview" })
+    ).toBeNull()
+  })
+
   it("searches the selected Agent's open Sessions and history in the desktop inspector", () => {
     renderShell()
 

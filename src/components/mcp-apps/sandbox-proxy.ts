@@ -9,6 +9,14 @@ import { MCP_APP_SANDBOX_PATH } from "@aos/protocol/mcp-apps"
  * between the host and that frame alone. Neither frame may navigate the top
  * window, open popups, or submit forms.
  */
+export const SANDBOX_PROXY_SANDBOX = "allow-scripts"
+
+/** The sandbox proxy page, told which features the App frame may use. */
+export const sandboxProxyUrl = (allow: string) =>
+  allow
+    ? `${MCP_APP_SANDBOX_PATH}?${new URLSearchParams({ allow })}`
+    : MCP_APP_SANDBOX_PATH
+
 /**
  * Prepends a CSP meta so the policy governs every script the document holds;
  * `decorate` may adjust the parsed document before it is serialized.
@@ -26,14 +34,6 @@ export function injectHtmlCsp(
   decorate?.(document)
   return `<!doctype html>${document.documentElement.outerHTML}`
 }
-
-export const SANDBOX_PROXY_SANDBOX = "allow-scripts"
-
-/** The sandbox proxy page, told which features the App frame may use. */
-export const sandboxProxyUrl = (allow: string) =>
-  allow
-    ? `${MCP_APP_SANDBOX_PATH}?${new URLSearchParams({ allow })}`
-    : MCP_APP_SANDBOX_PATH
 
 /**
  * The host sizes an inline view to its reported height, so its root never
