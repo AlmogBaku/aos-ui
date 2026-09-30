@@ -74,7 +74,7 @@ An Agent shows a file with `present_artifact` from the AOS UI tools MCP server, 
 
 The card's controls are Refresh, Download, Open in new tab, and pip.
 
-A file over 64 MiB shows Download and Open in new tab instead of a preview.
+A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) shows Download and Open in new tab instead of a preview.
 
 The tool's description tells the Agent to call it again after each change so the card shows the latest version.
 
