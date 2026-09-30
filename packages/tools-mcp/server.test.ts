@@ -88,16 +88,22 @@ describe("tools/list", () => {
 
 describe("MCP App views", () => {
   const declared = [
-    ["render_chart", "ui://aos-ui/chart", "chart", {}],
+    ["render_chart", "ui://aos-ui/chart", "chart", { csp: {} }],
     [
       "render_map",
       "ui://aos-ui/map",
       "map",
-      { connectDomains: ["https://tiles.openfreemap.org"] },
+      { csp: { connectDomains: ["https://tiles.openfreemap.org"] } },
     ],
-    ["render_stats", "ui://aos-ui/stats", "stats", {}],
-    // The page adds each call's own file addresses to this view's policy.
-    ["present_artifact", "ui://aos-ui/artifact", "artifact", {}],
+    ["render_stats", "ui://aos-ui/stats", "stats", { csp: {} }],
+    // The page adds each call's own file addresses to this view's policy;
+    // its Copy button writes the clipboard.
+    [
+      "present_artifact",
+      "ui://aos-ui/artifact",
+      "artifact",
+      { csp: {}, permissions: { clipboardWrite: {} } },
+    ],
   ] as const
 
   it.each(declared)("%s declares %s", async (name, resourceUri) => {
@@ -121,8 +127,8 @@ describe("MCP App views", () => {
   })
 
   it.each(declared)(
-    "serves %s's view with its CSP",
-    async (_name, uri, view, csp) => {
+    "serves %s's view with its CSP and permissions",
+    async (_name, uri, view, ui) => {
       const { contents } = await client.readResource({ uri })
 
       expect(contents).toEqual([
@@ -130,7 +136,7 @@ describe("MCP App views", () => {
           uri,
           mimeType: "text/html;profile=mcp-app",
           text: views[view],
-          _meta: { ui: { csp } },
+          _meta: { ui },
         },
       ])
     }

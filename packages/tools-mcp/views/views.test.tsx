@@ -322,7 +322,9 @@ describe("artifact view", () => {
   })
 
   it("asks for the side panel on a press only when offered and not there", async () => {
-    const offered = { availableDisplayModes: ["inline", "pip"] as const }
+    const offered: McpUiHostContext = {
+      availableDisplayModes: ["inline", "pip"],
+    }
     const { app, rerender } = showFile(
       { filename: "notes.txt" },
       "Quarterly notes"
