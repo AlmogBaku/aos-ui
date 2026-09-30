@@ -1,6 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { McpError, type Tool } from "@modelcontextprotocol/sdk/types.js"
+import {
+  ErrorCode,
+  McpError,
+  type Tool,
+} from "@modelcontextprotocol/sdk/types.js"
 
 import {
   CallToolResultSchema,
@@ -18,6 +22,14 @@ import { MCP_APP_MIME_TYPE, sanitizeCsp, sanitizePermissions } from "./policy"
 export const MAX_MCP_APP_HTML_BYTES = 2 * 1024 * 1024
 const MAX_TOOL_PAGES = 20
 const IDLE_CLOSE_MS = 5 * 60_000
+/**
+ * How long a connect or one `tools/list` page may take. A history read waits
+ * on the listing, so a server that does not answer resolves by its prefix
+ * instead; an App's own tool call and resource read keep the SDK's longer
+ * default, since a person watches that work.
+ */
+export const MCP_CATALOG_TIMEOUT_MS = 3_000
+const CATALOG_REQUEST = { timeout: MCP_CATALOG_TIMEOUT_MS }
 
 /** A view's resource, validated: its HTML and the `_meta.ui` it declared. */
 export type McpAppResource = Pick<
@@ -118,7 +130,8 @@ export function createMcpAppClient(
       new StreamableHTTPClientTransport(target, {
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(headers ? { requestInit: { headers: { ...headers } } } : {}),
-      })
+      }),
+      CATALOG_REQUEST
     )
     return client
   }
@@ -146,27 +159,50 @@ export function createMcpAppClient(
     try {
       return await run(client)
     } catch (error) {
-      // A JSON-RPC error is the server answering; anything else is the link.
+      // A JSON-RPC error is the server answering; a timeout or anything else
+      // is the link.
       const key = keyOf(server)
       const pooled = pool.get(key)
-      if (pooled && !(error instanceof McpError)) drop(key, pooled)
+      const answered =
+        error instanceof McpError && error.code !== ErrorCode.RequestTimeout
+      if (pooled && !answered) drop(key, pooled)
       throw error
     }
   }
 
-  const toolCache = createMcpServerCache<Tool>((key) =>
-    request(endpointOf(key), async (client) => {
-      const tools: Tool[] = []
-      let cursor: string | undefined
-      for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
-        const result = await client.listTools(cursor ? { cursor } : {})
-        tools.push(...result.tools)
-        cursor = result.nextCursor
-        if (!cursor) break
-      }
-      return tools
-    })
-  )
+  /** Every page of one server's `tools/list`; a failure warns once per fetch. */
+  async function listTools(key: string) {
+    const server = endpointOf(key)
+    const started = performance.now()
+    try {
+      return await request(server, async (client) => {
+        const tools: Tool[] = []
+        let cursor: string | undefined
+        for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
+          const result = await client.listTools(
+            cursor ? { cursor } : {},
+            CATALOG_REQUEST
+          )
+          tools.push(...result.tools)
+          cursor = result.nextCursor
+          if (!cursor) break
+        }
+        return tools
+      })
+    } catch (err) {
+      logger?.warn(
+        {
+          err,
+          server: server.name,
+          elapsedMs: Math.round(performance.now() - started),
+        },
+        "mcp_app.tools.list_failed"
+      )
+      throw err
+    }
+  }
+
+  const toolCache = createMcpServerCache<Tool>(listTools)
 
   async function readResource(server: McpAppEndpoint, uri: string) {
     const result = ReadResourceResultSchema.parse(

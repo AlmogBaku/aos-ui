@@ -216,7 +216,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * Runs one decoded command through the stack, its refusals as ACP errors. A
-   * failed command writes one line, naming the request that sent it.
+   * failed command writes one line, naming the request that sent it, its
+   * Session, and its cause.
    */
   async function perform<K extends CommandKind>(
     kind: K,
@@ -231,8 +232,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         cause instanceof CommandRefusedError
           ? refusalError(cause.refusal)
           : publicRequestError(context.publicError, cause)
+      const { sessionId } = command as { sessionId?: string | null }
       context.logger.warn(
-        { command: kind, requestId, errorCode: publicCodeOf(error) },
+        {
+          command: kind,
+          requestId,
+          ...(sessionId ? { sessionId } : {}),
+          errorCode: publicCodeOf(error),
+          // The public code hides why; the log redacts the cause it names.
+          err: cause,
+        },
         "connection.command.failed"
       )
       throw error

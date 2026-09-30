@@ -569,7 +569,8 @@ const ROWS: Row[] = [
     },
     bound: 0,
     async recovered(t) {
-      // One line names the request the refused command came in.
+      // One line names the request the refused command came in, its Session,
+      // and the cause its public code hides.
       expect(
         t.test.logs
           .records()
@@ -583,7 +584,9 @@ const ROWS: Row[] = [
             role: "operator",
             command: "set-config",
             requestId: 3,
+            sessionId: SESSION,
             errorCode: "temporarily_unavailable",
+            err: expect.objectContaining({ name: "TimeoutError" }),
           },
         },
       ])

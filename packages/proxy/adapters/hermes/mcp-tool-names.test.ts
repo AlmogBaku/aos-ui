@@ -2,8 +2,14 @@
 
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import { canonicalToolName } from "../../core/aos-tool-names"
-import { createMcpToolNames } from "../../mcp-apps/tool-names"
+import { createMcpServerCache } from "../../core/mcp-server-cache"
+import {
+  createMcpAppClient,
+  MCP_CATALOG_TIMEOUT_MS,
+} from "../../mcp-apps/client"
+import { createMcpToolNames, mcpToolCatalog } from "../../mcp-apps/tool-names"
 import { HERMES_MCP_TOOL_NAMES, hermesMcpToolName } from "./mcp-tool-names"
 
 describe("Hermes MCP tool names", () => {
@@ -64,5 +70,35 @@ describe("Hermes MCP tool names", () => {
       "mcp__my-server__get.tide"
     )
     expect(catalog.mock.calls.map(([, fresh]) => fresh)).toEqual([false, true])
+  })
+
+  it("resolves an unreachable server's tools by prefix within one bounded wait", async () => {
+    const clock = useFakeClock()
+    // Accepts the connection and never answers, as a wedged server does.
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      () => new Promise<Response>(() => {})
+    )
+    const dials = () =>
+      fetch.mock.calls.filter(([, init]) =>
+        String(init?.body).includes('"initialize"')
+      ).length
+    const client = createMcpAppClient({ fetch })
+    const servers = createMcpServerCache(async () => [
+      { name: "local", url: "http://127.0.0.1:4110/mcp" },
+    ])
+    const names = createMcpToolNames(
+      HERMES_MCP_TOOL_NAMES,
+      mcpToolCatalog(servers, client)
+    )
+
+    const load = names.load("profile", ["mcp__local__run"])
+    await clock.advance(MCP_CATALOG_TIMEOUT_MS)
+    const resolve = await load
+    // A read within the refetch window waits on no second dial.
+    await names.load("profile", ["mcp__local__run"])
+
+    expect(resolve("mcp__local__run")).toEqual({ server: "local", tool: "run" })
+    expect(dials()).toBe(1)
+    await client.close()
   })
 })

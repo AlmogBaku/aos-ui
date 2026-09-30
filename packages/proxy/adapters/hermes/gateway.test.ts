@@ -22,7 +22,11 @@ type Harness = {
   gateway: HermesGateway
   sockets: FakeSocket[]
   factory: ReturnType<typeof vi.fn>
-  log: { warn: ReturnType<typeof vi.fn>; debug: ReturnType<typeof vi.fn> }
+  log: {
+    warn: ReturnType<typeof vi.fn>
+    info: ReturnType<typeof vi.fn>
+    debug: ReturnType<typeof vi.fn>
+  }
   control: { autoOpen: boolean; autoReply: boolean; autoReady: boolean }
 }
 
@@ -52,7 +56,7 @@ function harness(
       })
     return socket
   })
-  const log = { warn: vi.fn(), debug: vi.fn() }
+  const log = { warn: vi.fn(), info: vi.fn(), debug: vi.fn() }
   const gateway = new HermesGateway({
     baseUrl: BASE_URL,
     credentials: async () => ({ "X-Hermes-Session-Token": TOKEN }),
