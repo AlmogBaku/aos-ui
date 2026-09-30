@@ -23,6 +23,7 @@ import type { ArtifactMessage } from "@/artifacts/artifacts"
 import {
   ArtifactDataUI,
   ArtifactWorkspaceProvider,
+  artifactPanelFailure,
   createArtifactMessageStabilizer,
 } from "@/components/artifacts"
 import {
@@ -266,7 +267,14 @@ function GuestConversationShell({
           </div>
         </header>
       }
-      sidePanel={pip ? <McpAppPipPanel locale={locale} /> : null}
+      sidePanel={
+        pip ? (
+          <McpAppPipPanel
+            locale={locale}
+            failureNotice={artifactPanelFailure}
+          />
+        ) : null
+      }
       sidePanelOpen={pip !== undefined}
       sidePanelLabel={pip?.title}
       onCloseSidePanel={pip?.leave}
