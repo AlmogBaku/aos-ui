@@ -32,6 +32,14 @@ export type McpToolNames = {
   resolver(key: string): McpToolNameResolver
   /** Loads the names, refetching once when any of `rawNames` stays unknown. */
   load(key: string, rawNames?: Iterable<string>): Promise<McpToolNameResolver>
+  /**
+   * One raw name's server and tool once the names have loaded, so it works
+   * right after a restart; `undefined` when no server matches.
+   */
+  split(
+    key: string,
+    rawName: string
+  ): Promise<{ server: string; tool: string } | undefined>
 }
 
 type Lookup = (
@@ -124,6 +132,9 @@ export function createMcpToolNames(
       }
     },
     load,
+    async split(key, rawName) {
+      return (await load(key, [rawName]))(rawName)
+    },
   }
 }
 

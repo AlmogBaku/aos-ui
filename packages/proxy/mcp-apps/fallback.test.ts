@@ -29,6 +29,7 @@ import {
   McpAppRefusedError,
   type StoredMcpToolCall,
 } from "./fallback"
+import { createMcpToolNames } from "./tool-names"
 
 const VIEW_URI = "ui://weather/forecast"
 const TOOLS = [
@@ -389,5 +390,24 @@ describe("MCP Apps fallback host", () => {
       ).rejects.toBeInstanceOf(McpAppConnectionRefusedError)
       expect(plain.seen.urls.size).toBe(0)
     })
+  })
+})
+
+describe("MCP tool name split", () => {
+  it("matches the longest server once the server list loads", async () => {
+    const names = createMcpToolNames(
+      {
+        format: (server, tool) => `mcp__${server}__${tool}`,
+        prefix: (server) => `mcp__${server}__`,
+        candidate: (rawName) => rawName.startsWith("mcp__"),
+      },
+      async () => [{ name: "a" }, { name: "a__b" }]
+    )
+
+    expect(await names.split("agent-1", "mcp__a__b__c")).toEqual({
+      server: "a__b",
+      tool: "c",
+    })
+    expect(await names.split("agent-1", "mcp__z__c")).toBeUndefined()
   })
 })

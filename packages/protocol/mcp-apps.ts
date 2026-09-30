@@ -65,6 +65,19 @@ export const McpUiPermissionsSchema = z.object({
 })
 export type McpUiPermissions = z.infer<typeof McpUiPermissionsSchema>
 
+/**
+ * The files a view may read: a relative address, carrying its own pass, per
+ * tool argument that names a file, and when the addresses expire. `open`
+ * carries it only for a call with such an argument, whose path it withholds
+ * from `toolInput`; `addresses` is empty where the role may read no files.
+ * `POST …/app/files` renews it.
+ */
+export const McpAppFilesSchema = z.strictObject({
+  addresses: z.record(z.string(), z.string().startsWith("/").max(8_192)),
+  expiresAt: z.string().datetime().optional(),
+})
+export type McpAppFiles = z.infer<typeof McpAppFilesSchema>
+
 /** `GET` an MCP App view: its HTML, sandbox policy, and the call it renders. */
 export const McpAppViewSchema = z.strictObject({
   html: z.string().max(5_000_000),
@@ -73,6 +86,7 @@ export const McpAppViewSchema = z.strictObject({
   prefersBorder: z.boolean().optional(),
   toolInput: z.record(z.string(), z.unknown()).optional(),
   toolResult: CallToolResultSchema.optional(),
+  files: McpAppFilesSchema.optional(),
 })
 export type McpAppView = z.infer<typeof McpAppViewSchema>
 

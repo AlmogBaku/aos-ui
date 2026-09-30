@@ -424,6 +424,49 @@ export interface ServerRuntime {
    * the browser never names a server, tool, or resource URI to open one.
    */
   mcpApps?: ServerMcpApps
+  /**
+   * Reads the files an MCP App's tool call names, for the file route. Absent
+   * when the runtime cannot read files, so `open` offers no addresses.
+   */
+  readFile?: ServerFileReader
+}
+
+/**
+ * The file route's two steps. Core judges the folder rules on the path as
+ * written, then on the real path, on every request, before a byte is read.
+ */
+export type ServerFileReader = {
+  /**
+   * The real path a read of `path` opens, every link followed, or `undefined`
+   * when the runtime cannot say, which refuses the read; a throw means the
+   * runtime did not answer. Absent when the runtime enforces its own roots:
+   * guests then get no files, and for operators the rules judge `path` alone.
+   */
+  realPath?(
+    scope: SessionScope,
+    path: string,
+    signal: AbortSignal
+  ): Promise<string | undefined>
+  /**
+   * Streams the file at `path`, asking for `Accept-Encoding: identity` so the
+   * headers describe the bytes sent; `range` is one `bytes=` range. Only a
+   * 200, 206, or 416 reaches the client, with a 200's or 206's body and its
+   * `Content-Length`, `Content-Range`, and `Accept-Ranges`, and a type the
+   * route narrows. A 403 or 404 refuses; any other answer or a throw is
+   * unavailable.
+   */
+  read(
+    scope: SessionScope,
+    path: string,
+    options: { range?: string; signal: AbortSignal }
+  ): Promise<Response>
+}
+
+/** A stored MCP tool call: its server, its tool, and its whole input. */
+export type McpToolCall = {
+  server: string
+  tool: string
+  input: Record<string, unknown>
 }
 
 /** A tool call of a running turn, before the runtime has stored it. */
@@ -452,6 +495,18 @@ export type ServerMcpApps = {
     toolCallId: string,
     signal?: AbortSignal
   ): Promise<McpAppView>
+  /**
+   * The call as the runtime stored it, its native name split into server and
+   * tool once the server list has loaded, so it works right after a restart.
+   * `undefined` for a call this Session lacks or a name no server matches.
+   * The input is the call's own, never a shortened copy, and stays in the
+   * proxy. Absent when the runtime cannot look calls up, so no files.
+   */
+  toolCall?(
+    scope: SessionScope,
+    toolCallId: string,
+    signal?: AbortSignal
+  ): Promise<McpToolCall | undefined>
   /** A view's `tools/call`, limited to its own server's app-visible tools. */
   callTool(
     scope: SessionScope,
