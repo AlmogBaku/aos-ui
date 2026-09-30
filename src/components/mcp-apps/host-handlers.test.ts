@@ -4,6 +4,7 @@ import {
   appMessageText,
   createRateLimiter,
   grantDisplayMode,
+  offeredDisplayModes,
   openAppLink,
 } from "./host-handlers"
 
@@ -82,15 +83,22 @@ describe("createRateLimiter", () => {
 
 describe("grantDisplayMode", () => {
   it.each([
-    ["fullscreen", "inline", "fullscreen"],
-    ["inline", "fullscreen", "inline"],
-    ["inline", "inline", "inline"],
-    ["pip", "inline", "inline"],
-    ["pip", "fullscreen", "fullscreen"],
-    ["maximized", "inline", "inline"],
-  ] as const)("grants %s from %s as %s", (requested, current, granted) => {
-    expect(grantDisplayMode(requested, current)).toBe(granted)
-  })
+    ["fullscreen", "inline", false, "fullscreen"],
+    ["inline", "fullscreen", false, "inline"],
+    ["inline", "inline", false, "inline"],
+    ["pip", "inline", false, "inline"],
+    ["pip", "fullscreen", false, "fullscreen"],
+    ["pip", "inline", true, "pip"],
+    ["inline", "pip", true, "inline"],
+    ["maximized", "pip", true, "pip"],
+  ] as const)(
+    "grants %s from %s (side panel %s) as %s",
+    (requested, current, sidePanel, granted) => {
+      expect(
+        grantDisplayMode(requested, current, offeredDisplayModes(sidePanel))
+      ).toBe(granted)
+    }
+  )
 })
 
 describe("grantDisplayMode with the view's declared modes", () => {
@@ -99,11 +107,19 @@ describe("grantDisplayMode with the view's declared modes", () => {
     [["inline", "fullscreen"], "fullscreen", "inline", "fullscreen"],
     [[], "fullscreen", "inline", "inline"],
     [["fullscreen"], "inline", "fullscreen", "fullscreen"],
-    [["inline", "pip"], "pip", "inline", "inline"],
+    [["inline"], "pip", "inline", "inline"],
+    [["inline", "pip"], "pip", "inline", "pip"],
   ] as const)(
     "with %j grants %s from %s as %s",
     (declared, requested, current, granted) => {
-      expect(grantDisplayMode(requested, current, declared)).toBe(granted)
+      expect(
+        grantDisplayMode(
+          requested,
+          current,
+          offeredDisplayModes(true),
+          declared
+        )
+      ).toBe(granted)
     }
   )
 })

@@ -25,12 +25,13 @@ import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
 import { appliedMcpAppCsp, buildMcpAppCsp } from "./csp"
 import {
-  AVAILABLE_DISPLAY_MODES,
   appMessageText,
   createRateLimiter,
   grantDisplayMode,
+  offeredDisplayModes,
   openAppLink,
   type AppDisplayMode,
+  type AppPlacement,
 } from "./host-handlers"
 import {
   SANDBOX_PROXY_SANDBOX,
@@ -116,6 +117,13 @@ export type McpAppFrameProps = {
   toolName?: string
   /** The sandbox never reported ready, so the view cannot render. */
   onUnavailable?: () => void
+  /** Where the frame sits: in its message (the default), or in the side panel. */
+  placement?: AppPlacement
+  /**
+   * Moves the view to the other placement when it asks for it, which mounts
+   * it afresh there. Without it, the view is not offered the side panel.
+   */
+  onMove?: (placement: AppPlacement) => void
   target: McpAppTarget
   adapter: McpAppAdapter
   title: string
@@ -138,6 +146,8 @@ export default function McpAppFrame({
   adapter,
   title,
   onUnavailable,
+  placement = "inline",
+  onMove,
 }: McpAppFrameProps) {
   const frame = useRef<HTMLIFrameElement>(null)
   const container = useRef<HTMLDivElement>(null)
@@ -147,8 +157,9 @@ export default function McpAppFrame({
   const sent = useRef({ input: false, result: false, cancelled: false })
   const [height, setHeight] = useState<number>()
   const [size, setSize] = useState<{ width: number; height: number }>()
-  const [displayMode, setDisplayMode] = useState<AppDisplayMode>("inline")
+  const [displayMode, setDisplayMode] = useState<AppDisplayMode>(placement)
   const displayModeRef = useRef(displayMode)
+  const offered = offeredDisplayModes(onMove !== undefined)
   const aui = useAui()
   const { labels, locale, direction } = useToolUiLocale()
   const { forcedTheme, resolvedTheme } = useTheme()
@@ -162,10 +173,26 @@ export default function McpAppFrame({
     () => buildAllowAttribute(view.permissions),
     [view.permissions]
   )
-  const context = useRef({ aui, locale, direction, onUnavailable, toolName })
+  const context = useRef({
+    aui,
+    locale,
+    direction,
+    onUnavailable,
+    toolName,
+    placement,
+    onMove,
+  })
   useEffect(() => {
-    context.current = { aui, locale, direction, onUnavailable, toolName }
-  }, [aui, direction, locale, onUnavailable, toolName])
+    context.current = {
+      aui,
+      locale,
+      direction,
+      onUnavailable,
+      toolName,
+      placement,
+      onMove,
+    }
+  }, [aui, direction, locale, onMove, onUnavailable, placement, toolName])
 
   const hostContext = (): McpUiHostContext => ({
     ...(toolName === undefined
@@ -181,26 +208,28 @@ export default function McpAppFrame({
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     userAgent: `${HOST_INFO.name}/${HOST_INFO.version}`,
     displayMode,
-    availableDisplayModes: [...AVAILABLE_DISPLAY_MODES],
+    availableDisplayModes: [...offered],
     platform: "web",
     deviceCapabilities: {
       touch: mediaMatches("(any-pointer: coarse)"),
       hover: mediaMatches("(any-hover: hover)"),
     },
-    // Inline, the view sits inside the message, clear of every device edge.
+    // In its message or the side panel, the view sits clear of every device
+    // edge.
     safeAreaInsets:
       displayMode === "fullscreen" ? viewportSafeAreaInsets() : NO_INSETS,
     styles: { variables: styleVariables() },
+    // Inline, the view grows with its content; elsewhere it fills its space.
     ...(size === undefined
       ? {}
       : {
           containerDimensions:
-            displayMode === "fullscreen"
-              ? size
-              : {
+            displayMode === "inline"
+              ? {
                   width: size.width,
                   maxHeight: Math.round(window.innerHeight * MAX_HEIGHT_SHARE),
-                },
+                }
+              : size,
         }),
   })
   const latestHostContext = useRef(hostContext)
@@ -226,11 +255,12 @@ export default function McpAppFrame({
   }, [])
 
   const fullscreen = displayMode === "fullscreen"
+  const inline = displayMode === "inline"
   const restoreFocus = useRef(false)
   const exitFullscreen = () => {
-    displayModeRef.current = "inline"
+    displayModeRef.current = placement
     restoreFocus.current = true
-    setDisplayMode("inline")
+    setDisplayMode(placement)
   }
   const latestExit = useRef(exitFullscreen)
   useEffect(() => {
@@ -322,13 +352,20 @@ export default function McpAppFrame({
       throw new Error("Model context updates are not supported")
     }
     bridge.onrequestdisplaymode = async ({ mode }) => {
+      const { onMove, placement: home } = context.current
       const granted = grantDisplayMode(
         mode,
         displayModeRef.current,
+        offeredDisplayModes(onMove !== undefined),
         bridge.getAppCapabilities()?.availableDisplayModes
       )
-      displayModeRef.current = granted
-      setDisplayMode(granted)
+      // Full screen grows the frame in place; the other placement is a fresh
+      // frame there, since moving this one would reload the view anyway.
+      if (granted !== "fullscreen" && granted !== home) onMove?.(granted)
+      else {
+        displayModeRef.current = granted
+        setDisplayMode(granted)
+      }
       return { mode: granted }
     }
 
@@ -424,7 +461,12 @@ export default function McpAppFrame({
         "overflow-hidden outline-none",
         fullscreen
           ? "fixed inset-0 z-50 m-0 size-auto max-h-none max-w-none border-0 bg-background p-0"
-          : ["w-full", view.prefersBorder && "rounded-lg border border-border"]
+          : inline
+            ? [
+                "w-full",
+                view.prefersBorder && "rounded-lg border border-border",
+              ]
+            : "size-full"
       )}
     >
       <iframe
@@ -436,15 +478,13 @@ export default function McpAppFrame({
         src={connected ? sandboxProxyUrl(allow) : undefined}
         className={cn(
           "block w-full border-0 bg-transparent",
-          fullscreen
-            ? "h-full"
-            : ["max-h-[80dvh]", height === undefined && "h-40"]
+          inline ? ["max-h-[80dvh]", height === undefined && "h-40"] : "h-full"
         )}
         // The sandbox page takes the same scheme, so neither frame paints an
         // opaque canvas behind a transparent view.
         style={{
           colorScheme: theme,
-          ...(fullscreen || height === undefined ? {} : { height }),
+          ...(inline && height !== undefined ? { height } : {}),
         }}
       />
       {fullscreen ? (

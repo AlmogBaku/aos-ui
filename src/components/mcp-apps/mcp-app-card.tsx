@@ -1,6 +1,6 @@
 "use client"
 
-import { Loader2Icon } from "lucide-react"
+import { Loader2Icon, XIcon } from "lucide-react"
 import {
   lazy,
   Suspense,
@@ -14,11 +14,21 @@ import {
 import type { McpAppView } from "@aos/protocol/mcp-apps"
 import { AosToolFallback } from "@/components/tool-ui/aos-tool-fallback"
 import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
-import { useToolUiLocale } from "@/components/tool-ui/locale"
+import {
+  enToolUiLabels,
+  heToolUiLabels,
+  ToolUiLocaleProvider,
+  useToolUiLocale,
+  type ToolUiLocale,
+  type ToolUiLocaleLabels,
+} from "@/components/tool-ui/locale"
 import type { RichToolPart } from "@/components/tool-ui/types"
+import { Button } from "@/components/ui/button"
 import { SystemNotice } from "@/components/ui/system-notice"
 
-import { useMcpAppHost, type McpAppHost } from "./mcp-app-host"
+import type { AppPlacement } from "./host-handlers"
+import type { McpAppFrameProps } from "./mcp-app-frame"
+import { useMcpAppHost, type McpAppHost, type McpAppPip } from "./mcp-app-host"
 import {
   isSettledMcpAppToolPart,
   mcpAppToolCancellation,
@@ -31,6 +41,48 @@ type ViewState =
   | { status: "loading" }
   | { status: "ready"; view: McpAppView; openedSettled: boolean }
   | { status: "failed" }
+
+function AppLoading() {
+  const { labels } = useToolUiLocale()
+  return (
+    <p
+      className="flex items-center gap-2 py-2 text-sm text-muted-foreground"
+      role="status"
+    >
+      <Loader2Icon
+        aria-hidden="true"
+        className="size-4 shrink-0 motion-safe:animate-spin"
+      />
+      {labels.mcpApp.loading}
+    </p>
+  )
+}
+
+function AppUnavailable() {
+  const { labels, locale } = useToolUiLocale()
+  return (
+    <SystemNotice
+      tone="warning"
+      title={labels.mcpApp.unavailable}
+      locale={locale}
+    />
+  )
+}
+
+/** The sandboxed frame, loaded on first use; one that cannot load says so. */
+function AppFrame(props: McpAppFrameProps) {
+  const { labels } = useToolUiLocale()
+  return (
+    <LazyVisualBoundary
+      fallbackLabel={labels.mcpApp.unavailable}
+      fallback={<AppUnavailable />}
+    >
+      <Suspense fallback={<AppLoading />}>
+        <McpAppFrame {...props} />
+      </Suspense>
+    </LazyVisualBoundary>
+  )
+}
 
 /**
  * A tool call that declares an MCP App view. The view mounts as soon as the
@@ -56,7 +108,7 @@ function HostedMcpApp({
   host: McpAppHost
 }) {
   const { labels, locale, direction } = useToolUiLocale()
-  const { adapter, agentId, sessionId } = host
+  const { adapter, agentId, sessionId, showInPip, leavePip, updatePip } = host
   const { toolCallId } = part
   const target = useMemo(
     () => ({ agentId, sessionId, toolCallId }),
@@ -97,61 +149,173 @@ function HostedMcpApp({
   const cancelled =
     result === undefined ? mcpAppToolCancellation(part) : undefined
   const unavailable = useCallback(() => setState({ status: "failed" }), [])
+  const toolName = part.toolName === toolCallId ? undefined : part.toolName
 
-  const failed = (
-    <SystemNotice
-      tone="warning"
-      title={labels.mcpApp.unavailable}
-      locale={locale}
-    />
-  )
-  const loading = (
-    <p
-      className="flex items-center gap-2 py-2 text-sm text-muted-foreground"
-      role="status"
-    >
-      <Loader2Icon
-        aria-hidden="true"
-        className="size-4 shrink-0 motion-safe:animate-spin"
-      />
-      {labels.mcpApp.loading}
-    </p>
-  )
+  // While the view shows in the side panel, its message holds its place and
+  // passes on what the call reports.
+  const pipped = host.pip?.target.toolCallId === toolCallId
+  useEffect(() => {
+    if (pipped) updatePip(target, { input, result, cancelled })
+  }, [cancelled, input, pipped, result, target, updatePip])
+  const move = (placement: AppPlacement) => {
+    if (placement === "pip" && opened)
+      showInPip({
+        target,
+        view: opened.view,
+        toolName,
+        input,
+        result,
+        cancelled,
+      })
+  }
+  // Back from the side panel, the view takes the focus its panel held; one
+  // another view replaced leaves focus where that request put it.
+  const wrapper = useRef<HTMLDivElement>(null)
+  const wasPipped = useRef(pipped)
+  const panelEmpty = host.pip === undefined
+  useEffect(() => {
+    if (wasPipped.current && !pipped && panelEmpty) wrapper.current?.focus()
+    wasPipped.current = pipped
+  }, [panelEmpty, pipped])
+
   return (
     <div
-      className="flex w-full max-w-2xl flex-col gap-2"
+      ref={wrapper}
+      tabIndex={-1}
+      className="flex w-full max-w-2xl flex-col gap-2 outline-none"
       dir={direction}
       lang={locale}
     >
-      {state.status === "failed" ? (
-        failed
+      {pipped ? (
+        <p className="flex flex-wrap items-center gap-x-2 py-2 text-sm text-muted-foreground">
+          {labels.mcpApp.inSidePanel}
+          <Button
+            type="button"
+            variant="link"
+            onClick={leavePip}
+            className="h-auto p-0 [@media(pointer:coarse)]:min-h-11"
+          >
+            {labels.mcpApp.returnToMessage}
+          </Button>
+        </p>
+      ) : state.status === "failed" ? (
+        <AppUnavailable />
       ) : state.status === "loading" ? (
-        loading
+        <AppLoading />
       ) : (
-        <LazyVisualBoundary
-          fallbackLabel={labels.mcpApp.unavailable}
-          fallback={failed}
-        >
-          <Suspense fallback={loading}>
-            <McpAppFrame
-              view={state.view}
-              input={input}
-              result={result}
-              cancelled={cancelled}
-              toolName={
-                part.toolName === toolCallId ? undefined : part.toolName
-              }
-              target={target}
-              adapter={adapter}
-              title={labels.mcpApp.frameTitle(part.toolName)}
-              onUnavailable={unavailable}
-            />
-          </Suspense>
-        </LazyVisualBoundary>
+        <AppFrame
+          view={state.view}
+          input={input}
+          result={result}
+          cancelled={cancelled}
+          toolName={toolName}
+          target={target}
+          adapter={adapter}
+          title={labels.mcpApp.frameTitle(part.toolName)}
+          onUnavailable={unavailable}
+          onMove={move}
+        />
       )}
       {part.result !== undefined || Object.keys(part.args).length > 0 ? (
         <AosToolFallback {...part} />
       ) : null}
     </div>
+  )
+}
+
+const pipTitle = (labels: ToolUiLocaleLabels, pip: McpAppPip) =>
+  labels.mcpApp.frameTitle(pip.toolName ?? pip.target.toolCallId)
+
+/** The side panel's view, named in `locale`, while one is there. */
+export function useMcpAppPip(locale: ToolUiLocale) {
+  const host = useMcpAppHost()
+  if (!host?.pip) return undefined
+  const labels = locale === "he" ? heToolUiLabels : enToolUiLabels
+  return { title: pipTitle(labels, host.pip), leave: host.leavePip }
+}
+
+/**
+ * The side panel's view, for the workspace's Artifact viewer slot. The view
+ * mounts afresh here with `displayMode: "pip"`, since moving a frame reloads
+ * it, and needs nothing from its message, so it stays while newer messages
+ * push that one out of the rendered window.
+ */
+export function McpAppPipPanel({ locale }: { locale: ToolUiLocale }) {
+  const host = useMcpAppHost()
+  if (!host?.pip) return null
+  return (
+    <ToolUiLocaleProvider locale={locale}>
+      <PipPanel key={host.pip.target.toolCallId} host={host} pip={host.pip} />
+    </ToolUiLocaleProvider>
+  )
+}
+
+function PipPanel({ host, pip }: { host: McpAppHost; pip: McpAppPip }) {
+  const { labels, locale, direction } = useToolUiLocale()
+  const { adapter, leavePip } = host
+  const [failed, setFailed] = useState(false)
+  const unavailable = useCallback(() => setFailed(true), [])
+  const closeButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    closeButton.current?.focus()
+  }, [])
+  const title = pipTitle(labels, pip)
+
+  return (
+    <section
+      className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+      dir={direction}
+      lang={locale}
+      aria-label={title}
+      // Only a key pressed in the panel, outside the view's own frame, leaves
+      // it; one a menu elsewhere handled never reaches here.
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.defaultPrevented) return
+        event.preventDefault()
+        event.stopPropagation()
+        leavePip()
+      }}
+    >
+      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <h2
+          className="min-w-0 flex-1 truncate text-base font-medium"
+          dir="auto"
+        >
+          {title}
+        </h2>
+        <Button
+          ref={closeButton}
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={labels.mcpApp.returnToMessage}
+          onClick={leavePip}
+          className="[@media(pointer:coarse)]:size-11"
+        >
+          <XIcon />
+        </Button>
+      </header>
+      <div className="min-h-0 flex-1">
+        {failed ? (
+          <div className="p-4">
+            <AppUnavailable />
+          </div>
+        ) : (
+          <AppFrame
+            view={pip.view}
+            input={pip.input}
+            result={pip.result}
+            cancelled={pip.cancelled}
+            toolName={pip.toolName}
+            target={pip.target}
+            adapter={adapter}
+            title={title}
+            onUnavailable={unavailable}
+            placement="pip"
+            onMove={leavePip}
+          />
+        )}
+      </div>
+    </section>
   )
 }

@@ -185,6 +185,8 @@ export type ToolUiLocaleLabels = {
     unavailable: string
     frameTitle: (toolName: string) => string
     exitFullscreen: string
+    inSidePanel: string
+    returnToMessage: string
   }
   diff: ToolDiffLabels
   terminal: ToolTerminalLabels
@@ -365,6 +367,8 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     unavailable: "The app could not be shown.",
     frameTitle: (toolName) => `${toolName} app`,
     exitFullscreen: "Exit full screen",
+    inSidePanel: "Shown in the side panel",
+    returnToMessage: "Return to the message",
   },
   diff: {
     changes: "Changed files",
@@ -578,6 +582,8 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     unavailable: "לא ניתן להציג את היישומון.",
     frameTitle: (toolName) => `יישומון ${toolName}`,
     exitFullscreen: "יציאה ממסך מלא",
+    inSidePanel: "מוצג בחלונית הצד",
+    returnToMessage: "החזרה להודעה",
   },
   diff: {
     changes: "קבצים ששונו",

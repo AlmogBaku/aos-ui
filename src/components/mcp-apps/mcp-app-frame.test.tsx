@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { ToolUiLocaleProvider } from "@/components/tool-ui"
 import type { McpAppAdapter } from "@/runtime-adapters/contracts"
 
-import McpAppFrame from "./mcp-app-frame"
+import McpAppFrame, { type McpAppFrameProps } from "./mcp-app-frame"
 
 type DisplayModeHandler = (params: {
   mode: string
@@ -86,7 +86,10 @@ const target = {
   toolCallId: "t1",
 }
 
-function renderFrame(locale: "en" | "he" = "en") {
+function renderFrame(
+  locale: "en" | "he" = "en",
+  placed: Pick<McpAppFrameProps, "placement" | "onMove"> = {}
+) {
   render(
     <ToolUiLocaleProvider locale={locale}>
       <McpAppFrame
@@ -94,6 +97,7 @@ function renderFrame(locale: "en" | "he" = "en") {
         target={target}
         adapter={adapter}
         title="show_board app"
+        {...placed}
       />
     </ToolUiLocaleProvider>
   )
@@ -177,6 +181,50 @@ describe("MCP App display modes", () => {
     await user.keyboard("{Escape}")
 
     expect(screen.queryByRole("button", { name: "יציאה ממסך מלא" })).toBeNull()
+  })
+
+  it("hands a side-panel request to its host and stays in its message", async () => {
+    const onMove = vi.fn()
+    const { bridge, requestDisplayMode } = renderFrame("en", { onMove })
+    expect(bridge.contexts[0]).toMatchObject({
+      availableDisplayModes: ["inline", "fullscreen", "pip"],
+    })
+
+    let granted: { mode: string } | undefined
+    await act(async () => {
+      granted = await requestDisplayMode({ mode: "pip" })
+    })
+    await act(() => new Promise((frame) => requestAnimationFrame(frame)))
+
+    expect(granted).toEqual({ mode: "pip" })
+    expect(onMove.mock.calls).toEqual([["pip"]])
+    expect(bridge.contexts.map((context) => context.displayMode)).not.toContain(
+      "pip"
+    )
+  })
+
+  it("in the side panel, grows in place, returns there, and hands back inline", async () => {
+    const user = userEvent.setup()
+    const onMove = vi.fn()
+    const { bridge, requestDisplayMode } = renderFrame("en", {
+      placement: "pip",
+      onMove,
+    })
+    expect(bridge.contexts[0]).toMatchObject({ displayMode: "pip" })
+
+    await act(async () => {
+      await requestDisplayMode({ mode: "fullscreen" })
+    })
+    await waitFor(() => expect(latestMode(bridge)).toBe("fullscreen"))
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(latestMode(bridge)).toBe("pip"))
+
+    let granted: { mode: string } | undefined
+    await act(async () => {
+      granted = await requestDisplayMode({ mode: "inline" })
+    })
+    expect(granted).toEqual({ mode: "inline" })
+    expect(onMove.mock.calls).toEqual([["inline"]])
   })
 })
 
