@@ -116,9 +116,9 @@ from `gateway.controlUi.basePath`, read through `config.get`; a changed base
 path takes effect only after the Gateway restarts. File reads are only available
 when both the Gateway origin and a device token are configured.
 
-The proxy checks its own roots against the path as written. Operator rules
-and the deny list judge only that written path, so a symbolic link inside
-OpenClaw's roots can reach a file those rules would otherwise deny. Guests get
+OpenClaw checks its own roots against the path. The proxy's operator rules and
+deny list judge only the written path, so a symbolic link inside OpenClaw's
+roots can reach a file those rules would otherwise deny. Guests get
 no file addresses on OpenClaw. A sandboxed Session, or one running on another
 machine, answers 404. A call is not found when its assistant row exceeds
 128 KiB. OpenClaw stores a redacted copy of the arguments, so a path that
