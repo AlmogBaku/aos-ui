@@ -1,3 +1,4 @@
+import { readAosToolArtifact } from "@/lib/tool-artifact"
 import type {
   ArtifactDescriptor,
   ArtifactSource,
@@ -131,4 +132,94 @@ export function extractArtifactOccurrences(
   }
 
   return occurrences
+}
+
+/** A file an MCP App view shows: its display name and declared type. */
+export type ShownFile = { filename: string; mimeType?: string }
+
+const parsedRecord = (value: unknown) => {
+  if (typeof value !== "string") return isRecord(value) ? value : undefined
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return isRecord(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The file a tool call's result says its view shows: a `structuredContent`
+ * carrying a string `filename`, itself or in the `value` a presentation
+ * result wraps it in. No tool name decides it.
+ */
+export function shownFileOf(result: unknown): ShownFile | undefined {
+  const structured = parsedRecord(result)?.structuredContent
+  if (!isRecord(structured)) return undefined
+  for (const candidate of [structured, structured.value]) {
+    if (!isRecord(candidate)) continue
+    const { filename, mimeType } = candidate
+    if (typeof filename !== "string" || filename.trim().length === 0) continue
+    return {
+      filename,
+      ...(typeof mimeType === "string" ? { mimeType } : {}),
+    }
+  }
+  return undefined
+}
+
+/**
+ * One file the Session published: an Artifact, or a file a tool call's MCP
+ * App view shows.
+ */
+export type SessionOutput =
+  | { key: string; kind: "artifact"; artifact: ArtifactDescriptor }
+  | {
+      key: string
+      kind: "app"
+      toolCallId: string
+      toolName?: string
+      file: ShownFile
+    }
+
+/** Every file the conversation published, in the order it did. */
+export function extractSessionOutputs(
+  messages: readonly ArtifactMessage[]
+): SessionOutput[] {
+  const outputs: SessionOutput[] = []
+  const artifacts = new Map(
+    extractArtifactOccurrences(messages).map((occurrence) => [
+      occurrence.key,
+      occurrence.artifact,
+    ])
+  )
+  for (const message of messages) {
+    message.content.forEach((part, partIndex) => {
+      const key = `${message.id}:${partIndex}`
+      const artifact = artifacts.get(key)
+      if (artifact) {
+        outputs.push({ key, kind: "artifact", artifact })
+        return
+      }
+      if (
+        message.role !== "assistant" ||
+        !isRecord(part) ||
+        part.type !== "tool-call" ||
+        typeof part.toolCallId !== "string" ||
+        readAosToolArtifact(part.artifact)?.app === undefined
+      )
+        return
+      const file = shownFileOf(part.result)
+      if (!file) return
+      outputs.push({
+        key,
+        kind: "app",
+        toolCallId: part.toolCallId,
+        ...(typeof part.toolName === "string"
+          ? { toolName: part.toolName }
+          : {}),
+        file,
+      })
+    })
+  }
+  return outputs
 }

@@ -9,9 +9,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react"
 
 import type { McpAppView } from "@aos/protocol/mcp-apps"
+import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
+import { shownFileOf } from "@/artifacts/artifacts"
 import { AosToolFallback } from "@/components/tool-ui/aos-tool-fallback"
 import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
 import {
@@ -28,7 +31,13 @@ import { SystemNotice } from "@/components/ui/system-notice"
 
 import type { AppPlacement } from "./host-handlers"
 import type { McpAppFrameProps } from "./mcp-app-frame"
-import { useMcpAppHost, type McpAppHost, type McpAppPip } from "./mcp-app-host"
+import {
+  mcpAppTargetKey,
+  sameMcpAppTarget,
+  useMcpAppHost,
+  type McpAppHost,
+  type McpAppPip,
+} from "./mcp-app-host"
 import {
   isSettledMcpAppToolPart,
   mcpAppToolCancellation,
@@ -169,7 +178,8 @@ function HostedMcpApp({
 
   // While the view shows in the side panel, its message holds its place and
   // passes on what the call reports.
-  const pipped = host.pip?.target.toolCallId === toolCallId
+  const pipped =
+    host.pip !== undefined && sameMcpAppTarget(host.pip.target, target)
   useEffect(() => {
     if (pipped) updatePip(target, { input, result, cancelled })
   }, [cancelled, input, pipped, result, target, updatePip])
@@ -177,9 +187,9 @@ function HostedMcpApp({
     if (placement === "pip" && opened)
       showInPip({
         target,
-        view: opened.view,
-        openedAt: opened.openedAt,
+        opened: { view: opened.view, openedAt: opened.openedAt },
         toolName,
+        file: shownFileOf(result),
         input,
         result,
         cancelled,
@@ -242,8 +252,14 @@ function HostedMcpApp({
   )
 }
 
-const pipTitle = (labels: ToolUiLocaleLabels, pip: McpAppPip) =>
-  labels.mcpApp.frameTitle(pip.toolName ?? pip.target.toolCallId)
+const pipTitle = (
+  labels: ToolUiLocaleLabels,
+  { file, toolName, target }: McpAppPip
+) =>
+  file?.filename ??
+  labels.mcpApp.frameTitle(
+    toolName ?? ("toolCallId" in target ? target.toolCallId : target.artifactId)
+  )
 
 /** The side panel's view, named in `locale`, while one is there. */
 export function useMcpAppPip(locale: ToolUiLocale) {
@@ -253,27 +269,87 @@ export function useMcpAppPip(locale: ToolUiLocale) {
   return { title: pipTitle(labels, host.pip), leave: host.leavePip }
 }
 
+/** Why the side panel shows no view: its file is gone, or no view opens. */
+export type McpAppPipFailure = "missing" | "unavailable"
+
+type McpAppPipPanelProps = {
+  locale: ToolUiLocale
+  /**
+   * What the panel says in place of a view it could not open, when the
+   * workspace has more to say than that the view is unavailable.
+   */
+  failureNotice?: (pip: McpAppPip, reason: McpAppPipFailure) => ReactNode
+}
+
 /**
  * The side panel's view, for the workspace's side-panel slot. The view
  * mounts afresh here with `displayMode: "pip"`, since moving a frame reloads
  * it, and needs nothing from its message, so it stays while newer messages
- * push that one out of the rendered window.
+ * push that one out of the rendered window. A target no message opened, such
+ * as an attachment, the panel opens itself.
  */
-export function McpAppPipPanel({ locale }: { locale: ToolUiLocale }) {
+export function McpAppPipPanel({ locale, failureNotice }: McpAppPipPanelProps) {
   const host = useMcpAppHost()
   if (!host?.pip) return null
   return (
     <ToolUiLocaleProvider locale={locale}>
-      <PipPanel key={host.pip.target.toolCallId} host={host} pip={host.pip} />
+      <PipPanel
+        key={mcpAppTargetKey(host.pip.target)}
+        host={host}
+        pip={host.pip}
+        failureNotice={failureNotice}
+      />
     </ToolUiLocaleProvider>
   )
 }
 
-function PipPanel({ host, pip }: { host: McpAppHost; pip: McpAppPip }) {
+type PipViewState =
+  | { status: "loading" }
+  | { status: "ready"; view: McpAppView; openedAt: number }
+  | { status: "failed"; reason: McpAppPipFailure }
+
+/** The view its message handed over, or the one the panel opens for `pip`. */
+function usePipView(adapter: McpAppHost["adapter"], pip: McpAppPip) {
+  const handed = pip.opened
+  const [opened, setOpened] = useState<PipViewState>(
+    handed ? { status: "ready", ...handed } : { status: "loading" }
+  )
+  const { target } = pip
+  useEffect(() => {
+    if (handed) return
+    const controller = new AbortController()
+    adapter.open(target, controller.signal).then(
+      (view) => setOpened({ status: "ready", view, openedAt: Date.now() }),
+      (error: unknown) => {
+        if (controller.signal.aborted) return
+        setOpened({
+          status: "failed",
+          reason:
+            error instanceof ArtifactMissingError ? "missing" : "unavailable",
+        })
+      }
+    )
+    return () => controller.abort()
+  }, [adapter, handed, target])
+  const unavailable = useCallback(
+    () => setOpened({ status: "failed", reason: "unavailable" }),
+    []
+  )
+  return { state: opened, unavailable }
+}
+
+function PipPanel({
+  host,
+  pip,
+  failureNotice,
+}: {
+  host: McpAppHost
+  pip: McpAppPip
+  failureNotice: McpAppPipPanelProps["failureNotice"]
+}) {
   const { labels, locale, direction } = useToolUiLocale()
   const { adapter, leavePip } = host
-  const [failed, setFailed] = useState(false)
-  const unavailable = useCallback(() => setFailed(true), [])
+  const { state, unavailable } = usePipView(adapter, pip)
   const closeButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     closeButton.current?.focus()
@@ -296,18 +372,26 @@ function PipPanel({ host, pip }: { host: McpAppHost; pip: McpAppPip }) {
       }}
     >
       <header className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <h2
-          className="min-w-0 flex-1 truncate text-base font-medium"
-          dir="auto"
-        >
-          {title}
-        </h2>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-base font-medium" dir="auto">
+            {title}
+          </h2>
+          {pip.file?.mimeType ? (
+            <p className="truncate text-sm text-muted-foreground">
+              {pip.file.mimeType}
+            </p>
+          ) : null}
+        </div>
         <Button
           ref={closeButton}
           type="button"
           variant="ghost"
           size="icon"
-          aria-label={labels.mcpApp.returnToMessage}
+          aria-label={
+            "artifactId" in pip.target
+              ? labels.mcpApp.closePreview
+              : labels.mcpApp.returnToMessage
+          }
           onClick={leavePip}
           className="[@media(pointer:coarse)]:size-11"
         >
@@ -315,17 +399,21 @@ function PipPanel({ host, pip }: { host: McpAppHost; pip: McpAppPip }) {
         </Button>
       </header>
       <div className="min-h-0 flex-1">
-        {failed ? (
+        {state.status === "failed" ? (
           <div className="p-4">
-            <AppUnavailable />
+            {failureNotice?.(pip, state.reason) ?? <AppUnavailable />}
+          </div>
+        ) : state.status === "loading" ? (
+          <div className="p-4">
+            <AppLoading />
           </div>
         ) : (
           <AppFrame
-            view={pip.view}
-            openedAt={pip.openedAt}
+            view={state.view}
+            openedAt={state.openedAt}
             connectionStatus={host.connectionStatus}
-            input={pip.input}
-            result={pip.result}
+            input={pip.input ?? state.view.toolInput}
+            result={pip.result ?? state.view.toolResult}
             cancelled={pip.cancelled}
             toolName={pip.toolName}
             target={pip.target}
