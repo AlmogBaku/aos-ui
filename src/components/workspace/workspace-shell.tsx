@@ -158,6 +158,7 @@ export type WorkspaceShellProps = {
   agentFocusRequest?: { agentId: string; nonce: number } | null
   onActionError?: (error: unknown) => void
   tabUndo?: { title: string; onUndo: () => WorkspaceActionResult } | null
+  artifactOutputs?: ReactNode
   sidePanel?: ReactNode
   sidePanelOpen?: boolean
   sidePanelLabel?: string
@@ -912,6 +913,7 @@ type InspectorPanelProps = Pick<
 > & {
   agent: WorkspaceAgent | null
   navigation: AgentSessionNavigation | null
+  artifactOutputs?: ReactNode
   sessionMenu: SessionRowMenuHandlers
 }
 
@@ -927,6 +929,7 @@ function InspectorPanel({
   sessionMenu,
   agent,
   navigation,
+  artifactOutputs,
 }: InspectorPanelProps) {
   const [query, setQuery] = useState("")
 
@@ -982,6 +985,9 @@ function InspectorPanel({
             onActionError={onActionError}
           />
         </div>
+      ) : null}
+      {artifactOutputs ? (
+        <div className={styles.inspectorOutputs}>{artifactOutputs}</div>
       ) : null}
     </div>
   )
@@ -1159,6 +1165,7 @@ export function WorkspaceShell({
   agentFocusRequest,
   onActionError,
   tabUndo,
+  artifactOutputs,
   sidePanel,
   sidePanelOpen = false,
   sidePanelLabel,
@@ -1482,6 +1489,7 @@ export function WorkspaceShell({
     sessionActions,
     sessionMenu,
     agent: selectedAgent,
+    artifactOutputs,
   }
   const skipLink = (
     <a

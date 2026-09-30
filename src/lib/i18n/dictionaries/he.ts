@@ -3,6 +3,9 @@ import type { Dictionary } from "../dictionary"
 export const he = {
   productName: "AOS",
   artifacts: {
+    outputs: "ארטיפקטים",
+    empty: "עדיין אין ארטיפקטים",
+    open: "פתיחה",
     download: "הורדה",
     loading: "התוצר נטען…",
     loadFailed: "לא ניתן לטעון את התוצר.",
