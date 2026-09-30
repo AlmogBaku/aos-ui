@@ -11,7 +11,12 @@ describe("buildViews", () => {
   it("builds every view into one self-contained document", async () => {
     const views = await buildViews()
 
-    expect(Object.keys(views).sort()).toEqual(["chart", "map", "stats"])
+    expect(Object.keys(views).sort()).toEqual([
+      "artifact",
+      "chart",
+      "map",
+      "stats",
+    ])
     for (const [name, html] of Object.entries(views)) {
       expect(new TextEncoder().encode(html).length, name).toBeLessThan(
         MAX_DOCUMENT_BYTES

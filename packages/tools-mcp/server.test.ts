@@ -13,6 +13,7 @@ const views = {
   chart: "<!doctype html><title>chart</title>",
   map: "<!doctype html><title>map</title>",
   stats: "<!doctype html><title>stats</title>",
+  artifact: "<!doctype html><title>artifact</title>",
 }
 
 beforeAll(async () => {
@@ -74,7 +75,7 @@ describe("tools/list", () => {
     expect(byName.get("render_map")!.description).toMatch(/HTML/u)
     expect(byName.get("present_artifact")!.description).toMatch(/absolute/u)
     expect(byName.get("present_artifact")!.description).toMatch(
-      /after its final edit/u
+      /again after each change/u
     )
   })
 })
@@ -89,6 +90,8 @@ describe("MCP App views", () => {
       { connectDomains: ["https://tiles.openfreemap.org"] },
     ],
     ["render_stats", "ui://aos-ui/stats", "stats", {}],
+    // The page adds each call's own file addresses to this view's policy.
+    ["present_artifact", "ui://aos-ui/artifact", "artifact", {}],
   ] as const
 
   it.each(declared)("%s declares %s", async (name, resourceUri) => {
@@ -98,17 +101,11 @@ describe("MCP App views", () => {
     expect(tool?._meta?.ui).toEqual({ resourceUri })
   })
 
-  it("leaves present_artifact without a view", async () => {
-    const { tools } = await client.listTools()
-    const tool = tools.find(({ name }) => name === "present_artifact")
-
-    expect(tool?._meta?.ui).toBeUndefined()
-  })
-
   it("lists one App resource per view", async () => {
     const { resources } = await client.listResources()
 
     expect(resources.map(({ uri }) => uri).sort()).toEqual([
+      "ui://aos-ui/artifact",
       "ui://aos-ui/chart",
       "ui://aos-ui/map",
       "ui://aos-ui/stats",
@@ -237,33 +234,37 @@ describe("render_stats", () => {
 })
 
 describe("present_artifact", () => {
+  // A result reaches guests through the view, so it names the file and never
+  // its path; the proxy reads the path from the call's own arguments.
   it.each([
-    [
-      { path: "/workspace/out/report.pdf" },
-      { path: "/workspace/out/report.pdf", filename: "report.pdf" },
-    ],
+    [{ path: "/workspace/out/report.pdf" }, { filename: "report.pdf" }],
     [
       {
         path: "/workspace/nonexistent/data.csv",
         title: "Quarterly data",
         mimeType: "text/csv",
       },
-      {
-        path: "/workspace/nonexistent/data.csv",
-        filename: "Quarterly data",
-        mimeType: "text/csv",
-      },
+      { filename: "Quarterly data", mimeType: "text/csv" },
     ],
-  ])("publishes %j without touching the filesystem", async (args, artifact) => {
-    const result = await call("present_artifact", args)
-    const receipt = { ok: true, type: "aos.artifact", artifact }
+  ])(
+    "shows %j by name, without its path or touching the filesystem",
+    async (args, value) => {
+      const result = await call("present_artifact", args)
 
-    expect(result.isError).toBeFalsy()
-    expect(result.structuredContent).toEqual(receipt)
-    expect(result.content).toEqual([
-      { type: "text", text: JSON.stringify(receipt) },
-    ])
-  })
+      expect(result.isError).toBeFalsy()
+      expect(result.structuredContent).toEqual({
+        ok: true,
+        type: "aos.presentation",
+        kind: "present_artifact",
+        value,
+      })
+      expect(fallback(result)).toEqual({
+        heading: `${value.filename} is ready for display.`,
+        value,
+      })
+      expect(JSON.stringify(result)).not.toContain("/workspace")
+    }
+  )
 
   it.each([
     ["a relative path", { path: "out/report.pdf" }, /absolute at path/u],

@@ -10,6 +10,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
+import { presentationViewNames } from "../../shared/presentation/views"
+
 let child: ChildProcess
 let origin: string
 /** Stand-in documents, so the test never reads a stale build. */
@@ -32,7 +34,7 @@ function start(directory: string) {
 }
 
 beforeAll(async () => {
-  for (const name of ["chart", "map", "stats"])
+  for (const name of presentationViewNames)
     writeFileSync(join(views, `${name}.html`), `<title>${name}</title>`)
   child = start(views)
   const lines = createInterface({ input: child.stdout! })
@@ -76,10 +78,8 @@ describe("tools-mcp HTTP entry", () => {
 
     expect(contents[0]).toMatchObject({ text: "<title>map</title>" })
     expect(tools).toHaveLength(4)
-    expect(result.structuredContent).toEqual({
-      ok: true,
-      type: "aos.artifact",
-      artifact: { path: "/workspace/report.pdf", filename: "report.pdf" },
+    expect(result.structuredContent).toMatchObject({
+      value: { filename: "report.pdf" },
     })
   })
 

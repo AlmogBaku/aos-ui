@@ -19,6 +19,7 @@ const ENTRIES: Record<PresentationViewName, string> = {
   chart: "chart-main.tsx",
   map: "map-main.tsx",
   stats: "stats-main.tsx",
+  artifact: "artifact-main.tsx",
 }
 
 /** Inline text must not close the element that carries it. */
