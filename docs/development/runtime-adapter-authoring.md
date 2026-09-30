@@ -551,14 +551,14 @@ renders as an App card. Implement the optional `ServerRuntime.mcpApps`
 | `observe?(scope, call)`                            | A flagged call of this Session's run as it streams: name, then input, then result. |
 | `describe(scope, {toolCallId, toolName, result?})` | Whether the call's tool declares a view.                                           |
 | `open(scope, toolCallId, signal?)`                 | The `McpAppView`: HTML, CSP, permissions, `prefersBorder`, tool input and result.  |
+| `toolCall?(scope, toolCallId, signal?)`            | The stored call: its server, tool, and full input. Absent when unavailable.        |
 | `callTool(scope, toolCallId, name, args)`          | A view's `tools/call`, limited to its own server's app-visible tools.              |
 | `readResource(scope, toolCallId, uri)`             | A view's `resources/read` on its own server.                                       |
 
 Every method first finds the `toolCallId` in this Session's own native
-history, the same scoping as `artifact`, or among the running calls `observe`
-heard for that Session; the browser never names a server, tool, or resource
-URI. An unknown or foreign call reads as not found. A host that holds its views
-natively leaves `observe` out.
+history, or among the running calls `observe` heard for that Session; the
+browser never names a server, tool, or resource URI. An unknown or foreign call
+reads as not found. A host that holds its views natively leaves `observe` out.
 
 Map the native MCP Apps API when the runtime has one (OpenClaw's
 `mcp.app.view`, `mcp.app.callTool`, `mcp.app.readResource`). Otherwise build
@@ -580,6 +580,22 @@ and asks again with the result only for a call the start could not flag. It
 does the same for `history()`, sets the `app` flag, and advertises
 `content.mcpApps` in the Session capabilities. The ACP layer carries the flag
 as `_meta.aos.app` on `tool_call_update`, from the call's first update.
+
+### readFile
+
+Implement the optional `ServerRuntime.readFile` (`packages/proxy/core/runtime.ts`)
+to let an App view serve its files. It is a two-step contract:
+
+1. **Real path:** `realPath?(scope, path, signal)` resolves every link and
+   returns the real path the read will open, or `undefined` if the runtime
+   cannot determine it (which refuses the read). Absent means the runtime
+   enforces its own roots; for operators the folder rules then judge `path`
+   alone, and guests get no files from this adapter.
+2. **Stream:** `read(scope, path, options)` streams the file at `path`.
+
+The route judges the written path and the real path against the folder rules
+before any byte is read. A `read` response of 403 or 404 is forwarded to the
+client as not found; any other non-2xx response, or a throw, is unavailable.
 
 ### Registration and adapter file layout
 
