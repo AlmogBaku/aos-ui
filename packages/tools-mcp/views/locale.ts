@@ -37,6 +37,13 @@ export type ViewLabels = {
     noPreview: string
     tooLarge: string
     htmlTitle: string
+    htmlView: string
+    preview: string
+    source: string
+    copy: string
+    copied: string
+    copyFailed: string
+    csvTruncated: (rows: number) => string
     pdfTitle: string
     previousPage: string
     nextPage: string
@@ -71,6 +78,13 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       noPreview: "No preview is available for this file.",
       tooLarge: "This file is too large to preview.",
       htmlTitle: "HTML preview",
+      htmlView: "HTML view",
+      preview: "Preview",
+      source: "Source",
+      copy: "Copy",
+      copied: "Copied",
+      copyFailed: "Copy failed",
+      csvTruncated: (rows) => `Showing the first ${rows} rows.`,
       pdfTitle: "PDF preview",
       previousPage: "Previous page",
       nextPage: "Next page",
@@ -103,6 +117,13 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       noPreview: "אין תצוגה מקדימה לקובץ הזה.",
       tooLarge: "הקובץ גדול מדי לתצוגה מקדימה.",
       htmlTitle: "תצוגה מקדימה של HTML",
+      htmlView: "תצוגת HTML",
+      preview: "תצוגה מקדימה",
+      source: "קוד מקור",
+      copy: "העתקה",
+      copied: "הועתק",
+      copyFailed: "ההעתקה נכשלה",
+      csvTruncated: (rows) => `מוצגות ${rows} השורות הראשונות.`,
       pdfTitle: "תצוגה מקדימה של PDF",
       previousPage: "העמוד הקודם",
       nextPage: "העמוד הבא",

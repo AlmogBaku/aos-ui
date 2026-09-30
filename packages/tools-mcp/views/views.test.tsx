@@ -1,4 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -178,6 +179,178 @@ describe("artifact view", () => {
   function files(path: string) {
     return { "aos/files": { path } }
   }
+
+  /** Shows one file the page grants, served with `body`. */
+  function showFile(
+    file: { filename: string; mimeType?: string },
+    body: string,
+    context: McpUiHostContext = {}
+  ) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body))
+    )
+    const view = props(file)
+    const address = `https://aos.test/files/${file.filename}?pass=one`
+    const shown = (next: McpUiHostContext) => (
+      <ArtifactView {...view} context={{ ...files(address), ...next }} />
+    )
+    const { rerender } = render(shown(context))
+    return {
+      app: view.app,
+      rerender: (next: McpUiHostContext) => rerender(shown(next)),
+    }
+  }
+
+  it.each([
+    ["Markdown by its extension", { filename: "brief.md" }, "# Launch brief"],
+    [
+      "Markdown by its type",
+      { filename: "brief", mimeType: "text/markdown" },
+      "# Launch brief",
+    ],
+  ])("lays out %s with its headings", async (_case, file, body) => {
+    showFile(file, body)
+    expect(
+      await screen.findByRole("heading", { name: "Launch brief" })
+    ).toBeVisible()
+  })
+
+  it("reads a declared type before the file name's", async () => {
+    showFile({ filename: "brief.md", mimeType: "text/plain" }, "# Launch brief")
+    expect(await screen.findByText("# Launch brief")).toBeVisible()
+    expect(screen.queryByRole("heading", { name: "Launch brief" })).toBeNull()
+  })
+
+  it("keeps a Markdown file's raw HTML out of the view", async () => {
+    showFile(
+      { filename: "brief.md" },
+      "Intro\n\n<button>Raw button</button>\n\n<script>window.ran = true</script>"
+    )
+    expect(await screen.findByText("Intro")).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Raw button" })).toBeNull()
+    expect(document.querySelector("script")).toBeNull()
+  })
+
+  it("opens a Markdown link through the page, never in its frame", async () => {
+    const { app } = showFile(
+      { filename: "brief.md" },
+      "[Roadmap](https://example.com/roadmap) and [mail](mailto:ops@example.com)"
+    )
+    const link = await screen.findByRole("link", { name: "Roadmap" })
+    const navigated = !fireEvent.click(link)
+    expect(navigated).toBe(true)
+    expect(app.openLink).toHaveBeenCalledWith({
+      url: "https://example.com/roadmap",
+    })
+    expect(screen.queryByRole("link", { name: "mail" })).toBeNull()
+  })
+
+  it("shows a CSV file as a table under its header row", async () => {
+    showFile(
+      { filename: "spend.csv" },
+      'quarter,total\nQ1,365\n"Q2, est.",410\n'
+    )
+    expect(
+      await screen.findByRole("columnheader", { name: "quarter" })
+    ).toBeVisible()
+    expect(screen.getByRole("columnheader", { name: "total" })).toBeVisible()
+    expect(screen.getByRole("cell", { name: "Q2, est." })).toBeVisible()
+  })
+
+  it("indents JSON, keeping text that does not parse as it came", async () => {
+    showFile({ filename: "config.json" }, '{"region":"eu","replicas":2}')
+    const region = await screen.findByRole("region", { name: "config.json" })
+    expect(region.textContent).toBe('{\n  "region": "eu",\n  "replicas": 2\n}')
+    cleanup()
+    showFile({ filename: "broken.json" }, '{"region":')
+    expect(
+      (await screen.findByRole("region", { name: "broken.json" })).textContent
+    ).toBe('{"region":')
+  })
+
+  it("shows an HTML file's source from the keyboard", async () => {
+    const html = "<h1>Launch plan</h1>"
+    showFile({ filename: "plan.html" }, html)
+    await userEvent.click(await screen.findByRole("tab", { name: "Preview" }))
+    await userEvent.keyboard("{ArrowRight}")
+    const source = screen.getByRole("tab", { name: "Source" })
+    expect(source).toHaveFocus()
+    expect(source).toHaveAttribute("aria-selected", "true")
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(html)
+    expect(screen.queryByTitle("HTML preview")).toBeNull()
+  })
+
+  it("copies the file's text as it came", async () => {
+    const user = userEvent.setup()
+    const json = '{"region":"eu"}'
+    showFile({ filename: "config.json" }, json)
+    await user.click(await screen.findByRole("button", { name: "Copy" }))
+    expect(await navigator.clipboard.readText()).toBe(json)
+    expect(screen.getByRole("button", { name: "Copied" })).toBeVisible()
+  })
+
+  it("copies through a selection when the page withholds the clipboard", async () => {
+    const user = userEvent.setup()
+    const writeText = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockRejectedValue(
+        new DOMException("Blocked by a permissions policy", "NotAllowedError")
+      )
+    let copied: string | undefined
+    const execCommand = vi.fn(() => {
+      const field = document.querySelector("textarea")
+      copied = field?.value.slice(field.selectionStart, field.selectionEnd)
+      return true
+    })
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    })
+    try {
+      showFile({ filename: "notes.txt" }, "Launch notes")
+      await user.click(await screen.findByRole("button", { name: "Copy" }))
+      expect(
+        await screen.findByRole("button", { name: "Copied" })
+      ).toBeVisible()
+      expect(execCommand).toHaveBeenCalledWith("copy")
+      expect(copied).toBe("Launch notes")
+    } finally {
+      writeText.mockRestore()
+      Reflect.deleteProperty(document, "execCommand")
+    }
+  })
+
+  it("asks for the side panel on a press only when offered and not there", async () => {
+    const offered = { availableDisplayModes: ["inline", "pip"] as const }
+    const { app, rerender } = showFile(
+      { filename: "notes.txt" },
+      "Quarterly notes"
+    )
+    await userEvent.click(await screen.findByText("Quarterly notes"))
+    expect(app.requestDisplayMode).not.toHaveBeenCalled()
+
+    rerender({ ...offered, displayMode: "pip" })
+    await userEvent.click(screen.getByText("Quarterly notes"))
+    expect(app.requestDisplayMode).not.toHaveBeenCalled()
+
+    rerender({ ...offered, displayMode: "inline" })
+    await userEvent.click(screen.getByText("Quarterly notes"))
+    expect(app.requestDisplayMode.mock.calls).toEqual([[{ mode: "pip" }]])
+  })
+
+  it("keeps a press on a link or inside a selection from asking for the side panel", async () => {
+    const { app } = showFile(
+      { filename: "brief.md" },
+      "Quarterly notes and [Roadmap](https://example.com/roadmap)",
+      { availableDisplayModes: ["inline", "pip"], displayMode: "inline" }
+    )
+    await userEvent.click(await screen.findByRole("link", { name: "Roadmap" }))
+    const text = screen.getByText(/Quarterly notes/u)
+    window.getSelection()!.selectAllChildren(text)
+    await userEvent.click(text)
+    expect(app.requestDisplayMode).not.toHaveBeenCalled()
+  })
 
   it.each([
     ["without a length", {}, 3],

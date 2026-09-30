@@ -4,7 +4,14 @@ import {
   PictureInPicture2,
   RotateCw,
 } from "lucide-react"
-import { lazy, Suspense, useEffect, useState } from "react"
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react"
 import { z } from "zod"
 
 import type { PresentArtifactResult } from "../../../shared/presentation/tools"
@@ -13,6 +20,11 @@ import {
   type FilePreview,
   type PreviewLimits,
 } from "./artifact/file"
+import { Code } from "./artifact/code"
+import { CopyButton } from "./artifact/copy-button"
+import { CsvTable } from "./artifact/csv-table"
+import { HtmlPreview } from "./artifact/html-preview"
+import { Markdown } from "./artifact/markdown"
 import { useFile } from "./artifact/use-file"
 import type { ViewLabels } from "./locale"
 import { IconButton } from "./ui/icon-button"
@@ -57,44 +69,56 @@ function ImagePreview({
   )
 }
 
-function Preview({
+/** JSON indented two spaces; text that does not parse stays as it came. */
+function prettyJson(text: string) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
+}
+
+function TextPreview({
   preview,
   filename,
   labels,
-  read,
+  openLink,
 }: {
-  preview: FilePreview
+  preview: Extract<FilePreview, { kind: "text" }>
   filename: string
   labels: ArtifactLabels
-  read: ViewApp["readServerResource"]
+  openLink: ViewApp["openLink"]
 }) {
-  switch (preview.kind) {
-    case "pdf":
+  switch (preview.format) {
+    case "markdown":
       return (
-        <Suspense fallback={<Status>{labels.loading}</Status>}>
-          <PdfPreview blob={preview.blob} read={read} labels={labels} />
-        </Suspense>
+        <Markdown source={preview.text} label={filename} openLink={openLink} />
       )
-    case "image":
+    case "csv":
       return (
-        <ImagePreview
-          url={preview.url}
-          name={filename}
-          fallback={labels.noPreview}
+        <CsvTable
+          text={preview.text}
+          label={filename}
+          truncatedLabel={labels.csvTruncated}
         />
       )
-    case "html":
-      // An empty sandbox runs none of the file's scripts and gives it an
-      // opaque origin, so it reaches neither this view nor the page.
+    case "json":
       return (
-        <iframe
-          sandbox=""
-          srcDoc={preview.text}
-          title={labels.htmlTitle}
-          className="h-96 w-full rounded-md border bg-white"
+        <Code
+          code={prettyJson(preview.text)}
+          language="json"
+          label={filename}
         />
       )
-    case "text":
+    case "code":
+      return (
+        <Code
+          code={preview.text}
+          language={preview.language}
+          label={filename}
+        />
+      )
+    case "plain":
       return (
         <pre
           dir="auto"
@@ -106,9 +130,61 @@ function Preview({
           {preview.text}
         </pre>
       )
+  }
+}
+
+function Preview({
+  preview,
+  filename,
+  labels,
+  app,
+}: {
+  preview: FilePreview
+  filename: string
+  labels: ArtifactLabels
+  app: ViewApp
+}) {
+  switch (preview.kind) {
+    case "pdf":
+      return (
+        <Suspense fallback={<Status>{labels.loading}</Status>}>
+          <PdfPreview
+            blob={preview.blob}
+            read={app.readServerResource}
+            labels={labels}
+          />
+        </Suspense>
+      )
+    case "image":
+      return (
+        <ImagePreview
+          url={preview.url}
+          name={filename}
+          fallback={labels.noPreview}
+        />
+      )
+    case "html":
+      return <HtmlPreview text={preview.text} labels={labels} />
+    case "text":
+      return (
+        <TextPreview
+          preview={preview}
+          filename={filename}
+          labels={labels}
+          openLink={app.openLink}
+        />
+      )
     case "none":
       return <Status>{labels.noPreview}</Status>
   }
+}
+
+/** What a press on a control or link does itself, rather than expand the view. */
+const CONTROLS = "a, button, input, select, textarea, summary, [role='tab']"
+
+/** Whether text in the view is selected, so a press may be ending a selection. */
+function selecting() {
+  return window.getSelection()?.isCollapsed === false
 }
 
 /**
@@ -126,6 +202,16 @@ export function ArtifactView({
   const address = filesSchema.safeParse(context?.["aos/files"]).data?.path
   const file = useFile(address, value.filename, value.mimeType, previewLimits)
   const pip = context?.displayMode === "pip"
+  const offersPip = context?.availableDisplayModes?.includes("pip") === true
+  // A press that starts or ends inside a selection is reading, not asking.
+  const selected = useRef(false)
+  const expand = (event: MouseEvent) => {
+    const pressedSelection = selected.current || selecting()
+    selected.current = false
+    if (!offersPip || pip || pressedSelection) return
+    if ((event.target as Element).closest(CONTROLS)) return
+    void app.requestDisplayMode({ mode: "pip" }).catch(ignore)
+  }
   // In the side panel, Esc returns the view to its message, unless something
   // in the view used the key first.
   useEffect(() => {
@@ -146,6 +232,11 @@ export function ArtifactView({
         </div>
         {address === undefined ? null : (
           <div className="flex items-center gap-1">
+            {file.state.status === "ready" &&
+            (file.state.preview.kind === "text" ||
+              file.state.preview.kind === "html") ? (
+              <CopyButton text={file.state.preview.text} labels={artifact} />
+            ) : null}
             <IconButton label={artifact.refresh} onClick={file.refresh}>
               <RotateCw />
             </IconButton>
@@ -176,7 +267,7 @@ export function ArtifactView({
             >
               <ExternalLink />
             </IconButton>
-            {context?.availableDisplayModes?.includes("pip") ? (
+            {offersPip ? (
               <IconButton
                 label={artifact.pip}
                 pressed={pip}
@@ -195,12 +286,21 @@ export function ArtifactView({
       {context !== undefined && address === undefined ? (
         <Status>{artifact.unreachable}</Status>
       ) : file.state.status === "ready" ? (
-        <Preview
-          preview={file.state.preview}
-          filename={value.filename}
-          labels={artifact}
-          read={app.readServerResource}
-        />
+        // A press on the preview opens the side panel; the Picture in picture
+        // button does the same from the keyboard.
+        <div
+          onPointerDown={() => {
+            selected.current = selecting()
+          }}
+          onClick={expand}
+        >
+          <Preview
+            preview={file.state.preview}
+            filename={value.filename}
+            labels={artifact}
+            app={app}
+          />
+        </div>
       ) : (
         // Each state still loading or refused names its own label.
         <Status>{artifact[file.state.status]}</Status>
