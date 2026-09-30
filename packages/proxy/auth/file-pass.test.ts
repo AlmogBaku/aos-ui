@@ -39,6 +39,26 @@ describe("file pass", () => {
     expect(await passes.opens(pass, { ...scope, ...other })).toBe(false)
   })
 
+  it("keeps a call's pass and an Artifact's pass apart, even for one id", async () => {
+    const passes = createFilePassService()
+    const { role, agentId, sessionId } = scope
+    const artifact: FilePassScope = {
+      role,
+      agentId,
+      sessionId,
+      artifactId: "call-1",
+    }
+    const callPass = (await passes.issue(scope)).pass
+    const artifactPass = (await passes.issue(artifact)).pass
+
+    expect(await passes.opens(artifactPass, artifact)).toBe(true)
+    expect(
+      await passes.opens(artifactPass, { ...artifact, artifactId: "a-2" })
+    ).toBe(false)
+    expect(await passes.opens(callPass, artifact)).toBe(false)
+    expect(await passes.opens(artifactPass, scope)).toBe(false)
+  })
+
   it.each<[string, number | undefined, number]>([
     ["ten minutes", undefined, 600],
     ["no longer than an invitation ending in two minutes", 120, 120],

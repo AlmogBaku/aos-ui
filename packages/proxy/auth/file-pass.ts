@@ -4,7 +4,8 @@ import { decodeProtectedHeader, jwtVerify, SignJWT } from "jose"
 import { z } from "zod"
 
 /**
- * Passes that open one tool call's files to its MCP App. A view reads from an
+ * Passes that open one tool call's files, or one published Artifact's bytes,
+ * to an MCP App. A view reads from an
  * opaque origin that no login reaches, so each file address carries a pass.
  * The key never leaves this process, so a restart ends every pass.
  */
@@ -18,25 +19,27 @@ const MAX_UNIX_SECONDS = 4_102_444_800
 /** A pass's longest life: 10 minutes. */
 const LIFETIME_SECONDS = 600
 
-/** The one call a pass opens, for one role. */
+/**
+ * What a pass opens, for one role: one tool call's files, or one published
+ * Artifact's bytes. A pass for one kind never opens the other.
+ */
 export type FilePassScope = {
   role: "operator" | "guest"
   agentId: string
   /** The Session as its listener names it: a public id, or a guest's ref. */
   sessionId: string
-  toolCallId: string
-}
+} & ({ toolCallId: string } | { artifactId: string })
 
 export type FilePassService = {
   /**
-   * A pass for one call that ends after 10 minutes, or at `notAfter` (Unix
+   * A pass for one subject that ends after 10 minutes, or at `notAfter` (Unix
    * seconds) when that comes first; `expiresAt` is in Unix seconds too.
    */
   issue(
     scope: FilePassScope,
     notAfter?: number
   ): Promise<{ pass: string; expiresAt: number }>
-  /** Whether `pass` opens exactly this call now. */
+  /** Whether `pass` opens exactly this subject now. */
   opens(pass: string, scope: FilePassScope): Promise<boolean>
 }
 
@@ -49,8 +52,16 @@ const ClaimsSchema = z.strictObject({
   role: z.enum(["operator", "guest"]),
   agent: z.string(),
   session: z.string(),
-  call: z.string(),
+  /** The subject's kind and id: a tool call's id, or an Artifact's. */
+  kind: z.enum(["call", "artifact"]),
+  subject: z.string(),
 })
+
+function subjectClaims(scope: FilePassScope) {
+  return "toolCallId" in scope
+    ? { kind: "call" as const, subject: scope.toolCallId }
+    : { kind: "artifact" as const, subject: scope.artifactId }
+}
 
 function nowSeconds(clock: () => number) {
   const milliseconds = clock()
@@ -79,7 +90,7 @@ export function createFilePassService(
         role: scope.role,
         agent: scope.agentId,
         session: scope.sessionId,
-        call: scope.toolCallId,
+        ...subjectClaims(scope),
       })
       const pass = await new SignJWT(claims)
         .setProtectedHeader({ alg: ALGORITHM, typ: TOKEN_TYPE })
@@ -111,12 +122,14 @@ export function createFilePassService(
           requiredClaims: ["iat", "exp"],
         })
         const claims = ClaimsSchema.safeParse(verified.payload)
+        const subject = subjectClaims(scope)
         return (
           claims.success &&
           claims.data.role === scope.role &&
           claims.data.agent === scope.agentId &&
           claims.data.session === scope.sessionId &&
-          claims.data.call === scope.toolCallId
+          claims.data.kind === subject.kind &&
+          claims.data.subject === subject.subject
         )
       } catch {
         return false
