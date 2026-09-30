@@ -19,10 +19,12 @@ import {
 } from "@aos/protocol/push"
 import {
   CallToolResultSchema,
+  McpAppFilesSchema,
   McpAppResourceReadRequestSchema,
   McpAppToolCallRequestSchema,
   McpAppViewSchema,
   ReadResourceResultSchema,
+  type McpAppFiles,
   type McpAppResourceReadRequest,
   type McpAppToolCallRequest,
 } from "@aos/protocol/mcp-apps"
@@ -54,7 +56,9 @@ export class AosClientError extends Error {
   constructor(
     readonly kind: AosClientFailure,
     message = "AOS proxy request failed",
-    readonly code?: string
+    readonly code?: string,
+    /** The proxy's HTTP status, when it answered. */
+    readonly status?: number
   ) {
     super(message)
     this.name = "AosClientError"
@@ -65,6 +69,8 @@ export type AosRemoteClientOptions = {
   fetcher?: typeof fetch
   basePath?: string
   authorization?: string
+  /** What a relative base path resolves against; the page's own by default. */
+  origin?: string
 }
 
 async function normalizedError(response: Response) {
@@ -86,12 +92,14 @@ export class AosRemoteClient {
   readonly #fetch: typeof fetch
   readonly #basePath: string
   readonly #authorization?: string
+  readonly #origin?: string
   readonly #sessionOwners = new Map<string, string>()
 
   constructor(options: AosRemoteClientOptions = {}) {
     this.#fetch = options.fetcher ?? globalThis.fetch.bind(globalThis)
     this.#basePath = options.basePath ?? "/api/aos/v1"
     this.#authorization = options.authorization
+    this.#origin = options.origin ?? globalThis.location?.origin
   }
 
   async #read<T>(
@@ -117,7 +125,8 @@ export class AosRemoteClient {
       throw new AosClientError(
         response.status === 503 ? "provider-unavailable" : "proxy-failure",
         error?.description,
-        error?.code
+        error?.code,
+        response.status
       )
     }
     let payload: unknown
@@ -219,13 +228,41 @@ export class AosRemoteClient {
     toolCallId: string,
     signal?: AbortSignal
   ) {
-    return this.#read(
+    const view = await this.#read(
       this.#mcpAppPath(sessionId, toolCallId),
       McpAppViewSchema,
       {
         signal,
       }
     )
+    return view.files
+      ? { ...view, files: this.#absoluteFiles(view.files) }
+      : view
+  }
+
+  /** Fresh addresses, each under a new pass, for the files a view reads. */
+  async renewMcpAppFiles(sessionId: string, toolCallId: string) {
+    return this.#absoluteFiles(
+      await this.#read(
+        this.#mcpAppPath(sessionId, toolCallId, "/files"),
+        McpAppFilesSchema,
+        { method: "POST" }
+      )
+    )
+  }
+
+  /** A view fetches from its own opaque origin, so each address is absolute. */
+  #absoluteFiles(files: McpAppFiles): McpAppFiles {
+    const base = new URL(this.#basePath, this.#origin)
+    return {
+      ...files,
+      addresses: Object.fromEntries(
+        Object.entries(files.addresses).map(([name, address]) => [
+          name,
+          new URL(address, base).href,
+        ])
+      ),
+    }
   }
 
   /** A tool call the App view makes, answered by the proxy's MCP server. */
@@ -322,7 +359,8 @@ export class AosRemoteClient {
       throw new AosClientError(
         response.status === 503 ? "provider-unavailable" : "proxy-failure",
         error?.description,
-        error?.code
+        error?.code,
+        response.status
       )
     }
   }
@@ -384,7 +422,9 @@ export class AosRemoteClient {
           : response.status === 404
             ? notFound
             : "proxy-failure",
-        error?.description
+        error?.description,
+        error?.code,
+        response.status
       )
     }
     const contentType = response.headers.get("content-type")
