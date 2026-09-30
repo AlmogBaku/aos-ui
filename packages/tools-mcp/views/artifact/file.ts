@@ -113,6 +113,18 @@ function textFormat(type: string): TextFormat {
   return language ? { format: "code", language } : { format: "plain" }
 }
 
+/**
+ * A text type the view shows only as plain text, other than `text/plain`
+ * itself, such as the `text/vnd.trolltech.linguist` a system names `.ts` by.
+ */
+function vague(type: string) {
+  return (
+    type !== "text/plain" &&
+    kindOf(type) === "text" &&
+    textFormat(type).format === "plain"
+  )
+}
+
 function discard(body: ReadableStream | null) {
   void body?.cancel().catch(() => undefined)
 }
@@ -167,7 +179,8 @@ async function preview(
 /**
  * Fetches the file at `address` whole, up to its kind's limit, and prepares
  * its preview. The first type that is known decides how it shows: the one the
- * Agent declared, then the file name's, then the response's. A file with no
+ * Agent declared, then the file name's, then the response's; a vague declared
+ * text type yields to the file name's. A file with no
  * preview is not read at all.
  */
 export async function loadFile(
@@ -186,9 +199,11 @@ export async function loadFile(
       discard(response.body)
       return { status: "unreachable" }
     }
+    const declared = mediaType(file.mimeType)
     const type =
-      mediaType(file.mimeType) ??
+      (declared !== undefined && !vague(declared) ? declared : undefined) ??
       extensionType(file.filename) ??
+      declared ??
       mediaType(response.headers.get("content-type"))
     const kind = kindOf(type)
     if (type === undefined || kind === undefined) {

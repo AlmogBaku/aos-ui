@@ -209,6 +209,11 @@ describe("artifact view", () => {
       { filename: "brief", mimeType: "text/markdown" },
       "# Launch brief",
     ],
+    [
+      "Markdown by its extension beside a vague text type",
+      { filename: "brief.md", mimeType: "text/x-unknown" },
+      "# Launch brief",
+    ],
   ])("lays out %s with its headings", async (_case, file, body) => {
     showFile(file, body)
     expect(
