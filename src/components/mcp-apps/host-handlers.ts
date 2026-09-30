@@ -13,7 +13,7 @@ type OpenWindow = (url: string, target: string, features: string) => unknown
 /**
  * A view may open a link only in a new, unrelated `https` browsing context.
  * One of its own file addresses, which this page serves, may be `http` as the
- * page is on a loopback deployment.
+ * page itself is served over `http`.
  */
 export function openAppLink(
   url: string,

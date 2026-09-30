@@ -173,7 +173,11 @@ external reverse proxy is optional.
   is the proxy's own MCP client for runtimes without native MCP Apps (Hermes
   and OpenCode) plus the `withMcpApps` wrapper and the shared name resolver;
   delete the fallback once no adapter reaches it. `src/components/mcp-apps`
-  owns the sandbox frame, its CSP, and the host handlers.
+  owns the sandbox frame, its CSP, and the host handlers. For file serving:
+  `packages/proxy/auth/file-pass.ts` manages passes,
+  `packages/proxy/core/app-files.ts` owns servable arguments and folder
+  rules, and `packages/proxy/routes/app-files.ts` owns the file and renewal
+  routes.
 - `src/components/ui/menu-popup.tsx` is the one popup shell for every menu.
   Session rows use it through `src/components/workspace/session-row-menu.tsx`
   and messages through
@@ -188,8 +192,8 @@ external reverse proxy is optional.
 - `src/components/assistant-ui/elements` owns Thread/Message composition,
   execution timelines, ordinary tool-call presentation, reasoning disclosure,
   and conversation search. Do not recreate these flows in runtime adapters.
-- `src/components/artifacts` and `src/artifacts` own published Artifact
-  resolution, preview, and the sandboxed HTML frame.
+- `src/components/artifacts` and `src/artifacts` own attachment resolution,
+  the attachment card, and the inline image.
   `src/components/runtime-interactions` owns pending composer and question
   flows. `src/components/keyboard` and `src/lib/keyboard` own keyboard actions
   and the command palette. `src/lib/notifications` owns Activity and OS
@@ -198,10 +202,11 @@ external reverse proxy is optional.
   its component; search for both English and Hebrew variants before editing.
 - `packages/tools-mcp` is the stateless `aos-ui` MCP server every harness
   registers for `render_chart`, `render_map`, `render_stats`, and
-  `present_artifact`; it never reads files. The first three are MCP Apps whose
-  single-file views live in `packages/tools-mcp/views`; `present_artifact`'s
-  view shows the file it presents. `shared/presentation` defines the tool schemas and view resources
-  it serves. `shared/invite-link` and `shared/agent-creator` are
+  `present_artifact`; it never reads files. All four are MCP Apps whose
+  single-file views live in `packages/tools-mcp/views`;
+  `present_artifact`'s view shows the file the proxy serves for that call.
+  `shared/presentation` defines the tool schemas and view resources it
+  serves. `shared/invite-link` and `shared/agent-creator` are
   plain skills operators install into a harness. The proxy names the four
   `aos-ui` tools bare and every other MCP tool `mcp__<server>__<tool>` in
   `packages/proxy/core/aos-tool-names.ts`, and validates

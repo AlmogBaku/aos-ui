@@ -24,7 +24,6 @@ import {
   ArtifactDataUI,
   ArtifactWorkspaceProvider,
   createArtifactMessageStabilizer,
-  useArtifactWorkspace,
 } from "@/components/artifacts"
 import {
   Thread,
@@ -242,8 +241,7 @@ function GuestConversationShell({
   composer: ThreadComponents["Composer"]
   connectionStatus?: ConnectionNotice
 }) {
-  useArtifactWorkspace()
-  // An App view moved to the side panel takes the Artifact viewer's place.
+  // The side panel holds the pip view when one is active.
   const pip = useMcpAppPip(locale)
   return (
     <WorkspaceConversationShell

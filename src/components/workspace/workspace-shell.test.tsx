@@ -52,14 +52,14 @@ afterEach(() => {
 })
 
 /** Reports a desktop-wide container so the artifact pane docks beside the conversation. */
-function stubWideResizeObserver() {
+function stubResizeObserver(width: number) {
   vi.stubGlobal(
     "ResizeObserver",
     class {
       constructor(private readonly callback: ResizeObserverCallback) {}
       observe() {
         this.callback(
-          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
+          [{ contentRect: { width } } as ResizeObserverEntry],
           this as unknown as ResizeObserver
         )
       }
@@ -67,6 +67,11 @@ function stubWideResizeObserver() {
       disconnect() {}
     }
   )
+}
+
+/** Convenience alias for the common wide case. */
+function stubWideResizeObserver() {
+  stubResizeObserver(1024)
 }
 
 const agents: WorkspaceAgent[] = [
@@ -314,37 +319,9 @@ describe("WorkspaceShell", () => {
     expect(within(inspector).getByText("Artifact preview body")).toBeVisible()
   })
 
-  it("mounts the side panel once: in the inspector on wide, in the drawer on narrow", () => {
-    // Wide: content appears in the inspector aside, not the drawer.
-    stubWideResizeObserver()
-    const { unmount } = renderShell({
-      sidePanel: <div>pip-content</div>,
-      sidePanelOpen: true,
-      sidePanelLabel: "Output preview",
-    })
-    expect(screen.getAllByText("pip-content")).toHaveLength(1)
-    expect(
-      within(
-        screen.getByRole("complementary", { name: "Output preview" })
-      ).getByText("pip-content")
-    ).toBeVisible()
-    unmount()
-
-    // Narrow: content appears in the drawer, not the inspector aside.
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(private readonly callback: ResizeObserverCallback) {}
-        observe() {
-          this.callback(
-            [{ contentRect: { width: 375 } } as ResizeObserverEntry],
-            this as unknown as ResizeObserver
-          )
-        }
-        unobserve() {}
-        disconnect() {}
-      }
-    )
+  it("mounts the side panel once in the drawer on a narrow screen, not in the inspector", () => {
+    // The wide case is covered by "replaces the inspector with the side panel when open".
+    stubResizeObserver(375)
     renderShell({
       sidePanel: <div>pip-content</div>,
       sidePanelOpen: true,

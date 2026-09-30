@@ -254,7 +254,7 @@ export function useMcpAppPip(locale: ToolUiLocale) {
 }
 
 /**
- * The side panel's view, for the workspace's Artifact viewer slot. The view
+ * The side panel's view, for the workspace's side-panel slot. The view
  * mounts afresh here with `displayMode: "pip"`, since moving a frame reloads
  * it, and needs nothing from its message, so it stays while newer messages
  * push that one out of the rendered window.

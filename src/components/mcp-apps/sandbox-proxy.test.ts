@@ -9,11 +9,11 @@ describe("injectHtmlCsp", () => {
       "default-src 'none'"
     )
     const parsed = new DOMParser().parseFromString(secured, "text/html")
-    const meta = parsed.head.querySelector(
+    const meta = parsed.head.querySelector<HTMLMetaElement>(
       'meta[http-equiv="Content-Security-Policy"]:first-child'
     )
     expect(meta).not.toBeNull()
-    expect((meta as HTMLMetaElement | null)?.content).toBe("default-src 'none'")
+    expect(meta?.content).toBe("default-src 'none'")
     expect(parsed.body.textContent).toContain("Body")
   })
 })

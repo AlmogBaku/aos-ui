@@ -4,11 +4,11 @@ AOS renders [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) (spec
 2026-01-26): a tool whose `_meta.ui.resourceUri` names a `ui://` resource with
 MIME type `text/html;profile=mcp-app` shows that HTML as an interactive view
 in the message, followed by the call's compact "Used" row with its textual
-details. AOS's own charts, maps, stats, and artifact viewer are such Apps: the `aos-ui`
-server's `render_chart`, `render_map`, `render_stats`, and `present_artifact`
-declare `ui://aos-ui/chart`, `ui://aos-ui/map`, `ui://aos-ui/stats`, and
-`ui://aos-ui/artifact`. This page lists what AOS offers an App view and what it
-refuses.
+details. AOS's own charts, maps, stats, and Artifacts are such Apps: the
+`aos-ui` server's `render_chart`, `render_map`, `render_stats`, and
+`present_artifact` declare `ui://aos-ui/chart`, `ui://aos-ui/map`,
+`ui://aos-ui/stats`, and `ui://aos-ui/artifact`. This page lists what AOS
+offers an App view and what it refuses.
 
 ## Register the server
 
@@ -98,8 +98,9 @@ workspace's connection recovers. A failed renewal retries with backoff until
 the proxy refuses it. The fresh addresses arrive as a host-context change, so
 a view fetches a file by the address it received last. `ui/open-link` and
 `ui/download-file` recognize the view's own file by its address, whatever
-pass it carries, and use a fresh one. An own file opens over `http` too when the workspace itself is served over
-`http`. A download names the file by a `resource_link` and saves
+pass it carries, and use a fresh one. An own file opens over `http` too when
+the workspace itself is served over `http`. A download names the file by a
+`resource_link` and saves
 it under the link's `name`, without any directory or reserved character;
 another address, or content the view embeds, is refused.
 

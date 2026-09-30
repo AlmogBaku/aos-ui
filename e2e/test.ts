@@ -18,16 +18,11 @@ function describeConsoleError(message: ConsoleMessage) {
   return `${message.text()}${source}`
 }
 
-function isTransientPreviewAssetError(message: string) {
+function isExpectedConsoleError(message: string) {
   return (
     message.includes("net::ERR_NETWORK_CHANGED") ||
     (message.includes("Failed to fetch dynamically imported module") &&
       message.includes("127.0.0.1")) ||
-    // pdf.js emits diagnostic warnings for unsupported or legacy PDF constructs
-    // that do not prevent rendering.
-    message.includes("Warning: Unsupported") ||
-    message.includes("pdf.js") ||
-    message.includes("PDF.js") ||
     // The artifact view's HTML preview intentionally renders Agent HTML inside
     // `<iframe sandbox="">` with no `allow-scripts`; Chrome reports each
     // blocked script as a console error, which is the expected behavior.
@@ -40,13 +35,13 @@ function watchBrowserErrors(page: Page) {
 
   page.on("console", (message) => {
     const error = describeConsoleError(message)
-    if (message.type() === "error" && !isTransientPreviewAssetError(error)) {
+    if (message.type() === "error" && !isExpectedConsoleError(error)) {
       errors.push(error)
     }
   })
   page.on("pageerror", (error) => {
     const message = error.stack ?? error.message
-    if (!isTransientPreviewAssetError(message)) errors.push(message)
+    if (!isExpectedConsoleError(message)) errors.push(message)
   })
 
   return errors

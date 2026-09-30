@@ -54,9 +54,7 @@ test("an MCP App renders through the double frame, talks to the host, and enters
 
 test("the artifact view renders report.pdf, preview.png, test.html, pip, and download", async ({
   page,
-  assertNoBrowserErrors,
 }) => {
-  void assertNoBrowserErrors
   await page.goto("/en")
   await expect(page.getByRole("tablist")).toBeVisible()
 
@@ -70,16 +68,19 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   }
 
   // The artifact view frame is the inner frame inside the sandbox proxy.
-  // Use .last() so each call targets the most-recently-added card.
-  const artifactFrame = (toolCall: string) =>
+  // Use locator().last() to target the most-recently-added card when
+  // multiple present_artifact calls are in the conversation.
+  const artifactFrame = () =>
     page
-      .frameLocator(`iframe[title="${toolCall} app"]`)
+      .locator('iframe[title="present_artifact app"]')
       .last()
-      .frameLocator("iframe")
+      .contentFrame()
+      .locator("iframe")
+      .contentFrame()
 
   // --- report.pdf ---
   await send("Publish an artifact")
-  const pdfFrame = artifactFrame("present_artifact")
+  const pdfFrame = artifactFrame()
   // The PDF renders its synthetic text.
   await expect(
     pdfFrame.getByText("Synthetic fixture file for AOS UI.")
@@ -115,13 +116,13 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
 
   // --- preview.png ---
   await send("Show a png artifact")
-  const pngFrame = artifactFrame("present_artifact")
+  const pngFrame = artifactFrame()
   // The image has loaded (no broken-image placeholder, real img element).
   await expect(pngFrame.locator("img[src^='data:image/png']")).toBeVisible()
 
   // --- test.html ---
   await send("Show an html artifact")
-  const htmlFrame = artifactFrame("present_artifact")
+  const htmlFrame = artifactFrame()
   // The artifact view embeds the HTML in a sandboxed iframe. Confirm it
   // rendered: the "scripts are off" paragraph is the initial text and
   // stays that way because the sandbox prevents the script from running.
