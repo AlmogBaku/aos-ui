@@ -53,8 +53,11 @@ AOS builds the view's CSP from its declared `_meta.ui.csp`:
 | `baseUriDomains`  | `https://host` or `https://*.host`                                                    |
 
 Anything else is dropped, and an empty list means none. Inline scripts and
-styles are allowed; `object-src` and `form-action` are `'none'`. Web workers
-may start from the view's own `blob:` URLs, as a WebGL map library's do. Any
+styles are allowed, and scripts may compile WebAssembly (`'wasm-unsafe-eval'`),
+as a document renderer's decoders do; `object-src` and `form-action` are
+`'none'`. Web workers may start from the view's own `blob:` URLs, as a WebGL
+map library's do. A view given [files](#files) may also connect to each file's
+address, by its exact path and whatever pass it carries. Any
 origin may carry a port; loopback means `127.0.0.1`, `localhost`, or `*.localhost` on the
 viewer's own machine. CSP cannot name an IPv6 literal, so `[::1]` is refused. Declared `_meta.ui.permissions`
 (camera, microphone, geolocation, clipboard write) become the frame's `allow`
@@ -62,23 +65,49 @@ attribute.
 
 ## Host requests
 
-| Request                   | Behavior                                                                                   |
-| ------------------------- | ------------------------------------------------------------------------------------------ |
-| `tools/call`              | Calls an app-visible tool on the view's own server; a tool with no `visibility` is visible |
-| `resources/read`          | Reads a `ui://` resource on the view's own server                                          |
-| `ui/open-link`            | Opens an `https` URL in a new tab                                                          |
-| `ui/message`              | Sends a user text message into the same conversation; other content is refused             |
-| `ui/request-display-mode` | Grants `inline` or `fullscreen` if the view declared it; otherwise keeps the current mode  |
-| `ui/update-model-context` | Refused                                                                                    |
+| Request                   | Behavior                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------- |
+| `tools/call`              | Calls an app-visible tool on the view's own server; a tool with no `visibility` is visible        |
+| `resources/read`          | Reads a `ui://` resource on the view's own server                                                 |
+| `ui/open-link`            | Opens an `https` URL, or one of the view's own files, in a new tab                                |
+| `ui/download-file`        | Saves one of the view's own files; offered only to a view given files                             |
+| `ui/message`              | Sends a user text message into the same conversation; other content is refused                    |
+| `ui/request-display-mode` | Grants `inline`, `fullscreen`, or `pip` if the view declared it; otherwise keeps the current mode |
+| `ui/update-model-context` | Refused                                                                                           |
 
 Every request goes through the proxy, scoped to the tool call's own Session.
-The browser never talks to the MCP server.
+The browser never talks to the MCP server. The page may answer a repeated
+`resources/read` for the same Agent, server, and URI from an earlier read, so
+a server that changes a resource gives it a new URI.
+
+A view given [files](#files) finds their addresses in its host context under
+`aos/files`, by argument, each made absolute:
+
+```json
+{
+  "aos/files": {
+    "path": "https://aos.example/api/aos/v1/agents/…/tool-calls/call-1/app/files/path?pass=…"
+  }
+}
+```
+
+The host renews the passes while the view is mounted: at half their life,
+when the page wakes or comes back online past that point, and when the
+workspace's connection recovers. A failed renewal retries with backoff until
+the proxy refuses it. The fresh addresses arrive as a host-context change, so
+a view fetches a file by the address it received last. `ui/open-link` and
+`ui/download-file` recognize the view's own file by its address, whatever
+pass it carries, and use a fresh one. An own file opens over `http` too on a
+loopback deployment. A download names the file by a `resource_link` and saves
+it under the link's `name`, without any directory or reserved character;
+another address, or content the view embeds, is refused.
 
 ## Limits
 
 - The view's HTML is at most 2 MiB.
 - A request body is at most 256 KiB.
-- A view may make about 10 requests per second; excess requests fail.
+- A view may make about 10 requests per second, links and downloads
+  included; excess requests fail.
 
 ## Files
 
@@ -153,12 +182,22 @@ viewport, and the host shows an **Exit full screen** control. Esc exits
 fullscreen only while focus is outside the view, because the view receives its
 own key presses; the control is always available.
 
+`pip` shows the view in the side panel, where the Artifact viewer opens: in
+the inspector's place on a wide screen and in a drawer on a narrow one. The
+panel holds one view at a time. The view's frame reloads whenever it moves,
+so a view that keeps state restores it from its input, its result, or its own
+server. Its message shows **Shown in the side panel** with a **Return to the
+message** control; the panel's own control, Esc while focus is in the panel
+but outside the view, a request for `inline`, and leaving the Session return
+it too.
+
 The host context carries the theme (`light` or `dark`), the locale (`en-US`
 or `he-IL`), and the workspace's colors and font as the spec's style
-variables, plus the time zone, the tool call, pointer and hover support, and
-safe-area insets in fullscreen. A view's log messages go only to the browser
-console. AOS sets `lang` and `dir` on the view's root element unless the
-view sets its own, so a view can follow Hebrew right-to-left layout.
+variables, plus the time zone, the tool call, pointer and hover support,
+safe-area insets in fullscreen, and a view's file addresses as `aos/files`.
+A view's log messages go only to the browser console. AOS sets `lang` and
+`dir` on the view's root element unless the view sets its own, so a view can
+follow Hebrew right-to-left layout.
 
 ## Guests
 

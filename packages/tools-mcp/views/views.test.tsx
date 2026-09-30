@@ -272,6 +272,36 @@ describe("artifact view", () => {
     expect(frame).toHaveAttribute("srcdoc", html)
     expect(screen.queryByRole("heading", { name: "Launch plan" })).toBeNull()
   })
+
+  it("asks to return to its message on Esc only from the side panel", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Quarterly notes"))
+    )
+    const address = "https://aos.test/files/notes.txt?pass=one"
+    const view = props(notes)
+    const { rerender } = render(
+      <ArtifactView {...view} context={files(address)} />
+    )
+    expect(await screen.findByText("Quarterly notes")).toBeVisible()
+    await userEvent.keyboard("{Escape}")
+    expect(view.app.requestDisplayMode).not.toHaveBeenCalled()
+
+    rerender(
+      <ArtifactView
+        {...view}
+        context={{
+          ...files(address),
+          displayMode: "pip",
+          availableDisplayModes: ["inline", "pip"],
+        }}
+      />
+    )
+    await userEvent.keyboard("{Escape}")
+    expect(view.app.requestDisplayMode.mock.calls).toEqual([
+      [{ mode: "inline" }],
+    ])
+  })
 })
 
 describe("stats view", () => {

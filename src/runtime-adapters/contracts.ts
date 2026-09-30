@@ -4,6 +4,7 @@ import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice
 import type { ArtifactMessage } from "@/artifacts/artifacts"
 import type {
   CallToolResult,
+  McpAppFiles,
   McpAppView,
   ReadResourceResult,
 } from "@aos/protocol/mcp-apps"
@@ -264,7 +265,22 @@ export type McpAppTarget = {
   toolCallId: string
 }
 
+/**
+ * The runtime refused to renew a view's file addresses, and asking again would
+ * be refused again; every other renewal failure remains an ordinary Error.
+ */
+export class McpAppFilesRefusedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "McpAppFilesRefusedError"
+  }
+}
+
 export type McpAppAdapter = {
+  /**
+   * The call's view. The arguments its `files` name are withheld from its
+   * `toolInput`, and each is offered at an absolute address instead.
+   */
   open(input: McpAppTarget, signal?: AbortSignal): Promise<McpAppView>
   callTool(
     input: McpAppTarget & { name: string; arguments: Record<string, unknown> }
@@ -272,6 +288,8 @@ export type McpAppAdapter = {
   readResource(
     input: McpAppTarget & { uri: string }
   ): Promise<ReadResourceResult>
+  /** Fresh absolute addresses for the files `open` withheld, under new passes. */
+  renewFiles(input: McpAppTarget): Promise<McpAppFiles>
 }
 
 /**

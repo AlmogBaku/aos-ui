@@ -1,4 +1,14 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { Menu } from "@base-ui/react/menu"
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -6,8 +16,11 @@ import {
   isAosRichTool,
   type RichToolPart,
 } from "@/components/tool-ui"
+import { MenuPopup } from "@/components/ui/menu-popup"
 import type { McpAppAdapter } from "@/runtime-adapters/contracts"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { McpAppPipPanel } from "./mcp-app-card"
 import { McpAppHostProvider } from "./mcp-app-host"
 import type { McpAppFrameProps } from "./mcp-app-frame"
 import { MCP_APP_TOOL_ARTIFACT, mcpAppToolArtifact } from "./tool-part"
@@ -52,6 +65,7 @@ function adapter(
     open: vi.fn(open),
     callTool: vi.fn(),
     readResource: vi.fn(),
+    renewFiles: vi.fn(),
   } satisfies McpAppAdapter
 }
 
@@ -176,6 +190,38 @@ describe("MCP App routing", () => {
     expect(views.size).toBe(1)
   })
 
+  it.each([
+    [
+      "the input the proxy recorded to a view given files",
+      true,
+      { title: "Q3" },
+    ],
+    [
+      "the call's own arguments to any other view",
+      false,
+      { path: "/srv/reports/q3.pdf", title: "Q3" },
+    ],
+  ])("hands %s", async (_label, withFiles, input) => {
+    const files = {
+      addresses: { path: `${window.location.origin}/files/path?pass=p` },
+    }
+    const apps = adapter(async () => ({
+      html: "<p>app</p>",
+      toolInput: { title: "Q3" },
+      ...(withFiles ? { files } : {}),
+    }))
+    renderHosted(
+      toolPart({
+        toolName: "show_board",
+        args: { path: "/srv/reports/q3.pdf", title: "Q3" },
+        artifact: MCP_APP_TOOL_ARTIFACT,
+      }),
+      apps
+    )
+    expect(await screen.findByTitle("show_board app")).toBeInTheDocument()
+    expect(lastFrame()?.input).toEqual(input)
+  })
+
   it("says the App is unavailable and keeps the call when the view fails", async () => {
     const apps = adapter(async () => {
       throw new Error("gone")
@@ -205,5 +251,131 @@ describe("MCP App routing", () => {
     expect(apps.open).not.toHaveBeenCalled()
     expect(screen.queryByTitle("show_board app")).toBeNull()
     expect(screen.getByRole("button", { name: /show_board/ })).toBeVisible()
+  })
+})
+
+describe("MCP App side panel", () => {
+  const part = toolPart({
+    toolName: "show_board",
+    artifact: MCP_APP_TOOL_ARTIFACT,
+  })
+
+  /** The call's Session: its message, while rendered, and its side panel. */
+  function Session({
+    apps,
+    sessionId = "session-1",
+    message = true,
+    beside,
+  }: {
+    apps: McpAppAdapter
+    sessionId?: string
+    message?: boolean
+    beside?: ReactNode
+  }) {
+    return (
+      <McpAppHostProvider
+        adapter={apps}
+        agentId="researcher"
+        sessionId={sessionId}
+      >
+        {message ? <AosToolPresentation {...part} /> : null}
+        {beside}
+        <McpAppPipPanel locale="en" />
+      </McpAppHostProvider>
+    )
+  }
+
+  async function showInPanel(apps: McpAppAdapter, beside?: ReactNode) {
+    const view = render(<Session apps={apps} beside={beside} />)
+    await screen.findByTitle("show_board app")
+    act(() => lastFrame()?.onMove?.("pip"))
+    return view
+  }
+
+  const PANEL = ["region", { name: "show_board app" }] as const
+  const panelClose = () =>
+    within(screen.getByRole(...PANEL)).getByRole("button", {
+      name: "Return to the message",
+    })
+
+  it("shows a view in the side panel, holds its place in the message, and returns it", async () => {
+    const user = userEvent.setup()
+    await showInPanel(adapter())
+
+    const panel = screen.getByRole(...PANEL)
+    expect(within(panel).getByTitle("show_board app")).toBeInTheDocument()
+    expect(lastFrame()?.placement).toBe("pip")
+    expect(screen.getAllByTitle("show_board app")).toHaveLength(1)
+    expect(screen.getByText("Shown in the side panel")).toBeVisible()
+    expect(panelClose()).toHaveFocus()
+
+    act(() => lastFrame()?.onMove?.("inline"))
+    expect(screen.queryByRole(...PANEL)).toBeNull()
+    expect(screen.queryByText("Shown in the side panel")).toBeNull()
+    expect(lastFrame()?.placement).toBeUndefined()
+
+    act(() => lastFrame()?.onMove?.("pip"))
+    await user.click(panelClose())
+    expect(screen.queryByRole(...PANEL)).toBeNull()
+    const focused = document.activeElement
+    expect(focused).not.toBe(document.body)
+    expect(focused?.contains(screen.getByTitle("show_board app"))).toBe(true)
+  })
+
+  it("keeps the view while newer messages push its message out of the rendered window", async () => {
+    const apps = adapter()
+    const { rerender } = await showInPanel(apps)
+    const frame = within(screen.getByRole(...PANEL)).getByTitle(
+      "show_board app"
+    )
+
+    rerender(<Session apps={apps} message={false} />)
+    expect(
+      within(screen.getByRole(...PANEL)).getByTitle("show_board app")
+    ).toBe(frame)
+
+    rerender(<Session apps={apps} />)
+    expect(await screen.findByText("Shown in the side panel")).toBeVisible()
+    expect(screen.getAllByTitle("show_board app")).toEqual([frame])
+  })
+
+  it("returns the view to its message once its Session is left", async () => {
+    const apps = adapter()
+    const { rerender } = await showInPanel(apps)
+    const clock = useFakeClock()
+
+    rerender(<Session apps={apps} sessionId="session-2" message={false} />)
+    expect(screen.queryByRole(...PANEL)).toBeNull()
+    await act(() => clock.advance(0))
+
+    rerender(<Session apps={apps} />)
+    await act(() => clock.advance(0))
+    expect(screen.queryByRole(...PANEL)).toBeNull()
+    expect(screen.getByTitle("show_board app")).toBeInTheDocument()
+    expect(lastFrame()?.placement).toBeUndefined()
+  })
+
+  it("leaves an Esc that closes a menu to the menu, and returns the view on its own", async () => {
+    const user = userEvent.setup()
+    await showInPanel(
+      adapter(),
+      <Menu.Root>
+        <Menu.Trigger>Session actions</Menu.Trigger>
+        <MenuPopup
+          dir="ltr"
+          entries={{ items: [{ id: "rename", label: "Rename", icon: null }] }}
+        />
+      </Menu.Root>
+    )
+
+    await user.click(screen.getByRole("button", { name: "Session actions" }))
+    expect(await screen.findByRole("menu")).toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+    expect(screen.getByRole(...PANEL)).toBeInTheDocument()
+
+    act(() => panelClose().focus())
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole(...PANEL)).toBeNull()
   })
 })

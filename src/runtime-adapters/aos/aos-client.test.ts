@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { McpAppFilesRefusedError } from "../contracts"
 import { AosClientError, AosRemoteClient } from "./aos-client"
+import { AosMcpAppAdapter } from "./aos-mcp-apps"
 
 const AGENT_ID = "researcher"
 const SESSION_ID = "opaque-session-1"
@@ -448,4 +450,67 @@ describe("MCP App routes", () => {
     })
     expect(fetcher).not.toHaveBeenCalled()
   })
+
+  it("hands a view absolute file addresses and renews them with a bare POST", async () => {
+    const files = `/api/aos/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}/files`
+    const fetcher = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async (input) =>
+      String(input).endsWith("/app/files")
+        ? Response.json({ addresses: { path: `${files}/path?pass=next` } })
+        : Response.json({
+            html: "<p>app</p>",
+            files: {
+              addresses: { path: `${files}/path?pass=first` },
+              expiresAt: "2026-09-30T12:10:00.000Z",
+            },
+          })
+    )
+    const client = new AosRemoteClient({
+      fetcher,
+      origin: "https://aos.example",
+    })
+    client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+
+    await expect(client.openMcpApp(SESSION_ID, "call/1")).resolves.toEqual({
+      html: "<p>app</p>",
+      files: {
+        addresses: { path: `https://aos.example${files}/path?pass=first` },
+        expiresAt: "2026-09-30T12:10:00.000Z",
+      },
+    })
+    await expect(
+      client.renewMcpAppFiles(SESSION_ID, "call/1")
+    ).resolves.toEqual({
+      addresses: { path: `https://aos.example${files}/path?pass=next` },
+    })
+    const [renewal, init] = fetcher.mock.calls[1] ?? []
+    expect(String(renewal)).toBe(files)
+    expect(init).toMatchObject({ method: "POST" })
+    expect(init?.body).toBeUndefined()
+  })
+
+  it.each([
+    [404, true],
+    [401, true],
+    [403, true],
+    [429, false],
+    [503, false],
+  ])(
+    "reads a renewal answered %i as refused for good: %s",
+    async (status, refused) => {
+      const client = new AosRemoteClient({
+        fetcher: vi.fn(async () => Response.json({}, { status })),
+      })
+      client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+      const renewal = new AosMcpAppAdapter(client).renewFiles({
+        agentId: AGENT_ID,
+        sessionId: SESSION_ID,
+        toolCallId: "call/1",
+      })
+      await expect(renewal).rejects.toBeInstanceOf(
+        refused ? McpAppFilesRefusedError : AosClientError
+      )
+    }
+  )
 })

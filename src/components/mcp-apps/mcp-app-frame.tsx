@@ -8,7 +8,10 @@ import {
   type McpUiHostContext,
   type McpUiStyles,
 } from "@modelcontextprotocol/ext-apps/app-bridge"
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import type {
+  CallToolResult,
+  ReadResourceResult,
+} from "@modelcontextprotocol/sdk/types.js"
 import { XIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
@@ -25,20 +28,40 @@ import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
 import { appliedMcpAppCsp, buildMcpAppCsp } from "./csp"
 import {
-  AVAILABLE_DISPLAY_MODES,
   appMessageText,
   createRateLimiter,
+  createResourceCache,
+  fileArgument,
   grantDisplayMode,
+  offeredDisplayModes,
   openAppLink,
+  saveAppFile,
   type AppDisplayMode,
+  type AppPlacement,
 } from "./host-handlers"
 import {
   SANDBOX_PROXY_SANDBOX,
   prepareAppDocument,
   sandboxProxyUrl,
 } from "./sandbox-proxy"
+import { useAppFiles, type AppConnectionStatus } from "./use-app-files"
 
 const HOST_INFO = { name: "AOS", version: "1.0.0" }
+
+/** Each adapter's shared resource reads, which every view it hosts reuses. */
+const resourceReads = new WeakMap<
+  McpAppAdapter,
+  ReturnType<typeof createResourceCache<ReadResourceResult>>
+>()
+function sharedReads(adapter: McpAppAdapter) {
+  let reads = resourceReads.get(adapter)
+  if (!reads) {
+    reads = createResourceCache<ReadResourceResult>()
+    resourceReads.set(adapter, reads)
+  }
+  return reads
+}
+
 /** An App view grows with its content up to this share of the viewport. */
 const MAX_HEIGHT_SHARE = 0.8
 /** A sandbox that has not reported ready by then will not render the view. */
@@ -103,6 +126,10 @@ function styleVariables(): McpUiStyles {
 
 export type McpAppFrameProps = {
   view: McpAppView
+  /** When `view` arrived; its files' passes count from then. */
+  openedAt: number
+  /** The runtime connection's state; its recovery renews the view's files. */
+  connectionStatus?: AppConnectionStatus
   /** The call's complete arguments, once known; sent to the view once. */
   input?: Record<string, unknown>
   /** The call's result, once settled; sent once, after the input. */
@@ -116,6 +143,13 @@ export type McpAppFrameProps = {
   toolName?: string
   /** The sandbox never reported ready, so the view cannot render. */
   onUnavailable?: () => void
+  /** Where the frame sits: in its message (the default), or in the side panel. */
+  placement?: AppPlacement
+  /**
+   * Moves the view to the other placement when it asks for it, which mounts
+   * it afresh there. Without it, the view is not offered the side panel.
+   */
+  onMove?: (placement: AppPlacement) => void
   target: McpAppTarget
   adapter: McpAppAdapter
   title: string
@@ -125,11 +159,14 @@ export type McpAppFrameProps = {
  * Hosts one MCP App view (spec 2026-01-26) behind the sandbox proxy. The bridge
  * answers the view from this Session only: its tool calls and resource reads go
  * to the runtime's App adapter, its messages become the operator's next turn in
- * this thread, and nothing else it asks for is granted. The view mounts while
- * its call still runs and receives the input and the result as each arrives.
+ * this thread, it may open links and download its call's own files, and
+ * nothing else it asks for is granted. The view mounts while its call still
+ * runs and receives the input and the result as each arrives.
  */
 export default function McpAppFrame({
   view,
+  openedAt,
+  connectionStatus,
   input,
   result,
   cancelled,
@@ -138,6 +175,8 @@ export default function McpAppFrame({
   adapter,
   title,
   onUnavailable,
+  placement = "inline",
+  onMove,
 }: McpAppFrameProps) {
   const frame = useRef<HTMLIFrameElement>(null)
   const container = useRef<HTMLDivElement>(null)
@@ -147,8 +186,9 @@ export default function McpAppFrame({
   const sent = useRef({ input: false, result: false, cancelled: false })
   const [height, setHeight] = useState<number>()
   const [size, setSize] = useState<{ width: number; height: number }>()
-  const [displayMode, setDisplayMode] = useState<AppDisplayMode>("inline")
+  const [displayMode, setDisplayMode] = useState<AppDisplayMode>(placement)
   const displayModeRef = useRef(displayMode)
+  const offered = offeredDisplayModes(onMove !== undefined)
   const aui = useAui()
   const { labels, locale, direction } = useToolUiLocale()
   const { forcedTheme, resolvedTheme } = useTheme()
@@ -157,15 +197,57 @@ export default function McpAppFrame({
     (forcedTheme !== "light" && resolvedTheme === "dark")
       ? "dark"
       : "light"
-  const csp = useMemo(() => buildMcpAppCsp(view.csp), [view.csp])
+  // A renewal changes only the passes, which the policy leaves out, so the
+  // view keeps running.
+  const csp = useMemo(
+    () => buildMcpAppCsp(view.csp, view.files),
+    [view.csp, view.files]
+  )
   const allow = useMemo(
     () => buildAllowAttribute(view.permissions),
     [view.permissions]
   )
-  const context = useRef({ aui, locale, direction, onUnavailable, toolName })
+  const { files, renew } = useAppFiles({
+    files: view.files,
+    openedAt,
+    adapter,
+    target,
+    connectionStatus,
+  })
+  const context = useRef({
+    aui,
+    locale,
+    direction,
+    onUnavailable,
+    toolName,
+    placement,
+    onMove,
+    files,
+    renew,
+  })
   useEffect(() => {
-    context.current = { aui, locale, direction, onUnavailable, toolName }
-  }, [aui, direction, locale, onUnavailable, toolName])
+    context.current = {
+      aui,
+      locale,
+      direction,
+      onUnavailable,
+      toolName,
+      placement,
+      onMove,
+      files,
+      renew,
+    }
+  }, [
+    aui,
+    direction,
+    files,
+    locale,
+    onMove,
+    onUnavailable,
+    placement,
+    renew,
+    toolName,
+  ])
 
   const hostContext = (): McpUiHostContext => ({
     ...(toolName === undefined
@@ -181,32 +263,41 @@ export default function McpAppFrame({
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     userAgent: `${HOST_INFO.name}/${HOST_INFO.version}`,
     displayMode,
-    availableDisplayModes: [...AVAILABLE_DISPLAY_MODES],
+    availableDisplayModes: [...offered],
     platform: "web",
     deviceCapabilities: {
       touch: mediaMatches("(any-pointer: coarse)"),
       hover: mediaMatches("(any-hover: hover)"),
     },
-    // Inline, the view sits inside the message, clear of every device edge.
+    // In its message or the side panel, the view sits clear of every device
+    // edge.
     safeAreaInsets:
       displayMode === "fullscreen" ? viewportSafeAreaInsets() : NO_INSETS,
     styles: { variables: styleVariables() },
+    // Where the view fetches each file its call names, by argument.
+    ...(files ? { "aos/files": files.addresses } : {}),
+    // Inline, the view grows with its content; elsewhere it fills its space.
     ...(size === undefined
       ? {}
       : {
           containerDimensions:
-            displayMode === "fullscreen"
-              ? size
-              : {
+            displayMode === "inline"
+              ? {
                   width: size.width,
                   maxHeight: Math.round(window.innerHeight * MAX_HEIGHT_SHARE),
-                },
+                }
+              : size,
         }),
   })
   const latestHostContext = useRef(hostContext)
   useEffect(() => {
     latestHostContext.current = hostContext
   })
+  // Renewed addresses reach the view at once, before their old passes lapse.
+  useEffect(() => {
+    if (initialized)
+      bridgeRef.current?.setHostContext(latestHostContext.current())
+  }, [files, initialized])
 
   useEffect(() => {
     const element = container.current
@@ -226,11 +317,12 @@ export default function McpAppFrame({
   }, [])
 
   const fullscreen = displayMode === "fullscreen"
+  const inline = displayMode === "inline"
   const restoreFocus = useRef(false)
   const exitFullscreen = () => {
-    displayModeRef.current = "inline"
+    displayModeRef.current = placement
     restoreFocus.current = true
-    setDisplayMode("inline")
+    setDisplayMode(placement)
   }
   const latestExit = useRef(exitFullscreen)
   useEffect(() => {
@@ -285,6 +377,7 @@ export default function McpAppFrame({
         serverResources: {},
         message: { text: {} },
         logging: {},
+        ...(view.files ? { downloadFile: {} } : {}),
         sandbox: {
           ...(appliedCsp ? { csp: appliedCsp } : {}),
           ...(view.permissions ? { permissions: view.permissions } : {}),
@@ -306,10 +399,42 @@ export default function McpAppFrame({
     bridge.onreadresource = async (params) => {
       if (!admit()) refuse()
       const request = McpAppResourceReadRequestSchema.parse({ uri: params.uri })
-      return adapter.readResource({ ...target, ...request })
+      const { agentId } = target
+      return sharedReads(adapter)(
+        { agentId, toolName: context.current.toolName, uri: request.uri },
+        () => adapter.readResource({ ...target, ...request })
+      )
     }
-    bridge.onopenlink = async ({ url }) =>
-      admit() ? openAppLink(url) : { isError: true }
+    // The view's own files open and download by a fresh pass, never by the
+    // address it names.
+    bridge.onopenlink = async ({ url }) => {
+      if (!admit()) return { isError: true }
+      const { files, renew } = context.current
+      const argument = fileArgument(url, files)
+      if (argument === undefined) return openAppLink(url)
+      const fresh = await renew().catch(() => undefined)
+      const address = fresh?.addresses[argument]
+      return address === undefined
+        ? { isError: true }
+        : openAppLink(address, { ownFile: true })
+    }
+    bridge.ondownloadfile = async ({ contents }) => {
+      if (!admit()) return { isError: true }
+      const { files, renew } = context.current
+      const links = contents.flatMap((item) => {
+        if (item.type !== "resource_link") return []
+        const argument = fileArgument(item.uri, files)
+        return argument === undefined ? [] : [{ argument, name: item.name }]
+      })
+      if (links.length === 0 || links.length !== contents.length)
+        return { isError: true }
+      const fresh = await renew().catch(() => undefined)
+      const saved = links.every(({ argument, name }) => {
+        const address = fresh?.addresses[argument]
+        return address !== undefined && saveAppFile(address, name)
+      })
+      return saved ? {} : { isError: true }
+    }
     bridge.onmessage = async (params) => {
       const text = admit() ? appMessageText(params) : undefined
       if (text === undefined) return { isError: true }
@@ -322,13 +447,20 @@ export default function McpAppFrame({
       throw new Error("Model context updates are not supported")
     }
     bridge.onrequestdisplaymode = async ({ mode }) => {
+      const { onMove, placement: home } = context.current
       const granted = grantDisplayMode(
         mode,
         displayModeRef.current,
+        offeredDisplayModes(onMove !== undefined),
         bridge.getAppCapabilities()?.availableDisplayModes
       )
-      displayModeRef.current = granted
-      setDisplayMode(granted)
+      // Full screen grows the frame in place; the other placement is a fresh
+      // frame there, since moving this one would reload the view anyway.
+      if (granted !== "fullscreen" && granted !== home) onMove?.(granted)
+      else {
+        displayModeRef.current = granted
+        setDisplayMode(granted)
+      }
       return { mode: granted }
     }
 
@@ -424,7 +556,12 @@ export default function McpAppFrame({
         "overflow-hidden outline-none",
         fullscreen
           ? "fixed inset-0 z-50 m-0 size-auto max-h-none max-w-none border-0 bg-background p-0"
-          : ["w-full", view.prefersBorder && "rounded-lg border border-border"]
+          : inline
+            ? [
+                "w-full",
+                view.prefersBorder && "rounded-lg border border-border",
+              ]
+            : "size-full"
       )}
     >
       <iframe
@@ -436,15 +573,13 @@ export default function McpAppFrame({
         src={connected ? sandboxProxyUrl(allow) : undefined}
         className={cn(
           "block w-full border-0 bg-transparent",
-          fullscreen
-            ? "h-full"
-            : ["max-h-[80dvh]", height === undefined && "h-40"]
+          inline ? ["max-h-[80dvh]", height === undefined && "h-40"] : "h-full"
         )}
         // The sandbox page takes the same scheme, so neither frame paints an
         // opaque canvas behind a transparent view.
         style={{
           colorScheme: theme,
-          ...(fullscreen || height === undefined ? {} : { height }),
+          ...(inline && height !== undefined ? { height } : {}),
         }}
       />
       {fullscreen ? (

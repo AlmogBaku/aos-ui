@@ -100,6 +100,7 @@ describe("settled turn fold", () => {
       open: vi.fn(async () => ({ html: "<p>chart</p>" })),
       callTool: vi.fn(),
       readResource: vi.fn(),
+      renewFiles: vi.fn(),
     } satisfies McpAppAdapter
     render(
       <McpAppHostProvider adapter={apps} agentId="agent" sessionId="thread">

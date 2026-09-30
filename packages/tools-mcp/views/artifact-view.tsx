@@ -4,7 +4,7 @@ import {
   PictureInPicture2,
   RotateCw,
 } from "lucide-react"
-import { lazy, Suspense, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import { z } from "zod"
 
 import type { PresentArtifactResult } from "../../../shared/presentation/tools"
@@ -122,6 +122,18 @@ export function ArtifactView({
   const address = filesSchema.safeParse(context?.["aos/files"]).data?.path
   const file = useFile(address, value.filename, value.mimeType, previewLimit)
   const pip = context?.displayMode === "pip"
+  // In the side panel, Esc returns the view to its message, unless something
+  // in the view used the key first.
+  useEffect(() => {
+    if (!pip) return
+    const leave = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      event.preventDefault()
+      void app.requestDisplayMode({ mode: "inline" }).catch(ignore)
+    }
+    window.addEventListener("keydown", leave)
+    return () => window.removeEventListener("keydown", leave)
+  }, [app, pip])
   return (
     <div className="flex flex-col gap-3 p-3">
       <div className="flex items-start gap-2">

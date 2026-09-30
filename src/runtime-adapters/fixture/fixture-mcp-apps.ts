@@ -13,6 +13,31 @@ import {
 export const FIXTURE_MCP_APP_TOOL = "show_launch_board"
 const REFRESH_TOOL = "refresh_launch_board"
 
+/** Where the preview serves the files its views read, each by its basename. */
+export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files/"
+
+/**
+ * Withholds a call's files as the proxy does: every top-level string argument
+ * that starts with `/` leaves the view's input, which reads the file at an
+ * address instead. The preview's passes never expire.
+ */
+function withheldFiles(args: FixturePresentationCall["args"]) {
+  const toolInput: Record<string, unknown> = {}
+  const addresses: Record<string, string> = {}
+  for (const [name, value] of Object.entries(args)) {
+    if (typeof value !== "string" || !value.startsWith("/")) {
+      toolInput[name] = value
+      continue
+    }
+    const basename = value.slice(value.lastIndexOf("/") + 1)
+    addresses[name] = new URL(
+      `${FIXTURE_MCP_APP_FILES_PATH}${encodeURIComponent(basename)}`,
+      globalThis.location.href
+    ).href
+  }
+  return { toolInput, addresses }
+}
+
 /**
  * A deterministic App view that speaks the MCP Apps postMessage protocol by
  * hand: it initializes, shows the tool input and result the host sends, calls
@@ -141,10 +166,12 @@ async function presentationView(
     throw new Error(`${call.toolName} declares no recorded view`)
   const ui = (content._meta as { ui?: { csp?: McpAppView["csp"] } } | undefined)
     ?.ui
+  const { toolInput, addresses } = withheldFiles(call.args)
   return {
     html: content.text,
     ...(ui?.csp ? { csp: ui.csp } : {}),
-    toolInput: call.args,
+    toolInput,
+    ...(Object.keys(addresses).length ? { files: { addresses } } : {}),
     toolResult: {
       content: [
         { type: "text", text: JSON.stringify(FIXTURE_PRESENTATION_RESULT) },
@@ -199,6 +226,14 @@ export function createFixtureMcpAppAdapter(): McpAppAdapter {
       return (
         recorded ?? { contents: [{ uri, mimeType: "text/plain", text: "" }] }
       )
+    },
+    async renewFiles({ toolCallId }) {
+      const presentation = fixturePresentationCall(toolCallId)
+      return {
+        addresses: presentation
+          ? withheldFiles(presentation.args).addresses
+          : {},
+      }
     },
   }
 }

@@ -34,6 +34,10 @@ import type { ComposerLocalCommand } from "@/components/assistant-ui/composer-fe
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
 import { workspaceHref } from "@/lib/workspace-routing"
+import {
+  McpAppPipPanel,
+  useMcpAppPip,
+} from "@/components/mcp-apps/mcp-app-card"
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import {
   AosToolPresentation,
@@ -220,6 +224,7 @@ function ArtifactWorkspaceBridge({
         adapter={bundle.mcpApps}
         agentId={agentId}
         sessionId={artifactThreadId}
+        connectionStatus={bundle.connectionStatus}
       >
         <ArtifactWorkspaceContent {...shell} locale={locale}>
           {children}
@@ -234,15 +239,23 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
   ...shell
 }: WorkspaceShellProps) {
   const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
+  // An App view moved to the side panel takes the Artifact viewer's place.
+  const pip = useMcpAppPip(shell.locale)
 
   return (
     <WorkspaceShell
       {...shell}
       artifactOutputs={<ArtifactOutputs />}
-      artifactViewer={<ArtifactViewerContent />}
-      artifactViewerOpen={selectedArtifact !== null}
-      artifactViewerLabel={labels.viewerLabel}
-      onCloseArtifactViewer={closeArtifact}
+      artifactViewer={
+        pip ? (
+          <McpAppPipPanel locale={shell.locale} />
+        ) : (
+          <ArtifactViewerContent />
+        )
+      }
+      artifactViewerOpen={pip !== undefined || selectedArtifact !== null}
+      artifactViewerLabel={pip?.title ?? labels.viewerLabel}
+      onCloseArtifactViewer={pip?.leave ?? closeArtifact}
     >
       <ArtifactDataUI />
       {children}
