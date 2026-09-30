@@ -40,6 +40,16 @@ export const presentationViewNames = Object.values(presentationViews).map(
 )
 
 /**
+ * Where the artifact view reads pdf.js's own files from the `aos-ui` server:
+ * its worker, character maps, standard fonts, and image decoders, each by its
+ * path in the pdf.js package. The view's sandbox fetches nothing else.
+ */
+export const PDFJS_RESOURCE_URI = "ui://aos-ui/pdfjs/"
+
+/** The pdf.js worker, rebuilt as a classic script the view starts itself. */
+export const PDFJS_WORKER_FILE = "pdf.worker.js"
+
+/**
  * Where the fixture preview reads the `aos-ui` server's own answers: its
  * `tools/list` tools and each view's `resources/read` result, recorded from
  * the real server when the app is built or served.

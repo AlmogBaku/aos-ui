@@ -2,7 +2,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { once } from "node:events"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
@@ -33,9 +33,16 @@ function start(directory: string) {
   )
 }
 
-beforeAll(async () => {
+function writeViews(directory: string) {
   for (const name of presentationViewNames)
-    writeFileSync(join(views, `${name}.html`), `<title>${name}</title>`)
+    writeFileSync(join(directory, `${name}.html`), `<title>${name}</title>`)
+}
+
+beforeAll(async () => {
+  writeViews(views)
+  mkdirSync(join(views, "pdfjs/wasm"), { recursive: true })
+  writeFileSync(join(views, "pdfjs/pdf.worker.js"), "self.onmessage = null")
+  writeFileSync(join(views, "pdfjs/wasm/jbig2.wasm"), Uint8Array.of(0, 97))
   child = start(views)
   const lines = createInterface({ input: child.stdout! })
   const [line] = (await Promise.race([
@@ -74,22 +81,30 @@ describe("tools-mcp HTTP entry", () => {
     const { contents } = await client.readResource({
       uri: "ui://aos-ui/map",
     })
+    const decoder = await client.readResource({
+      uri: "ui://aos-ui/pdfjs/wasm/jbig2.wasm",
+    })
     await client.close()
 
     expect(contents[0]).toMatchObject({ text: "<title>map</title>" })
+    expect(decoder.contents[0]).toMatchObject({ blob: "AGE=" })
     expect(tools).toHaveLength(4)
     expect(result.structuredContent).toMatchObject({
       value: { filename: "report.pdf" },
     })
   })
 
-  it("refuses to start without the built views", async () => {
-    const empty = mkdtempSync(join(tmpdir(), "aos-ui-no-views-"))
-    const missing = start(empty)
+  it.each([
+    ["the built views", () => undefined],
+    ["pdf.js's files", writeViews],
+  ])("refuses to start without %s", async (_missing, prepare) => {
+    const directory = mkdtempSync(join(tmpdir(), "aos-ui-no-views-"))
+    prepare(directory)
+    const missing = start(directory)
     let stderr = ""
     missing.stderr!.on("data", (chunk: Buffer) => (stderr += String(chunk)))
     const [code] = (await once(missing, "exit")) as [number]
-    rmSync(empty, { recursive: true, force: true })
+    rmSync(directory, { recursive: true, force: true })
 
     expect(code).toBe(1)
     expect(stderr).toContain("bun run tools-mcp:build")

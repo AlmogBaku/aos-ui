@@ -1,14 +1,20 @@
 import tailwind from "@tailwindcss/postcss"
 import react from "@vitejs/plugin-react"
+import { readdir, readFile } from "node:fs/promises"
+import { createRequire } from "node:module"
 import path from "node:path"
 import { build, type Rolldown } from "vite"
 
 import {
+  PDFJS_WORKER_FILE,
   presentationViewNames,
   type PresentationViewName,
 } from "../../../shared/presentation/views"
 
 const VIEWS_DIRECTORY = import.meta.dirname
+const PDFJS_DIRECTORY = path.dirname(
+  createRequire(import.meta.url).resolve("pdfjs-dist/package.json")
+)
 /** Where `bun run tools-mcp:build` writes the views the server loads. */
 export const VIEWS_OUTPUT_DIRECTORY = path.resolve(
   VIEWS_DIRECTORY,
@@ -83,10 +89,7 @@ export async function buildView(name: PresentationViewName): Promise<string> {
       },
     },
   })
-  const bundles = (
-    Array.isArray(output) ? output : [output]
-  ) as Rolldown.RolldownOutput[]
-  const files = bundles.flatMap((bundle) => bundle.output)
+  const files = outputFiles(output)
   const scripts: string[] = []
   const styles: string[] = []
   const stray: string[] = []
@@ -102,6 +105,12 @@ export async function buildView(name: PresentationViewName): Promise<string> {
   return document(scripts[0]!, styles.join("\n"))
 }
 
+function outputFiles(output: Awaited<ReturnType<typeof build>>) {
+  return (
+    (Array.isArray(output) ? output : [output]) as Rolldown.RolldownOutput[]
+  ).flatMap((bundle) => bundle.output)
+}
+
 /** Every presentation view, keyed by name. */
 export async function buildViews(): Promise<
   Record<PresentationViewName, string>
@@ -109,4 +118,61 @@ export async function buildViews(): Promise<
   const views = {} as Record<PresentationViewName, string>
   for (const name of presentationViewNames) views[name] = await buildView(name)
   return views
+}
+
+/**
+ * The artifact view starts pdf.js's worker as a classic script from a blob URL
+ * of its text. pdf.js ships the worker as a module, so the same bundler
+ * rewrites it as one classic script, which starts itself on load;
+ * `import.meta.url` becomes the script's own address.
+ */
+async function buildPdfWorker(): Promise<Uint8Array> {
+  const files = outputFiles(
+    await build({
+      configFile: false,
+      logLevel: "warn",
+      root: VIEWS_DIRECTORY,
+      mode: "production",
+      define: { "import.meta.url": "self.location.href" },
+      build: {
+        write: false,
+        emptyOutDir: false,
+        minify: true,
+        reportCompressedSize: false,
+        lib: {
+          entry: path.join(PDFJS_DIRECTORY, "build/pdf.worker.min.mjs"),
+          formats: ["iife"],
+          name: "pdfjsWorker",
+        },
+        rolldownOptions: { output: { codeSplitting: false } },
+      },
+    })
+  )
+  const [worker] = files
+  if (files.length !== 1 || worker?.type !== "chunk")
+    throw new Error(
+      `The pdf.js worker did not build into one script: ${files.map((file) => file.fileName).join(", ")}`
+    )
+  return new TextEncoder().encode(worker.code)
+}
+
+/**
+ * The pdf.js data the worker asks the artifact view for by name, and the two
+ * decoders it compiles for JBIG2, CCITT, and JPEG 2000 images. The colour
+ * decoder, `qcms_bg.wasm`, loads only when the worker fetches for itself, which
+ * the view's sandbox cannot; nothing loads `quickjs-eval.wasm`.
+ */
+const PDFJS_DATA_DIRECTORIES = ["cmaps", "standard_fonts"]
+const PDFJS_DECODERS = ["wasm/jbig2.wasm", "wasm/openjpeg.wasm"]
+
+/** Every pdf.js file the artifact view reads, keyed by its path. */
+export async function buildPdfjs(): Promise<Map<string, Uint8Array>> {
+  const names = [...PDFJS_DECODERS]
+  for (const directory of PDFJS_DATA_DIRECTORIES)
+    for (const name of await readdir(path.join(PDFJS_DIRECTORY, directory)))
+      names.push(`${directory}/${name}`)
+  const files = new Map([[PDFJS_WORKER_FILE, await buildPdfWorker()]])
+  for (const name of names)
+    files.set(name, await readFile(path.join(PDFJS_DIRECTORY, name)))
+  return files
 }

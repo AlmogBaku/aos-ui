@@ -3,8 +3,15 @@ import {
   registerAppResource,
   registerAppTool,
 } from "@modelcontextprotocol/ext-apps/server"
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import {
+  McpServer,
+  ResourceTemplate,
+} from "@modelcontextprotocol/sdk/server/mcp.js"
+import {
+  ErrorCode,
+  McpError,
+  type CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 
 import {
@@ -14,6 +21,8 @@ import {
   type PresentationToolName,
 } from "../../shared/presentation/tools"
 import {
+  PDFJS_RESOURCE_URI,
+  PDFJS_WORKER_FILE,
   PRESENTATION_VIEW_MIME_TYPE,
   presentationViews,
   type PresentationView,
@@ -22,6 +31,15 @@ import {
 
 /** Each presentation view's built, self-contained HTML document. */
 export type PresentationViewDocuments = Record<PresentationViewName, string>
+
+/** The pdf.js files the artifact view reads, keyed by their path. */
+export type PdfjsFiles = ReadonlyMap<string, Uint8Array>
+
+/** What the server serves: the built views, and the pdf.js files beside them. */
+export type ToolsServerFiles = {
+  views: PresentationViewDocuments
+  pdfjs?: PdfjsFiles
+}
 
 const SAFE_OUTPUT =
   "Never emit executable HTML, scripts, or browser-side code; Mermaid belongs only in fenced mermaid blocks."
@@ -92,6 +110,43 @@ function registerView(server: McpServer, view: PresentationView, html: string) {
 }
 
 /**
+ * Serves each pdf.js file at `ui://aos-ui/pdfjs/<path>`: the worker as script
+ * text, every other file as bytes. A view asks for them by name, so they stay
+ * out of the resource list.
+ */
+function registerPdfjs(server: McpServer, files: PdfjsFiles) {
+  server.registerResource(
+    "aos-ui pdf.js file",
+    new ResourceTemplate(`${PDFJS_RESOURCE_URI}{+path}`, { list: undefined }),
+    {},
+    (uri, variables) => {
+      const name = String(variables.path)
+      const bytes = files.get(name)
+      if (!bytes)
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `No pdf.js file at ${uri.href}`
+        )
+      return {
+        contents: [
+          name === PDFJS_WORKER_FILE
+            ? {
+                uri: uri.href,
+                mimeType: "text/javascript",
+                text: new TextDecoder().decode(bytes),
+              }
+            : {
+                uri: uri.href,
+                mimeType: "application/octet-stream",
+                blob: Buffer.from(bytes).toString("base64"),
+              },
+        ],
+      }
+    }
+  )
+}
+
+/**
  * The stateless AOS UI tool server. The SDK parses every call against the
  * tool's Zod schema, refinements included, and reports a failed parse as a
  * tool error, so handlers only ever see validated input. Each tool declares
@@ -101,13 +156,13 @@ function registerView(server: McpServer, view: PresentationView, html: string) {
  */
 export function createToolsServer({
   views,
-}: {
-  views: PresentationViewDocuments
-}): McpServer {
+  pdfjs = new Map(),
+}: ToolsServerFiles): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
   for (const view of Object.values(presentationViews))
     registerView(server, view, views[view.name])
+  registerPdfjs(server, pdfjs)
 
   for (const [name, definition] of Object.entries(
     presentationToolDefinitions

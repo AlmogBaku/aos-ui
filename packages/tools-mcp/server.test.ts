@@ -16,10 +16,16 @@ const views = {
   artifact: "<!doctype html><title>artifact</title>",
 }
 
+/** Stand-ins for pdf.js's files, which `views/build.test.ts` also covers. */
+const pdfjs = new Map([
+  ["pdf.worker.js", new TextEncoder().encode("self.onmessage = null")],
+  ["wasm/jbig2.wasm", Uint8Array.of(0, 97, 115, 109)],
+])
+
 beforeAll(async () => {
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()
-  await createToolsServer({ views }).connect(serverTransport)
+  await createToolsServer({ views, pdfjs }).connect(serverTransport)
   await client.connect(clientTransport)
 })
 
@@ -129,6 +135,40 @@ describe("MCP App views", () => {
       ])
     }
   )
+})
+
+describe("pdf.js files", () => {
+  // The artifact view's sandbox fetches nothing, so it reads pdf.js's worker,
+  // data, and decoders by name; "lists one App resource per view" keeps them
+  // out of the resource list the fixture snapshot reads.
+  it("serves the worker as script text, other files as bytes, and nothing else", async () => {
+    const worker = await client.readResource({
+      uri: "ui://aos-ui/pdfjs/pdf.worker.js",
+    })
+    const decoder = await client.readResource({
+      uri: "ui://aos-ui/pdfjs/wasm/jbig2.wasm",
+    })
+
+    expect(worker.contents).toEqual([
+      {
+        uri: "ui://aos-ui/pdfjs/pdf.worker.js",
+        mimeType: "text/javascript",
+        text: "self.onmessage = null",
+      },
+    ])
+    expect(decoder.contents).toEqual([
+      {
+        uri: "ui://aos-ui/pdfjs/wasm/jbig2.wasm",
+        mimeType: "application/octet-stream",
+        blob: "AGFzbQ==",
+      },
+    ])
+    await expect(
+      client.readResource({ uri: "ui://aos-ui/pdfjs/wasm/quickjs-eval.wasm" })
+    ).rejects.toThrow(
+      /No pdf\.js file at ui:\/\/aos-ui\/pdfjs\/wasm\/quickjs-eval\.wasm/u
+    )
+  })
 })
 
 describe("render_chart", () => {
