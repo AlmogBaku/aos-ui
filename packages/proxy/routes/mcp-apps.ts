@@ -352,7 +352,7 @@ export function registerMcpAppRoutes(
           runtime,
           grant: files,
           target: { agentId, sessionId },
-          subject: subjectOf(runtime, target),
+          subject: () => subjectOf(runtime, target),
           argument,
           allow: limit("files"),
           // The operator listener has no login of its own.

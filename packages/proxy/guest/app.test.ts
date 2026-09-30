@@ -970,4 +970,21 @@ describe("guest MCP App files", () => {
     expect(crossed.status).toBe(401)
     expect(await crossed.text()).toBe("")
   })
+
+  it("refuses a read by invitation alone of an Artifact the guest projection refuses", async () => {
+    const subject = fileHarness({ guest: { agentFolder: true } })
+    const invite = await token(subject.invitationService)
+    subject.artifact.mockResolvedValue({
+      bytes: Uint8Array.of(9, 8, 7),
+      mimeType: "Not A Type",
+      filename: "briefing.mp3",
+    })
+
+    const bytes = await subject.app.request(`${guestArtifact()}/files/path`, {
+      headers: headers(invite),
+    })
+
+    expect(bytes.status).toBe(503)
+    expect(await bytes.text()).toBe("")
+  })
 })

@@ -295,21 +295,22 @@ function describedFile(
  * and stops with the client. An Artifact answers its whole bytes, typed the
  * same way.
  */
-export async function answerAppFile(input: {
+export async function answerAppFile<Login>(input: {
   request: Request
   runtime: ServerRuntime
   grant: AppFileGrant
   target: { agentId: string; sessionId: string }
-  subject: AppSubject
+  /** The subject, read under the login that admitted a request with no pass. */
+  subject: (login?: Login) => AppSubject
   argument: string
   allow: (target: AppTarget) => boolean
-  /** Whether the listener's own login admits a request that sent no pass. */
-  login: () => Promise<boolean>
+  /** The listener's own login for a request that sent no pass; none answers 401. */
+  login: () => Promise<Login | undefined>
   /** The Session the target names; one the runtime lacks throws as gone. */
   scope: () => Promise<SessionScope>
 }): Promise<Response> {
-  const { request, runtime, grant, subject } = input
-  const target: AppTarget = { ...input.target, ...subjectId(subject) }
+  const { request, runtime, grant } = input
+  const target: AppTarget = { ...input.target, ...subjectId(input.subject()) }
   const { logger, passes, calls, servers } = grant.options
   const pass = new URL(request.url).searchParams.get("pass")
   const headers = new Headers({ "content-security-policy": SANDBOX })
@@ -324,11 +325,13 @@ export async function answerAppFile(input: {
     logger.warn({ reason, ...target }, "app_file.unavailable")
     return empty(503)
   }
+  const login = pass === null ? await input.login() : undefined
   const admitted =
     pass === null
-      ? await input.login()
+      ? login !== undefined
       : await passes.opens(pass, { role: grant.role, ...target })
   if (!admitted) return empty(401)
+  const subject = input.subject(login)
   if (!input.allow(target)) return empty(429)
   try {
     const scope = await input.scope()

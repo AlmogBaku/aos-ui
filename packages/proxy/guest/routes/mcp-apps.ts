@@ -28,8 +28,7 @@ import { projectedArtifact } from "./content"
  * The subject a guest path names. An Artifact reads as the guest content
  * route reads it; given the request's `authorization`, its name and type are
  * the projected ones, and one the projection refuses fails as unavailable.
- * A file read by pass alone has no authorization, and its pass was earned by
- * an `open` that projected the same Artifact.
+ * A file read by pass alone has no authorization.
  */
 function guestSubject(
   runtime: ServerRuntime,
@@ -46,6 +45,8 @@ function guestSubject(
         scope.providerSessionId,
         artifactId
       )
+      // The pass is the authorization: only a filtered open or renewal of this
+      // Artifact earned it, and it never outlives the invitation.
       if (!authorization) return artifact
       const projected = projectedArtifact(artifact, agentId, ref, authorization)
       if (!projected)
@@ -95,15 +96,15 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
           runtime,
           grant: files,
           target: { agentId, sessionId: ref },
-          subject: guestSubject(runtime, target),
+          subject: (authorization) =>
+            guestSubject(runtime, target, authorization),
           argument,
           allow: limit("files"),
           login: async () => {
             const identity = await routes.authenticate(context.req.raw)
-            return Boolean(
-              identity &&
-              routes.authorize(identity, agentId, ref, "artifacts:read")
-            )
+            return identity
+              ? routes.authorize(identity, agentId, ref, "artifacts:read")
+              : undefined
           },
           scope: async () => {
             const resolved = await runtime.resolveInvitedSession(agentId, ref)
