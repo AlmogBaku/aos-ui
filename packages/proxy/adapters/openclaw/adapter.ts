@@ -11,6 +11,7 @@ import {
 } from "../../../protocol"
 import type {
   ServerAttachmentStage,
+  ServerFileReader,
   ServerMcpApps,
   ServerTurnEngine,
   ServerRuntime,
@@ -36,6 +37,7 @@ import {
 import { OpenClawContentPublicError } from "./content"
 import { openClawCapabilities } from "./capabilities"
 import { stageOpenClawChatAttachments } from "./content"
+import { createOpenClawFileReader } from "./file-reader"
 import {
   createOpenClawHistory,
   OpenClawHistoryUnavailableError,
@@ -135,8 +137,13 @@ type OpenClawServerAdapterOptions = Readonly<{
   turns: ServerTurnEngine
   hiddenAgentIds?: readonly string[]
   subscribeSession: OpenClawHistorySubscription
-  /** The gateway's HTTP origin, where a ticketed media download resolves. */
+  /**
+   * The gateway's HTTP origin, where a ticketed media download and an MCP
+   * App's files resolve.
+   */
   gatewayOrigin?: string
+  /** The device token an MCP App's file read presents, read afresh each time. */
+  deviceToken?: () => Promise<string>
   fetch?: typeof fetch
   /** Shared with the turn engine so live and stored tool names agree. */
   mcpToolNames?: OpenClawMcpToolNames
@@ -150,6 +157,8 @@ export class OpenClawServerAdapter implements ServerRuntime {
   readonly link: ServerLink
   readonly turns: ServerTurnEngine
   readonly mcpApps: ServerMcpApps
+  /** Absent without the gateway's origin and a device token. */
+  readonly readFile?: ServerFileReader
   readonly #workspace
   readonly #history
   readonly #client: OpenClawGatewayClient
@@ -181,9 +190,19 @@ export class OpenClawServerAdapter implements ServerRuntime {
           this.#workspace.getSession(agentId, sessionKey),
         mcpAppViewId: (agentId, sessionKey, toolCallId) =>
           this.#history.mcpAppViewId(agentId, sessionKey, toolCallId),
+        mcpToolCall: (agentId, sessionKey, toolCallId) =>
+          this.#history.mcpToolCall(agentId, sessionKey, toolCallId),
       },
       start: () => this.#start(),
     })
+    if (options.gatewayOrigin && options.deviceToken)
+      this.readFile = createOpenClawFileReader({
+        client: options.client,
+        start: () => this.#start(),
+        origin: options.gatewayOrigin,
+        deviceToken: options.deviceToken,
+        fetch: this.#fetch,
+      })
   }
 
   resolveProviderSessionId(agentId: string, publicSessionId: string) {

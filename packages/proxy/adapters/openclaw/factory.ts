@@ -226,6 +226,9 @@ export function composeOpenClawRuntime({
       client,
       turns,
       gatewayOrigin: gatewayHttpOrigin(baseUrl),
+      // Read for each file through `credentials`, which registers what it
+      // reads with the log masker.
+      deviceToken: async () => (await credentials()).deviceToken,
       mcpToolNames,
       subscribeSession: async (agentId, sessionKey, onInvalidate) => {
         const lease = await subscriptions!.acquire(

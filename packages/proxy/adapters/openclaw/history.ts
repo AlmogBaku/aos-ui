@@ -10,6 +10,7 @@ import {
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
 import { validIdentifier } from "../../core/identifier"
+import type { McpToolCall } from "../../core/runtime"
 import type { JsonValue } from "../json-value"
 import {
   openClawArtifactReceipt,
@@ -297,6 +298,32 @@ function storedMcpAppView(rows: readonly unknown[], toolCallId: string) {
   return undefined
 }
 
+/**
+ * The native name and arguments of the call `toolCallId` names among these
+ * rows, as OpenClaw stored them. OpenClaw stores the assistant row when its
+ * message ends (`src/agents/sessions/agent-session-base.ts:405`), before its
+ * tools run (`packages/agent-core/src/agent-loop.ts:353`), so a running call
+ * is there too.
+ */
+function storedToolCall(rows: readonly unknown[], toolCallId: string) {
+  for (const row of rows) {
+    if (!record(row) || row.role !== "assistant" || !Array.isArray(row.content))
+      continue
+    for (const block of row.content)
+      if (
+        record(block) &&
+        block.type === "toolCall" &&
+        identifier(block.id) === toolCallId
+      ) {
+        const name = identifier(block.name)
+        return name && record(block.arguments)
+          ? { name, input: block.arguments }
+          : undefined
+      }
+  }
+  return undefined
+}
+
 /** The published receipt artifact `artifactId` names among these rows. */
 function publishedReceipt(rows: readonly unknown[], artifactId: string) {
   for (const outcome of toolOutcomes(rows).values())
@@ -364,6 +391,15 @@ export type OpenClawHistoryOperations = Readonly<{
     sessionKey: string,
     toolCallId: string
   ): Promise<string | undefined>
+  /**
+   * This Session's own `toolCallId` call with its stored arguments, when the
+   * Session's names list its tool.
+   */
+  mcpToolCall(
+    agentId: string,
+    sessionKey: string,
+    toolCallId: string
+  ): Promise<McpToolCall | undefined>
 }>
 
 export function createOpenClawHistory(input: {
@@ -533,6 +569,16 @@ export function createOpenClawHistory(input: {
       scanHistory(agentId, sessionKey, (rows) =>
         storedMcpAppView(rows, toolCallId)
       ),
+    // The stored arguments, never the projection the browser reads.
+    async mcpToolCall(agentId, sessionKey, toolCallId) {
+      const call = await scanHistory(agentId, sessionKey, (rows) =>
+        storedToolCall(rows, toolCallId)
+      )
+      const tool =
+        call &&
+        (await input.mcpToolNames?.listed(agentId, sessionKey, call.name))
+      return tool && { ...tool, input: call.input }
+    },
     async activity(agentId, sessionKey) {
       const history = await authoritativeHistory(agentId, sessionKey, 1, 0)
       return {
