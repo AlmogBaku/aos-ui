@@ -169,6 +169,30 @@ A file answer:
 - File reads and renewals have their own limit of about 50 requests per second
   per call, apart from the view's 10; excess requests answer 429.
 
+### Published attachments
+
+A file an Agent publishes as an attachment opens in the
+[configured viewer](configuration.md#mcp-app-files), with no tool call. Its
+routes sit beside a call's, under the same roots, at
+`…/sessions/:sessionId/artifacts/:artifactId/app`:
+
+- `GET …/app` opens the view: the viewer's resource, an empty `toolInput`,
+  and a `toolResult` carrying the attachment's name and type as the proxy
+  reads them from the runtime, never its path. `files` holds one address,
+  `path`, for its bytes.
+- `POST …/app/resources/read` reads a `ui://` resource of the viewer's server
+  only. There is no `tools/call`; it answers 404.
+- `POST …/app/files` renews the address, and `GET …/app/files/path` reads the
+  bytes under a pass that names the attachment, so a call's pass never opens
+  an attachment, nor the other way round. Reads follow the rules above, but
+  no folder applies and a range is ignored.
+- An attachment the Session lacks, or that the provider has pruned, answers
+  404, as its content route does. One that is there with no viewer to open
+  it in answers 503: a runtime that cannot read a server's resource without
+  a call (OpenClaw), or a viewer server out of reach.
+- A guest opens only the invited Session's attachments, by its invitation,
+  and sees the name and type the guest content route would.
+
 ## Presentation
 
 Where the proxy reads the view itself (Hermes, OpenCode), it knows from the

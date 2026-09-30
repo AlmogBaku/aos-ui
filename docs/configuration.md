@@ -400,6 +400,9 @@ mcpApps:
       deny: [/srv/reports/drafts]
     guest:
       allow: [/srv/reports/shared]
+    viewer:
+      server: aos-ui
+      resource: ui://aos-ui/artifact
 ```
 
 - `servers` names the MCP servers whose calls may name files, as the harness
@@ -431,6 +434,13 @@ mcpApps:
   reports it, the real path the runtime will read, so a symbolic link cannot
   lead out of an allowed folder. Both are judged again on every request. A
   guest reads files only on a runtime that reports real paths.
+- `viewer` names the view a published attachment opens in: `server` is an
+  MCP server as the harness configures it, and `resource` one of its `ui://`
+  resources. The default is `aos-ui`'s `ui://aos-ui/artifact`, and `aos-ui`
+  again matches `aos_ui`. The view reads only that server's resources and
+  calls no tool. Folders do not apply to an attachment: its bytes are the
+  ones the Agent published. A runtime that cannot read the viewer, or a
+  viewer out of reach, leaves the attachment on its card with no view.
 - The folders themselves are compared as written, and a link among them is
   never followed. Where the runtime reports real paths, a folder that sits
   behind a symbolic link, the Agent's own included, serves nothing until its

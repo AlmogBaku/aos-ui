@@ -552,11 +552,16 @@ renders as an App card. Implement the optional `ServerRuntime.mcpApps`
 | `toolCall?(scope, toolCallId, signal?)`            | The stored call: its server, tool, and full input. Absent when unavailable.        |
 | `callTool(scope, toolCallId, name, args)`          | A view's `tools/call`, limited to its own server's app-visible tools.              |
 | `readResource(scope, toolCallId, uri)`             | A view's `resources/read` on its own server.                                       |
+| `serverResource?(scope, server, uri, signal?)`     | A named server's `ui://` resource with no call, for a published attachment's view. |
 
 Every method first finds the `toolCallId` in this Session's own native
 history, or among the running calls `observe` heard for that Session; the
 browser never names a server, tool, or resource URI. An unknown or foreign call
 reads as not found. A host that holds its views natively leaves `observe` out.
+`serverResource` is the one exception: it names a server, the configured
+viewer's, and never a call. The fallback implements it; leave it out where the
+native API reads a resource only for a call, as OpenClaw's does, and a
+published attachment then opens with no view.
 
 Map the native MCP Apps API when the runtime has one (OpenClaw's
 `mcp.app.view`, `mcp.app.callTool`, `mcp.app.readResource`). Otherwise build
