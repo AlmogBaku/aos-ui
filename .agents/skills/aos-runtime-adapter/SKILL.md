@@ -31,7 +31,7 @@ and `TURN-LIFECYCLE.md` for a worked example.
 | `state_update` idle `stopReason` / `usage`, `_meta.aos.cost`, failure `provider` / `model` | `turn-ended` `stopReason`, `usage`, `cost`; `turn-failed` `provider`, `model` | Fill when the provider reports them; never guess |
 | `usage_update` | `SessionContextResponse` (`core/channel.ts` `reportUsage`) | Implement `context(agentId, publicSessionId)` (`core/runtime.ts:247`) or declare unavailable |
 | `session/request_permission` / `elicitation/create` | `PendingRequest` (`translate/requests.ts`, incl. `_allow_session`, multi-select `items.enum`) | Emit `PendingRequest` from `interactions.ts` |
-| `resource_link` `artifact://<id>` chunk | `artifact-published` event with `AosArtifactDescriptor` (`translate/turn-events.ts`); history `data` part `aos.artifact` (`translate/history.ts:33`) | Emit from `run.ts`/`history.ts` on a `present_artifact` receipt, a native `MEDIA:` line, or a trusted delivery receipt; implement `artifact()` (`core/runtime.ts:264-268`) |
+| `resource_link` `artifact://<id>` chunk | `artifact-published` event with `AosArtifactDescriptor` (`translate/turn-events.ts`); history `data` part `aos.artifact` (`translate/history.ts:33`) | Emit from `run.ts`/`history.ts` on a native `MEDIA:` line or a trusted delivery receipt; implement `artifact()` (`core/runtime.ts:264-268`); `present_artifact` is an MCP App and no longer emits a descriptor |
 | `_aos/steer_accepted` | `steer` handle + `steer-accepted` event (`core/session-coordinator.ts:809-817`) | Implement `handle.steer` |
 | `session_info_update` `{status, archived, unread}` | Catalog rows (`SessionRows`) | Implement `getSession` / `listSessions` |
 | `_aos/catalog_invalidated` | `subscribeCatalogChanges` callback | Implement `subscribeCatalogChanges` on `ServerRuntime` |
@@ -92,26 +92,30 @@ Treat attachment and media planes as different public concepts:
 | Native input | Public projection | Read authority |
 | --- | --- | --- |
 | User attachment/context envelope such as Hermes `@file:` | User message attachment | The adapter's admitted, Session-scoped attachment record |
-| `aos-ui` `present_artifact` receipt `{ok, type: "aos.artifact", artifact: {path, filename, mimeType?}}` | Assistant Artifact | The receipt, after `safeArtifactPath` (`core/artifact-path.ts`) |
+| `aos-ui` `present_artifact` call (MCP App; result `{ok, type: "aos.presentation", kind: "present_artifact", value: {filename, mimeType?}}`) | MCP App card with live file view | Proxy file pass via `mcpApps` file route; folder rules govern which paths |
 | Harness `MEDIA:/absolute/path` line (Hermes, OpenClaw) | Assistant Artifact; line removed from prose | The line, after `safeArtifactPath`; `MediaLineFilter` (`core/media-lines.ts`) |
 | Successful delivery tool output such as Hermes text-to-speech | Assistant Artifact | The trusted native tool receipt |
 | Path mentioned in prose, or an unclaimed `MEDIA:` line | Nothing, or `[Media unavailable]` | None |
+
+Note: an older `present_artifact` receipt of the form
+`{ok: true, type: "aos.artifact", artifact: {path, filename, mimeType?}}`
+is no longer authoritative for an Artifact descriptor. Ignore it.
 
 Parse attachment envelopes server-side. Preserve authorship and safe filename,
 MIME, size, and opaque identity; remove native paths, injected context,
 filesystem warnings, and private retrieval URLs.
 
-An Artifact reaches the browser as a `resource_link` content block whose `uri`
-is `artifact://<id>`, and is fetched over
-`GET /api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId`
+An Artifact from `MEDIA:` or a trusted delivery tool reaches the browser as a
+`resource_link` content block whose `uri` is `artifact://<id>`, and is fetched
+over `GET /api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId`
 (`packages/proxy/routes/content.ts:87`). Keep the reference in a private
 Agent-and-Session-scoped mapping; expose a deterministic opaque Artifact ID.
 `artifact()` resolves the id only within that Session, reads through the
 harness's own file interface, and caps bytes at `MAX_ARTIFACT_BYTES` (25 MiB).
 Pass every native tool name through `canonicalAosToolName`
 (`core/aos-tool-names.ts`) so prefixed `aos-ui` MCP tools reach the browser as
-`render_chart`, `render_map`, `render_stats`, and `present_artifact`; the first
-three are MCP Apps, flagged at call start by `withMcpApps`. When the
+`render_chart`, `render_map`, `render_stats`, and `present_artifact`; all four
+are MCP Apps, flagged at call start by `withMcpApps`. When the
 harness loads MCP servers per Session, enable `aos-ui` inside the adapter before
 each turn and fail the turn if that fails (OpenClaw `#enableAosTools`,
 `adapters/openclaw/run.ts:1253-1272`).

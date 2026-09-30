@@ -174,13 +174,29 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
 
 ## A published Artifact cannot load
 
-- Confirm the active conversation branch contains an explicit `present_artifact` result, an assistant `MEDIA:/absolute/path` line (Hermes), or a successful trusted provider-native delivery receipt, such as Hermes text-to-speech.
-- `present_artifact` and `MEDIA:` take an absolute path. AOS refuses a relative path, a path that traverses with `..`, and any path naming a credential file such as `.env`, `auth.json`, or `config.yaml`.
-- OpenCode reads only files inside the configured project directory; a path outside it reads as unavailable. OpenClaw reads only the Session's workspace files, at most 256 KiB and only text or common images; OpenClaw's native media appears after a reload.
+The proxy logs `app_file.refused` with a reason code for each refusal, and `app_file.unavailable` when the runtime does not answer. It never logs the path. Read reason codes in `packages/proxy/routes/app-files.ts`.
+
+Common causes and fixes:
+
+- **`no_reader`**: the `aos-ui` MCP server is not in `mcpApps.files.servers`. The default value is `["aos-ui"]`; confirm the proxy configuration includes it and that the server name matches.
+- **No folder**: no folder rule is configured for the Agent. Operators get the Agent's working folder by default in Hermes and OpenClaw; guests get nothing until `mcpApps.files.guest` is configured.
+- **`denied` / `real_path_denied`**: the path is outside the folder rules, names a credential file (`.env`, `auth.json`, `config.yaml`, and similar), or matches the built-in deny list. The deny list cannot be lifted by configuration.
+- **`missing`**: the file does not exist at the path the Agent named. Re-run the tool after the file is written.
+- **`runtime_status`**: the runtime did not answer in time. Check the runtime and the proxy logs for the underlying error.
+- **OpenCode**: file serving is not yet supported. The card shows "Can't reach this file".
+- **OpenClaw**: sandboxed Sessions and Sessions on machines other than the one running the proxy cannot reach files. Guests get no file addresses on OpenClaw.
+
+For `MEDIA:` line Artifacts and trusted native delivery Artifacts (Hermes text-to-speech):
+- `MEDIA:` and `present_artifact` take an absolute path. AOS refuses a relative path, a path that traverses with `..`, and any path naming a credential file.
 - Artifacts larger than 25 MiB are not read back.
 - Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
-- HTML preview loads no external assets; an Artifact that needs one must inline it.
-- Inspect the Source or textual fallback when preview rendering is unavailable.
+
+For HTML files shown by `present_artifact`:
+- The view loads no external or relative resources; an HTML file that needs them must inline everything.
+- Scripts are off; any effect that requires a script will not appear in the preview.
+
+For PDFs:
+- JPEG 2000 images inside a PDF stay blank in Safari and WebKit while the rest of the page renders. This is a WebKit limitation unrelated to the proxy or the runtime.
 
 ## A route points to missing work
 

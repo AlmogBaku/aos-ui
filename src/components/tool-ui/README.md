@@ -51,13 +51,14 @@ tool name; the caller passes the data and the `labels` from
 `useToolDiffLabels()` / `useToolTerminalLabels()`. A load failure leaves the
 changes list and raw patch, or the ANSI-stripped output, as plain text.
 
-The `render_*` tools come from the AOS UI tools MCP server
-(`packages/tools-mcp`). Each harness prefixes MCP tool names differently
+The `render_*` tools and `present_artifact` come from the AOS UI tools MCP
+server (`packages/tools-mcp`). Each harness prefixes MCP tool names differently
 (`mcp__aos_ui__render_chart` on Hermes, `aos-ui__render_chart` on OpenClaw);
 the proxy canonicalizes them in `packages/proxy/core/aos-tool-names.ts`, so
-the registry only ever sees the bare names above. The fourth server tool,
-`present_artifact`, publishes an Artifact and is resolved by
-`src/components/artifacts`, not by this registry.
+the registry only ever sees the bare names above. `present_artifact` is an MCP
+App: its `artifact` view (`ui://aos-ui/artifact`) renders PDFs, images, plain
+text, and sandboxed HTML inside the App card. It is not dispatched by this
+registry; the App card is owned by `src/components/mcp-apps`.
 
 ## Safety rule
 

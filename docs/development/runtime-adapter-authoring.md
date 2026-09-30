@@ -477,11 +477,12 @@ and a replayed one reach the browser identically. The id must be opaque and
 stable for that Agent and Session; never put a native path in it or in any
 public tool argument or result.
 
-Emit a descriptor only from an authoritative source: a `present_artifact`
-receipt from the `aos-ui` tools MCP server
-(`{ok: true, type: "aos.artifact", artifact: {path, filename, mimeType?}}`),
-a harness's own `MEDIA:` delivery convention, or a trusted native delivery
-tool such as Hermes text-to-speech.
+`present_artifact` is now an MCP App and no longer produces an artifact
+descriptor. Its result carries `{ok: true, type: "aos.presentation",
+kind: "present_artifact", value: {filename, mimeType?}}`; ignore an older
+receipt of the form `{ok: true, type: "aos.artifact", artifact: ...}`. Emit a
+descriptor only from a harness's own `MEDIA:` delivery convention or a trusted
+native delivery tool such as Hermes text-to-speech.
 `packages/proxy/adapters/hermes/media-lines.ts` (`MediaLineFilter`) strips
 `MEDIA:` lines from streamed prose across deltas and replaces an unclaimed one
 with `[Media unavailable]`. It is private to the Hermes adapter and parses
@@ -500,6 +501,13 @@ Session and return `{bytes, mimeType?, filename}`, read through the harness's
 own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB). The route
 `GET .../sessions/:sessionId/artifacts/:artifactId`
 (`packages/proxy/routes/content.ts:87`) serves it on both listeners.
+
+To serve a `present_artifact` file, implement `ServerRuntime.mcpApps` and its
+file reader so the proxy can fetch the named path through the runtime's own
+file interface. File access is gated by `mcpApps.files` folder rules, a signed
+pass, and the built-in deny list; the adapter is not responsible for those
+checks. Hermes reads through its dashboard file API; OpenClaw through its
+Control UI media route; OpenCode cannot yet serve files.
 
 ### MCP tool names
 

@@ -65,17 +65,21 @@ The server never reads the filesystem or talks to the proxy. `render_chart`,
 `render_map`, and `render_stats` are [MCP Apps](#mcp-apps): each validates its
 data and declares a single-file HTML view (`ui://aos-ui/chart`, `map`, or
 `stats`) built from `packages/tools-mcp/views`. The map view draws MapLibre
-over OpenFreeMap tiles. `present_artifact` has no view and returns a receipt
-naming an absolute path. The proxy recognizes that receipt in provider history,
-whatever prefix the harness gave the tool name, and reads a published file's
-bytes back through the harness's own file interface. The harness therefore
-remains the authority on what a Session may read.
+over OpenFreeMap tiles. `present_artifact` is also an MCP App: it declares an
+`artifact` view (`ui://aos-ui/artifact`) that renders PDFs, images, plain text,
+and sandboxed HTML. The view reads the file from the address the proxy grants it
+in `aos/files`; the server itself never opens the file. The proxy serves the
+file through the runtime's own file interface, governed by the `mcpApps.files`
+folder rules; the harness therefore remains the authority on what a Session may
+read.
 
 ## Rich output and Artifacts
 
-Charts, maps, and stats are MCP App views; every tool call keeps an inspectable textual fallback in its compact row. AOS does not execute arbitrary generated code in the main page.
+Charts, maps, stats, and files are MCP App views; every tool call keeps an inspectable textual fallback in its compact row. AOS does not execute arbitrary generated code in the main page.
 
-An Agent may explicitly publish an Artifact, with a `present_artifact` receipt or a harness's own media delivery such as a Hermes `MEDIA:` line. The proxy validates the path, refuses relative, traversing, and credential-file paths, and caps reads at 25 MiB. AOS provides read-only resolution, preview, and download; it does not provide file editing, storage, or version history. Published image, audio, and video Artifacts render inline in the conversation. Published HTML runs in an opaque-origin sandbox with a fixed content-security policy. An operator allowlist may permit public HTTPS assets, so the preview is isolation rather than a complete network-egress boundary.
+An Agent shows a file with `present_artifact`. The `artifact` view renders PDFs (with pdf.js, selectable text, and keyboard paging), images, plain text, and Agent-written HTML (scripts off, no external resources). A file over 64 MiB offers download and open instead of a preview. pip moves the view to the side panel. The proxy serves the file through the runtime's own file interface; the `aos-ui` MCP server never opens it. A signed address, valid about ten minutes and renewed while the view is open, lets the view fetch from the opaque-origin sandbox frame. Folder rules in `mcpApps.files` govern which paths are served.
+
+An Agent may also publish an Artifact through a harness's own media delivery such as a Hermes `MEDIA:` line or a trusted native delivery tool such as Hermes text-to-speech. The proxy validates the path, refuses relative, traversing, and credential-file paths, and caps reads at 25 MiB. Published image, audio, and video Artifacts render inline in the conversation. AOS does not provide file editing, storage, or version history.
 
 ## MCP Apps
 

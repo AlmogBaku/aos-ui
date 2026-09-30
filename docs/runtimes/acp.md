@@ -384,7 +384,28 @@ Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `typ
 
 ## Artifacts
 
-A published Artifact reaches the browser as an ACP `resource_link` content
+### present_artifact as an MCP App
+
+`present_artifact` is an MCP App tool. Its view (`ui://aos-ui/artifact`) renders
+PDFs (with pdf.js), images, plain text, and sandboxed HTML. The view reads the
+file from the signed address the page receives in the host-context key
+`aos/files`; the `aos-ui` MCP server never opens the file.
+
+The proxy grants the address through the MCP App file route:
+`GET .../app-file-passes/:passId/:filename`. The pass is signed with a short
+lifetime (about ten minutes) and is renewed while the view is open. It serves
+only the path the tool call named, and only if that path passes the `mcpApps.files`
+folder rules. See [MCP Apps](../mcp-apps.md) and [Configuration](../configuration.md)
+for the folder rules and the `mcpApps.files.servers` allowlist.
+
+The proxy logs `app_file.refused` with a reason code for each refusal, and
+`app_file.unavailable` when the runtime does not answer. It never logs the path.
+Reason codes are defined in `packages/proxy/routes/app-files.ts`.
+
+### MEDIA: and trusted-delivery Artifacts
+
+An Artifact from a `MEDIA:` line or a trusted native delivery receipt (such as
+Hermes text-to-speech) reaches the browser as an ACP `resource_link` content
 block inside the turn's `agent_message_chunk` (or `user_message_chunk`), both
 live and on replay (`packages/proxy/acp/translate/updates.ts`):
 
@@ -409,8 +430,8 @@ The browser fetches the bytes from the artifact route of the Session it is
 viewing: a same-origin
 `GET /api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` on
 the operator listener, or the `/api/guest/v1/...` mirror with the guest's
-invitation token as a Bearer `Authorization` header. The proxy resolves the id only against that Session's own
-provider history.
+invitation token as a Bearer `Authorization` header. The proxy resolves the id
+only against that Session's own provider history.
 
 ## Interactions: permission and elicitation
 
