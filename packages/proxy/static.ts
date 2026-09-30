@@ -1,10 +1,7 @@
 import { readFile, stat } from "node:fs/promises"
 import { isAbsolute, relative, resolve } from "node:path"
 
-import {
-  FIXTURE_MCP_APP_FILES,
-  FIXTURE_MCP_APP_FILES_PATH,
-} from "../../shared/presentation/views"
+import { FIXTURE_MCP_APP_FILE_PATHS } from "../../shared/presentation/views"
 
 export type StaticHandler = (
   request: Request,
@@ -126,11 +123,7 @@ async function assetResponse(
 }
 
 /** The exact paths that must carry `Access-Control-Allow-Origin: null`. */
-const FIXTURE_FILE_PATHS = new Set(
-  Object.values(FIXTURE_MCP_APP_FILES).map(
-    (name) => `${FIXTURE_MCP_APP_FILES_PATH}/${name}`
-  )
-)
+const FIXTURE_FILE_PATHS = new Set(FIXTURE_MCP_APP_FILE_PATHS)
 
 export function createStaticHandler(
   options: StaticHandlerOptions

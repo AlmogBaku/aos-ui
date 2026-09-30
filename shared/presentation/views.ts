@@ -70,3 +70,11 @@ export const FIXTURE_MCP_APP_FILES = {
   png: "preview.png",
   html: "test.html",
 } as const
+
+/**
+ * The exact URL paths that must carry `Access-Control-Allow-Origin: null`
+ * so the artifact view can fetch them from its opaque-origin sandbox frame.
+ */
+export const FIXTURE_MCP_APP_FILE_PATHS = Object.values(
+  FIXTURE_MCP_APP_FILES
+).map((name) => `${FIXTURE_MCP_APP_FILES_PATH}/${name}`)

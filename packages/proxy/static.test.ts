@@ -156,7 +156,9 @@ describe("proxy static serving", () => {
     expect(other?.headers.get("access-control-allow-origin")).toBeNull()
 
     // The SPA shell does not carry the header.
-    const shell = await fetch(new Request("https://aos.example.test/index.html"))
+    const shell = await fetch(
+      new Request("https://aos.example.test/index.html")
+    )
     expect(shell?.headers.get("access-control-allow-origin")).toBeNull()
   })
 

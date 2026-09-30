@@ -28,8 +28,7 @@ import {
 import { readTitleBarColors } from "./shared/theme-color.ts"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
-  FIXTURE_MCP_APP_FILES,
-  FIXTURE_MCP_APP_FILES_PATH,
+  FIXTURE_MCP_APP_FILE_PATHS,
 } from "./shared/presentation/views.ts"
 import { buildPdfjs, buildViews } from "./packages/tools-mcp/views/build.ts"
 import { snapshotToolsServer } from "./packages/tools-mcp/snapshot.ts"
@@ -155,11 +154,7 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
  * what `packages/proxy/static.ts` does in production.
  */
 function fixtureMcpAppFilesPlugin(): Plugin {
-  const paths = new Set(
-    Object.values(FIXTURE_MCP_APP_FILES).map(
-      (name) => `${FIXTURE_MCP_APP_FILES_PATH}/${name}`
-    )
-  )
+  const paths = new Set(FIXTURE_MCP_APP_FILE_PATHS)
   const addHeader = (server: PreviewServer | ViteDevServer) => {
     server.middlewares.use((request, response, next) => {
       if (paths.has(request.url?.split("?")[0] ?? ""))
