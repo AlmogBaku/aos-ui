@@ -80,6 +80,63 @@ The browser never talks to the MCP server.
 - A request body is at most 256 KiB.
 - A view may make about 10 requests per second; excess requests fail.
 
+## Files
+
+A view can show the files its tool call names, as `present_artifact`'s view
+shows the file it presents, without ever seeing a path. Each top-level
+argument that holds an absolute, normalized path names a file. Opening the
+view withholds those arguments from its `toolInput` and, for a call from one of
+[`mcpApps.files.servers`](configuration.md#mcp-app-files), offers `files`
+instead, with one address per argument:
+
+```json
+{
+  "addresses": {
+    "path": "/api/aos/v1/agents/…/tool-calls/call-1/app/files/path?pass=…"
+  },
+  "expiresAt": "2026-01-01T12:10:00.000Z"
+}
+```
+
+- An address reads `GET …/tool-calls/:toolCallId/app/files/:argument`, under
+  `/api/aos/v1` on the operator listener and `/api/guest/v1` on the guest
+  listener. The proxy takes the path from the runtime's own record of the
+  call, never from the request, and judges it by the configured folders on
+  every request.
+- An address carries a pass for that one call and listener, valid for at most
+  ten minutes and never past a guest's invitation. A request with a pass is
+  judged by the pass alone; one without a pass needs the listener's own
+  login, which for a guest is the invitation.
+- `POST …/tool-calls/:toolCallId/app/files` answers fresh addresses in the
+  same shape. It checks `Origin` and the listener's login, as a view's other
+  requests do.
+- A call that names no file gets no `files`; one the listener may not read
+  gets `files` with no addresses.
+- A view reads its files only from an https origin, or from 127.0.0.1 or
+  localhost.
+
+A file answer:
+
+- A bad pass or login answers 401. Every refusal, a missing file, and a
+  Session that is gone answer the same empty 404, and the log records only a
+  reason code, never a path or a pass. A runtime that does not answer, or
+  fails, answers 503.
+- One byte range answers 206 with `Content-Range`, and a range past the end
+  answers 416. Of the runtime's headers, only `Content-Length`,
+  `Content-Range`, and `Accept-Ranges` pass through.
+- PDFs and AVIF, BMP, GIF, JPEG, PNG, and WebP images keep their type. Other
+  text, HTML included, goes out as `text/plain` with its charset, and
+  anything else, SVG and XML included, as `application/octet-stream`. A file
+  opens `inline` under its own sanitized name.
+- Every answer carries `nosniff`, `Referrer-Policy: no-referrer`, and
+  `Cache-Control: no-store`. Every answer but a PDF's also carries this
+  policy, so no file runs as a page:
+  `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox`.
+- A request with a pass gets `Access-Control-Allow-Origin: null`, so the
+  view's opaque origin can read the answer; no answer allows credentials.
+- File reads and renewals have their own limit of about 50 requests per second
+  per call, apart from the view's 10; excess requests answer 429.
+
 ## Presentation
 
 Where the proxy reads the view itself (Hermes, OpenCode), it knows from the

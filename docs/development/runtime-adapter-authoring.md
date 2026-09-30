@@ -308,9 +308,13 @@ carried by the normalized turn or history.
 Parse provider-injected attachment and context envelopes server-side. Return
 safe filenames, MIME types, sizes, and opaque content identities. Native paths,
 filesystem warnings, credentials, URLs, payloads, and error bodies never cross
-the adapter boundary. Transcription and speech synthesis run only after their
-explicit user actions and remain distinct from native multimodal audio input or
-output.
+the adapter boundary, with one narrow exception: for the MCP App file route, a
+native path reaches proxy core, as `agentFolder` already does, through
+`ServerMcpApps.toolCall`'s input and `readFile`'s real path. Core judges it
+against the configured folders and reads through `readFile`; the path still
+never reaches a guest, a view, an error body, or a log line. Transcription and
+speech synthesis run only after their explicit user actions and remain distinct
+from native multimodal audio input or output.
 
 ## Share execution, project authorization
 

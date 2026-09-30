@@ -88,7 +88,7 @@ the load.
 | `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                                                                   |
 | `voice`           | Optional proxy speech provider for transcription and/or read-aloud (see [Voice providers](#voice-providers) below).                           |
 | `guest`           | Optional distinct guest listener/origin and invitation signing keys (see below).                                                              |
-| `mcpApps`         | Optional per-server URL override and headers for the MCP Apps fallback (see [MCP Apps fallback](#mcp-apps-fallback) below).                   |
+| `mcpApps`         | Optional MCP Apps fallback overrides and file rules (see [MCP Apps fallback](#mcp-apps-fallback) and [MCP App files](#mcp-app-files) below).  |
 | `log`             | Proxy log. `level` is `debug`, `info`, `warn`, or `error`; `debug` adds every owner state change and is never a production setting.           |
 | `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.                                                       |
 
@@ -176,8 +176,8 @@ rows apply; using a runtime-specific variable with the wrong kind is an error.
 A variable whose `Applies` is "only when file has `guest` block" fails if the
 file contains no `guest` key, because env overrides cannot open a second
 listener on their own. Push and voice variables create their respective blocks
-when the file omits them. Arrays (`guest.invitations.keys`) and the
-`mcpApps` server map are file-only; env cannot remove a key already present in
+when the file omits them. Arrays (`guest.invitations.keys`) and the whole
+`mcpApps` block are file-only; env cannot remove a key already present in
 the file. The variables
 `AOS_UI_PROXY_TARGET`, `AOS_UI_PROXY_HOST`, `AOS_UI_PROXY_PORT`, and
 `AOS_UI_PROXY_CONFIG_FILE` are not overrides; they belong to other features.
@@ -381,6 +381,56 @@ mcpApps:
 - OpenClaw serves Apps natively and ignores this block.
 
 See [MCP Apps](mcp-apps.md) for what a view may do once it is served.
+
+### MCP App files {#mcp-app-files}
+
+A tool call can name files for its App's view to show, as `present_artifact`
+names the file it presents. The proxy reads such a file for the view through
+the runtime, and the view never sees its path; see [MCP Apps](mcp-apps.md#files)
+for the routes. An `mcpApps.files` block decides which calls and folders
+qualify:
+
+```yaml
+mcpApps:
+  files:
+    servers: [aos-ui]
+    operator:
+      agentFolder: true
+      allow: [/srv/reports]
+      deny: [/srv/reports/drafts]
+    guest:
+      allow: [/srv/reports/shared]
+```
+
+- `servers` names the MCP servers whose calls may name files, as the harness
+  configures them. The default is `[aos-ui]`, which also matches a harness
+  that names the server `aos_ui`. A call from any other server gets no files,
+  and neither does a native tool that shares a name with one of `aos-ui`'s.
+- `operator` and `guest` each hold one role's folders: `agentFolder` serves
+  the Agent's own folder, `allow` adds folders, and `deny` takes folders away.
+  Every entry is an absolute path, and a denial beats an allowance.
+- Operators get the Agent's folder by default. Guests get nothing until
+  `guest` allows a folder, and a guest read must pass the `operator` folders
+  too, so a guest never reads what an operator may not.
+- Where the runtime reports no Agent folder, only `allow` counts; with nothing
+  allowed, a view gets no files.
+- A `deny` entry holds in any letter case; an `allow` entry matches the path
+  exactly.
+- These are refused whatever the folders say, matched per path component in
+  any letter case:
+  - the folders `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+    `.git`, `.config/gcloud`, and `.config/gh`;
+  - the credential names an Artifact path refuses, such as `.env`, `.env.*`,
+    `.envrc`, `auth.json`, `credentials`, and `config.yaml`, plus `.netrc`,
+    `.npmrc`, `.pypirc`, and `.pgpass`;
+  - the SSH keys `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ecdsa_sk`, `id_ed25519`,
+    and `id_ed25519_sk`;
+  - every name ending in `.pem`, `.key`, `.p12`, or `.pfx`. `*.key` also
+    blocks Keynote decks.
+- The folders judge the path as the call wrote it and, where the runtime
+  reports it, the real path the runtime will read, so a symbolic link cannot
+  lead out of an allowed folder. Both are judged again on every request. A
+  guest reads files only on a runtime that reports real paths.
 
 ### Web Push (optional)
 
