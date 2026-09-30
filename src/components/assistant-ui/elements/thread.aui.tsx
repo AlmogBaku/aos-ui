@@ -979,18 +979,18 @@ const Composer: FC<{
     if (!taken) return false
     escapeRef.current = null
     historyBrowseRef.current = null
-    const threadId = aui.threads.getState().mainThreadId
+    const mainThreadId = aui.threads.getState().mainThreadId
     const stashes = queueEditStashRef.current
     const { text, attachments } = aui.composer.getState()
     let pulled: Pick<RecoverableDraft, "text" | "attachments"> = taken
-    if (stashes.has(threadId) || (!text && attachments.length === 0)) {
+    if (stashes.has(mainThreadId) || (!text && attachments.length === 0)) {
       pulled = {
         text: [taken.text, text].filter(Boolean).join("\n\n"),
         attachments: [...attachments, ...taken.attachments],
       }
     } else {
       const input = inputRef.current
-      stashes.set(threadId, {
+      stashes.set(mainThreadId, {
         text,
         attachments,
         selectionStart: input?.selectionStart ?? text.length,
