@@ -90,6 +90,31 @@ export const McpAppViewSchema = z.strictObject({
 })
 export type McpAppView = z.infer<typeof McpAppViewSchema>
 
+/**
+ * The file a viewer App shows: the display name and type of a published
+ * Artifact, which its view reads from `toolResult.structuredContent.value`,
+ * and from the JSON after `Structured fallback:` in the text for a view that
+ * reads text alone. It is the whole contract any configured viewer reads.
+ */
+export type ViewerFile = { filename: string; mimeType?: string }
+
+/** A published Artifact's `toolResult`: its `ViewerFile`, as structure and as text. */
+export function viewerFileResult({
+  filename,
+  mimeType,
+}: ViewerFile): CallToolResult {
+  const value: ViewerFile = { filename, ...(mimeType && { mimeType }) }
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${filename} is ready for display.\n\nStructured fallback:\n${JSON.stringify(value)}`,
+      },
+    ],
+    structuredContent: { value },
+  }
+}
+
 /** A view's `tools/call`, answered with a `CallToolResult`. */
 export const McpAppToolCallRequestSchema = z.strictObject({
   name: z.string().min(1).max(256),

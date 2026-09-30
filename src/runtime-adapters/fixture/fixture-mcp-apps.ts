@@ -1,6 +1,6 @@
 import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js"
 
-import type { McpAppView } from "@aos/protocol/mcp-apps"
+import { viewerFileResult, type McpAppView } from "@aos/protocol/mcp-apps"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
   FIXTURE_MCP_APP_FILES_PATH,
@@ -12,7 +12,6 @@ import type { McpAppAdapter, McpAppTarget } from "../contracts"
 import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
 import {
   FIXTURE_PRESENTATION_RESULT,
-  fixtureArtifactResult,
   fixturePresentationCall,
   type FixturePresentationCall,
 } from "./fixture-presentations"
@@ -195,7 +194,7 @@ async function attachmentView(
     html: content.text,
     ...(ui?.csp ? { csp: ui.csp } : {}),
     toolInput: {},
-    toolResult: fixtureArtifactResult(artifact.filename, artifact.mimeType),
+    toolResult: viewerFileResult(artifact),
     files: { addresses },
   }
 }

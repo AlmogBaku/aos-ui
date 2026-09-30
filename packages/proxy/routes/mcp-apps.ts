@@ -4,9 +4,8 @@ import {
   McpAppToolCallRequestSchema,
   McpAppViewSchema,
   ReadResourceResultSchema,
-  type CallToolResult,
+  viewerFileResult,
 } from "../../protocol/mcp-apps"
-import type { PresentArtifactResult } from "../../../shared/presentation/tools"
 import type { ProxyAppOptions } from "../app"
 import { coreFailure } from "../core/failures"
 import * as ids from "../core/ids"
@@ -24,7 +23,6 @@ import {
   type AppFileGrant,
   type AppSubject,
   type AppTarget,
-  type PublishedArtifact,
 } from "./app-files"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
@@ -102,29 +100,6 @@ export function createMcpAppLimits(now?: () => number, fileRate?: number) {
   return (operation: McpAppOperation) => (operation === "files" ? files : view)
 }
 
-/**
- * An Artifact's result as its viewer reads it: the shape `aos-ui`'s artifact
- * tool answers, built from the server-side descriptor alone.
- */
-function artifactResult({
-  filename,
-  mimeType,
-}: PublishedArtifact): CallToolResult {
-  const value: PresentArtifactResult = {
-    filename,
-    ...(mimeType && { mimeType }),
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: `${filename} is ready for display.\n\nStructured fallback:\n${JSON.stringify(value)}`,
-      },
-    ],
-    structuredContent: { ok: true, type: "aos.presentation", value },
-  }
-}
-
 type McpAppInput = AppFileContext & {
   operation: McpAppOperation
   allow: (target: AppTarget) => boolean
@@ -181,7 +156,7 @@ async function handleArtifactRequest(
     body: McpAppViewSchema.parse({
       ...resource,
       toolInput: {},
-      toolResult: artifactResult(artifact),
+      toolResult: viewerFileResult(artifact),
       files: await artifactFiles(input, files),
     }),
   }

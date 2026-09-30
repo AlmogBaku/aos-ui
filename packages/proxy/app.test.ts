@@ -1019,8 +1019,6 @@ describe("Published Artifact views", () => {
           },
         ],
         structuredContent: {
-          ok: true,
-          type: "aos.presentation",
           value: { filename: "notes.md", mimeType: "text/markdown" },
         },
       },

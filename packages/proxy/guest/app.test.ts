@@ -946,8 +946,6 @@ describe("guest MCP App files", () => {
     const view = (await opened.json()) as McpAppView
     expect(view.html).toBe("<p>viewer</p>")
     expect(view.toolResult?.structuredContent).toEqual({
-      ok: true,
-      type: "aos.presentation",
       value: { filename: "briefing.mp3", mimeType: "audio/mpeg" },
     })
     expect(subject.artifact).toHaveBeenLastCalledWith(

@@ -180,8 +180,12 @@ routes sit beside a call's, under the same roots, at
   and a `toolResult` carrying the attachment's name and type as the proxy
   reads them from the runtime, never its path. `files` holds one address,
   `path`, for its bytes.
+- That `toolResult` is the whole contract a configured viewer reads:
+  `structuredContent.value` is `{ "filename": string, "mimeType"?: string }`,
+  and the text content ends with the same JSON after `Structured fallback:`
+  for a view that reads text alone. No other field is promised.
 - `POST …/app/resources/read` reads a `ui://` resource of the viewer's server
-  only. There is no `tools/call`; it answers 404.
+  only; any other URI answers 403. There is no `tools/call`; it answers 404.
 - `POST …/app/files` renews the address, and `GET …/app/files/path` reads the
   bytes under a pass that names the attachment, so a call's pass never opens
   an attachment, nor the other way round. Reads follow the rules above, but
