@@ -13,6 +13,7 @@ import * as ids from "../core/ids"
 import type { ServerMcpApps, ServerRuntime } from "../core/runtime"
 import { appResourceOf, McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
+import { isUiResourceUri } from "../mcp-apps/policy"
 import {
   answerAppFile,
   appFiles,
@@ -155,6 +156,8 @@ async function handleArtifactRequest(
       await boundedJson(request, MAX_REQUEST_BYTES)
     )
     if (!body.success) return failure.invalid_request
+    // The viewer reads only its own server's views, whatever the adapter allows.
+    if (!isUiResourceUri(body.data.uri)) return failure.forbidden
     return {
       ok: true,
       body: ReadResourceResultSchema.parse(await read(body.data.uri)),

@@ -1062,6 +1062,13 @@ describe("Published Artifact views", () => {
       "aos-ui",
       "ui://aos-ui/pdfjs/pdf.worker.js",
     ])
+    // ...and only its `ui://` views, whatever the adapter would read.
+    const reads = serverResource.mock.calls.length
+    const outside = await post(proxy, `${artifactPath()}/resources/read`, {
+      uri: "file:///srv/agent/notes.md",
+    })
+    expect(outside.status).toBe(403)
+    expect(serverResource).toHaveBeenCalledTimes(reads)
     const renewed = await post(proxy, `${artifactPath()}/files`)
     expect(await renewed.json()).toEqual(view.files)
     expect(JSON.stringify(logs.records())).not.toContain(passOf(address))
