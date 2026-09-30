@@ -254,7 +254,7 @@ To read a file named by a `present_artifact` call's App view, the proxy
 first lists the file's folder with
 `GET /api/files?path=<folder>&profile=<profile>&session_id=<sessionId>`. The
 listing entry's `path` is the real path — every link followed — and that is the
-path the proxy's [folder rules](../configuration.md#artifact-paths) judge. A listing that answers 400 is a
+path the proxy's [folder rules](../configuration.md#mcp-app-files) judge. A listing that answers 400 is a
 link loop or a non-folder path (`listing_invalid`); 403 means the folder is
 outside a locked root or Hermes may not read it (`listing_refused`); 404 is a
 missing folder (`listing_missing`); 500 is a broken link (`listing_failed`). If
