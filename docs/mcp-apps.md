@@ -100,9 +100,8 @@ a view fetches a file by the address it received last. `ui/open-link` and
 `ui/download-file` recognize the view's own file by its address, whatever
 pass it carries, and use a fresh one. An own file opens over `http` too when
 the workspace itself is served over `http`. A download names the file by a
-`resource_link` and saves
-it under the link's `name`, without any directory or reserved character;
-another address, or content the view embeds, is refused.
+`resource_link` and saves it under the link's `name`, without any directory or
+reserved character; another address, or content the view embeds, is refused.
 
 ## Limits
 
@@ -184,14 +183,13 @@ viewport, and the host shows an **Exit full screen** control. Esc exits
 fullscreen only while focus is outside the view, because the view receives its
 own key presses; the control is always available.
 
-`pip` shows the view in the side panel, where the Artifact viewer opens: in
-the inspector's place on a wide screen and in a drawer on a narrow one. The
-panel holds one view at a time. The view's frame reloads whenever it moves,
-so a view that keeps state restores it from its input, its result, or its own
-server. Its message shows **Shown in the side panel** with a **Return to the
-message** control; the panel's own control, Esc while focus is in the panel
-but outside the view, a request for `inline`, and leaving the Session return
-it too.
+`pip` shows the view in the side panel: in the inspector's place on a wide
+screen and in a drawer on a narrow one. The panel holds one view at a time. The
+view's frame reloads whenever it moves, so a view that keeps state restores it
+from its input, its result, or its own server. Its message shows **Shown in the
+side panel** with a **Return to the message** control; the panel's own control,
+Esc while focus is in the panel but outside the view, a request for `inline`,
+and leaving the Session return it too.
 
 The host context carries the theme (`light` or `dark`), the locale (`en-US`
 or `he-IL`), and the workspace's colors and font as the spec's style

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 
-import { loadFile, type FileState } from "./file"
+import { loadFile, type FileState, type PreviewLimits } from "./file"
 
 const LOADING: FileState = { status: "loading" }
 
@@ -16,7 +16,7 @@ export function useFile(
   address: string | undefined,
   filename: string,
   mimeType: string | undefined,
-  limit: number
+  limits: PreviewLimits
 ) {
   const [request, setRequest] = useState<Request>()
   const [outcome, setOutcome] = useState<{
@@ -40,13 +40,13 @@ export function useFile(
     void loadFile(
       request.address,
       { filename, mimeType },
-      limit,
+      limits,
       controller.signal
     ).then((next) => {
       if (!controller.signal.aborted) setOutcome({ request, state: next })
     })
     return () => controller.abort()
-  }, [request, filename, mimeType, limit])
+  }, [request, filename, mimeType, limits])
 
   return {
     state,

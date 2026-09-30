@@ -51,7 +51,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-/** Reports a desktop-wide container so the artifact pane docks beside the conversation. */
+/** Reports the shell `width` pixels wide; 1024 or more lays it out for a desktop. */
 function stubResizeObserver(width: number) {
   vi.stubGlobal(
     "ResizeObserver",
@@ -67,11 +67,6 @@ function stubResizeObserver(width: number) {
       disconnect() {}
     }
   )
-}
-
-/** Convenience alias for the common wide case. */
-function stubWideResizeObserver() {
-  stubResizeObserver(1024)
 }
 
 const agents: WorkspaceAgent[] = [
@@ -197,7 +192,7 @@ function renderShell(
 
 describe("WorkspaceShell", () => {
   it("reuses the workspace conversation and artifact pane without navigation chrome", () => {
-    stubWideResizeObserver()
+    stubResizeObserver(1024)
 
     render(
       <WorkspaceConversationShell
@@ -237,7 +232,7 @@ describe("WorkspaceShell", () => {
   })
 
   it("resizes the shared desktop artifact pane with the keyboard and persists its width", () => {
-    stubWideResizeObserver()
+    stubResizeObserver(1024)
 
     const view = render(
       <WorkspaceConversationShell
@@ -281,7 +276,7 @@ describe("WorkspaceShell", () => {
   })
 
   it("uses physical arrow direction for the RTL artifact separator", () => {
-    stubWideResizeObserver()
+    stubResizeObserver(1024)
     renderShell({
       locale: "he",
       dictionary: he,
@@ -301,7 +296,7 @@ describe("WorkspaceShell", () => {
   })
 
   it("replaces the inspector with the side panel when open", () => {
-    stubWideResizeObserver()
+    stubResizeObserver(1024)
     const { rerender, props } = renderShell({})
     let inspector = screen.getByRole("complementary", { name: "Agent details" })
     expect(inspector).toBeVisible()

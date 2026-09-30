@@ -117,8 +117,8 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   // --- preview.png ---
   await send("Show a png artifact")
   const pngFrame = artifactFrame()
-  // The image has loaded (no broken-image placeholder, real img element).
-  await expect(pngFrame.locator("img[src^='data:image/png']")).toBeVisible()
+  // A broken image would show "No preview" in its place.
+  await expect(pngFrame.getByRole("img", { name: "preview.png" })).toBeVisible()
 
   // --- test.html ---
   await send("Show an html artifact")

@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { PREVIEW_LIMITS } from "./artifact/file"
 import { ArtifactView } from "./artifact-view"
 import { ChartView } from "./chart-view"
 import { VIEW_LABELS, viewLocale, type ViewLocale } from "./locale"
@@ -182,7 +183,7 @@ describe("artifact view", () => {
     ["without a length", {}, 3],
     ["with a length above the limit", { "content-length": "256" }, 0],
   ])(
-    "stops reading a file %s at the limit and offers Download",
+    "stops reading a text file %s at the text limit and offers Download",
     async (_case, headers, reads) => {
       let pulled = 0
       const cancel = vi.fn()
@@ -202,8 +203,13 @@ describe("artifact view", () => {
       )
       const address = "https://aos.test/files/notes.txt?pass=one"
       const view = props(notes)
+      // Only text is held to 8 bytes; every other kind keeps its own limit.
       render(
-        <ArtifactView {...view} context={files(address)} previewLimit={8} />
+        <ArtifactView
+          {...view}
+          context={files(address)}
+          previewLimits={{ ...PREVIEW_LIMITS, text: 8 }}
+        />
       )
 
       expect(

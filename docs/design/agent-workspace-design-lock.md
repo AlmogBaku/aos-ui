@@ -55,11 +55,11 @@ Any intentional visual departure must be called out before it is introduced.
   count pills. The bell in the Agents heading shows the sole derived unread count.
 - **Drawer browsing marks nothing read:** the Activity drawer is browse-only;
   reading a Session there does not change its read state.
-- **Audio and video Artifacts play in the conversation:** published media renders
-  as an inline native player in the message instead of a card that replaces the
-  inspector with the Artifact viewer. Images also render inline as a bounded
-  preview that opens the viewer. Every other Artifact stays a compact card that
-  opens the viewer.
+- **Published Artifacts render inline:** audio and video play as native players
+  in the message; an image renders as a bounded preview (max height `max-h-64`)
+  with no viewer — its download is the browser's own image menu. Every other
+  Artifact is a compact card showing the name, type, and size with a Download
+  control.
 - **Density pass (2026-09-20):** control heights follow a 28/32/36/40 px band
   scale; theme and locale buttons are 1.75 rem square at fine-pointer sizes.
   The `--radius-sm|md|lg` token scale is live in `src/app/globals.css`.
@@ -95,12 +95,11 @@ Any intentional visual departure must be called out before it is introduced.
   indicator already shows. The aside pose stays under reduced motion, so
   waiting still reads differently from idle. Each silhouette caps how far its
   pair may look aside, so no bar leaves its backdrop.
-- **An MCP App view can take the Artifact viewer's place (2026-09-30):** an
-  App that asks for picture-in-picture (`pip`) shows in the side panel rather
-  than floating over the conversation, which stays the dominant surface. The
-  side panel is the Artifact viewer's slot: it takes the inspector's place on
-  wide screens and opens as the focus-managed drawer on phones, and it holds
-  one view at a time. A frame cannot move without reloading, so the view
-  reloads each time it moves. Its message keeps a "Shown in the side panel"
-  note with a control that returns it, as the panel's close control and Esc
-  do, and leaving the Session returns it to its message.
+- **An MCP App view can show in the side panel (2026-09-30):** an App that asks
+  for picture-in-picture (`pip`) shows in the side panel rather than floating
+  over the conversation, which stays the dominant surface. The side panel takes
+  the inspector's place on wide screens and opens as the focus-managed drawer on
+  phones, and it holds one view at a time. A frame cannot move without
+  reloading, so the view reloads each time it moves. Its message keeps a "Shown
+  in the side panel" note with a control that returns it, as the panel's close
+  control and Esc do, and leaving the Session returns it to its message.

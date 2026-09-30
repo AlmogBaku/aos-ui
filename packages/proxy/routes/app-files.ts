@@ -20,9 +20,10 @@ import { encodedFilename } from "./http"
 /**
  * The files an MCP App's tool call names, read by its view. `open` offers one
  * address per argument that names a file, all under one pass, and withholds
- * from the view every argument that starts with `/`. A read is judged on every request: its pass, or the
- * listener's own login without one, then the call, then the folder rules.
- * Every refusal answers one empty 404 and logs only its reason.
+ * from the view every argument that starts with `/`. A read is judged on every
+ * request: its pass, or the listener's own login without one, then the call,
+ * then the folder rules. A bad pass or login answers 401; every other refusal
+ * answers one empty 404 and logs only its reason.
  */
 
 /** The file route's settings, and the services its passes and lookups use. */

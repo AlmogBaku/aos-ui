@@ -40,13 +40,12 @@ import type {
 
 import { artifactMediaKind, type ArtifactMediaKind } from "./artifact-renderers"
 
-export const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
+const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 
-export type ArtifactPreviewFailure =
+type ArtifactPreviewFailure =
   "load" | "unavailable" | "missing" | "file-too-large"
 
-export type ArtifactPreviewState =
-  | { status: "idle" }
+type ArtifactPreviewState =
   | { status: "loading" }
   | { status: "error"; reason: ArtifactPreviewFailure }
   | { status: "ready"; url: string }
@@ -58,20 +57,13 @@ type ArtifactWorkspaceContextValue = {
   agentId: string
   sessionId: string
   occurrences: ArtifactOccurrence[]
-  selectedArtifact: ArtifactDescriptor | null
-  openArtifact: (
-    artifact: ArtifactDescriptor,
-    trigger?: HTMLElement,
-    occurrenceKey?: string
-  ) => void
-  closeArtifact: () => void
   downloadArtifact: (artifact: ArtifactDescriptor) => Promise<void>
 }
 
 const ArtifactWorkspaceContext =
   createContext<ArtifactWorkspaceContextValue | null>(null)
 
-export function useArtifactWorkspace() {
+function useArtifactWorkspace() {
   const context = useContext(ArtifactWorkspaceContext)
   if (!context) {
     throw new Error(
@@ -161,13 +153,6 @@ export function ArtifactWorkspaceProvider({
   messages,
   children,
 }: ArtifactWorkspaceProviderProps) {
-  const [selection, setSelection] = useState<{
-    artifact: ArtifactDescriptor
-    agentId: string
-    sessionId: string
-    occurrenceKey: string
-  } | null>(null)
-  const openingControlRef = useRef<HTMLElement | null>(null)
   const downloadControllersRef = useRef(new Set<AbortController>())
   const downloadUrlsRef = useRef(new Set<string>())
   const labels = (locale === "he" ? he : en).artifacts
@@ -175,68 +160,6 @@ export function ArtifactWorkspaceProvider({
     () => extractArtifactOccurrences(messages),
     [messages]
   )
-  const selectedArtifact =
-    selection?.agentId === agentId &&
-    selection.sessionId === sessionId &&
-    occurrences.some(
-      ({ artifact, key }) =>
-        key === selection.occurrenceKey &&
-        sameArtifactDescriptor(artifact, selection.artifact)
-    )
-      ? selection.artifact
-      : null
-
-  useEffect(() => {
-    if (!selection || selectedArtifact) return
-    const timer = window.setTimeout(() => {
-      openingControlRef.current = null
-      setSelection(null)
-    }, 0)
-    return () => window.clearTimeout(timer)
-  }, [selectedArtifact, selection])
-
-  const openArtifact = useCallback(
-    (
-      artifact: ArtifactDescriptor,
-      trigger?: HTMLElement,
-      occurrenceKey?: string
-    ) => {
-      const publication = occurrenceKey
-        ? occurrences.find(({ key }) => key === occurrenceKey)
-        : occurrences.findLast(({ artifact: candidate }) =>
-            sameArtifactDescriptor(candidate, artifact)
-          )
-      if (!publication) return
-      openingControlRef.current = trigger ?? null
-      setSelection({
-        artifact,
-        agentId,
-        sessionId,
-        occurrenceKey: publication.key,
-      })
-    },
-    [agentId, occurrences, sessionId]
-  )
-  const closeArtifact = useCallback(() => {
-    const openingControl = openingControlRef.current
-    openingControlRef.current = null
-    setSelection(null)
-    window.setTimeout(() => {
-      if (openingControl?.isConnected) {
-        openingControl.focus()
-        return
-      }
-      ;[
-        ...document.querySelectorAll<HTMLElement>(
-          "#workspace-agent-inspector [data-artifact-open-id]"
-        ),
-      ]
-        .find(
-          ({ dataset }) => dataset.artifactOpenId === selection?.artifact.id
-        )
-        ?.focus()
-    }, 0)
-  }, [selection])
   const downloadArtifact = useCallback(
     async (artifact: ArtifactDescriptor) => {
       if (!adapter) return
@@ -288,23 +211,9 @@ export function ArtifactWorkspaceProvider({
       agentId,
       sessionId,
       occurrences,
-      selectedArtifact,
-      openArtifact,
-      closeArtifact,
       downloadArtifact,
     }),
-    [
-      adapter,
-      agentId,
-      closeArtifact,
-      downloadArtifact,
-      labels,
-      locale,
-      occurrences,
-      openArtifact,
-      selectedArtifact,
-      sessionId,
-    ]
+    [adapter, agentId, downloadArtifact, labels, locale, occurrences, sessionId]
   )
 
   return (
@@ -375,19 +284,18 @@ function useArtifactDownload(artifact: ArtifactDescriptor) {
   return { download, downloadFailed }
 }
 
-export type ArtifactCardProps = {
+type ArtifactCardProps = {
   artifact: ArtifactDescriptor
-  compact?: boolean
   occurrenceKey?: string
 }
 
-export function ArtifactCard(props: ArtifactCardProps) {
-  // Audio, video, and images are first-class inline outcomes in the
-  // conversation. The compact Artifacts roster stays a list of rows that open
-  // the viewer.
-  const mediaKind = props.compact
-    ? null
-    : artifactMediaKind(props.artifact.mimeType, props.artifact.filename)
+function ArtifactCard(props: ArtifactCardProps) {
+  // Audio, video, and images show inline in the conversation as native players
+  // and bounded previews. Every other artifact renders as a file card.
+  const mediaKind = artifactMediaKind(
+    props.artifact.mimeType,
+    props.artifact.filename
+  )
 
   return mediaKind ? (
     <ArtifactInlineMedia
@@ -396,102 +304,53 @@ export function ArtifactCard(props: ArtifactCardProps) {
       occurrenceKey={props.occurrenceKey}
     />
   ) : (
-    <ArtifactFileCard {...props} />
+    <ArtifactFileCard artifact={props.artifact} />
   )
 }
 
-function ArtifactFileCard({
-  artifact,
-  compact = false,
-  occurrenceKey,
-}: ArtifactCardProps) {
-  const { adapter, labels, locale, openArtifact } = useArtifactWorkspace()
+function ArtifactFileCard({ artifact }: { artifact: ArtifactDescriptor }) {
+  const { adapter, labels, locale } = useArtifactWorkspace()
   const { download, downloadFailed } = useArtifactDownload(artifact)
 
-  const identity = (
-    <>
-      <div
-        className={
-          compact
-            ? "flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
-            : "flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"
-        }
-      >
-        <FileIcon
-          className={compact ? "size-3.5" : "size-4"}
-          aria-hidden="true"
-        />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p
-          className="truncate text-sm font-medium"
-          data-testid="artifact-filename"
-          dir="auto"
-        >
-          {artifact.filename}
-        </p>
-        {(artifact.mimeType || artifact.sizeBytes !== undefined) && (
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {[
-              artifact.mimeType,
-              artifact.sizeBytes === undefined
-                ? null
-                : formatSize(artifact.sizeBytes, locale),
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
-        )}
-      </div>
-    </>
-  )
-
   return (
-    <article
-      className={
-        compact
-          ? "grid grid-cols-[minmax(0,1fr)_auto] items-stretch gap-1.5 border-b border-border/70 text-card-foreground last:border-b-0"
-          : "grid w-fit max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-border bg-card p-2 text-card-foreground"
-      }
-    >
-      <button
-        type="button"
-        aria-label={`${labels.open}: ${artifact.filename}`}
-        data-artifact-open-id={compact ? artifact.id : undefined}
-        className={
-          compact
-            ? "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-start outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
-            : "flex min-w-0 items-center gap-2 rounded-lg text-start outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:min-h-11"
-        }
-        onClick={(event) =>
-          openArtifact(artifact, event.currentTarget, occurrenceKey)
-        }
-      >
-        {identity}
-      </button>
-      <div
-        className={
-          compact
-            ? "col-start-2 row-start-1 flex items-center pe-2"
-            : "col-start-2 row-start-1 flex items-center gap-1"
-        }
-      >
+    <article className="grid w-fit max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-border bg-card p-2 text-card-foreground">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <FileIcon className="size-4" aria-hidden="true" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p
+            className="truncate text-sm font-medium"
+            data-testid="artifact-filename"
+            dir="auto"
+          >
+            {artifact.filename}
+          </p>
+          {(artifact.mimeType || artifact.sizeBytes !== undefined) && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {[
+                artifact.mimeType,
+                artifact.sizeBytes === undefined
+                  ? null
+                  : formatSize(artifact.sizeBytes, locale),
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="col-start-2 row-start-1 flex items-center gap-1">
         <Button
           type="button"
           variant="ghost"
-          size={compact ? "icon-xs" : "sm"}
-          aria-label={compact ? labels.download : undefined}
-          title={compact ? labels.download : undefined}
+          size="sm"
           disabled={!adapter}
           onClick={() => void download()}
-          className={
-            compact
-              ? "motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
-              : "motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
-          }
+          className="motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
         >
           <DownloadIcon data-icon="inline-start" />
-          {!compact && labels.download}
+          {labels.download}
         </Button>
       </div>
       {downloadFailed && (
@@ -540,15 +399,9 @@ function ArtifactDownloadAction({
 }
 
 /**
- * Plays a published audio or video artifact in the conversation, on the same
- * byte loader, bounds, and abort behavior as the Artifact viewer. Sizing mirrors
- * a sent media attachment so both conversation surfaces read the same.
- */
-/**
- * A published audio, video, or image outcome shown in the message itself, with
- * no download of its own: the native player controls carry one, and an image
- * — bounded here, never at its original size — opens the viewer, which holds
- * the full picture and the download. Nothing about audio or video opens it.
+ * Audio, video, and images show in the message with no download control of
+ * their own: the native player controls carry one for audio and video, and an
+ * image is a bounded preview whose download is the browser's own image menu.
  */
 function ArtifactInlineMedia({
   artifact,
@@ -559,12 +412,12 @@ function ArtifactInlineMedia({
   kind: ArtifactMediaKind
   occurrenceKey?: string
 }) {
-  const { labels, locale, occurrences, openArtifact } = useArtifactWorkspace()
+  const { labels, locale, occurrences } = useArtifactWorkspace()
   // The provider keeps one descriptor identity per publication while the
   // conversation streams, so the bytes are not reloaded on every render.
   const published =
     occurrences.find(({ key }) => key === occurrenceKey)?.artifact ?? artifact
-  const { state } = useArtifactPreviewController(published)
+  const state = useArtifactPreviewController(published)
   const url = state.status === "ready" ? state.url : undefined
 
   if (state.status === "error") {
@@ -603,20 +456,13 @@ function ArtifactInlineMedia({
           {labels.loading}
         </p>
       ) : kind === "image" ? (
-        <button
-          type="button"
-          aria-label={`${labels.open}: ${published.filename}`}
-          className="block max-w-sm cursor-zoom-in rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={(event) =>
-            openArtifact(published, event.currentTarget, occurrenceKey)
-          }
-        >
+        <div className="max-w-sm">
           <img
             src={url}
             alt={published.filename}
             className="block h-auto max-h-64 w-auto max-w-full rounded-lg border border-border object-contain"
           />
-        </button>
+        </div>
       ) : kind === "audio" ? (
         <audio
           aria-label={`${labels.audio}: ${published.filename}`}
@@ -644,10 +490,9 @@ function ArtifactInlineMedia({
  * changed, and resolving by reference would download it again on every streamed
  * token — restarting playback along the way.
  */
-function useArtifactByValue(artifact: ArtifactDescriptor | null) {
+function useArtifactByValue(artifact: ArtifactDescriptor) {
   const [held, setHeld] = useState(artifact)
-  const settled =
-    held !== null && artifact !== null && sameArtifactDescriptor(held, artifact)
+  const settled = sameArtifactDescriptor(held, artifact)
   if (!settled && held !== artifact) {
     setHeld(artifact)
     return artifact
@@ -656,49 +501,32 @@ function useArtifactByValue(artifact: ArtifactDescriptor | null) {
 }
 
 /** Loads an inline media artifact's bytes as an object URL. */
-export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
-  const { adapter, agentId, selectedArtifact, sessionId } =
-    useArtifactWorkspace()
-  const previewArtifact = useArtifactByValue(artifact ?? selectedArtifact)
+function useArtifactPreviewController(artifact: ArtifactDescriptor) {
+  const { adapter, agentId, sessionId } = useArtifactWorkspace()
+  const previewArtifact = useArtifactByValue(artifact)
   const [resolved, setResolved] = useState<{
     artifact: ArtifactDescriptor
     adapter: ArtifactAdapter
     agentId: string
     sessionId: string
-    retryToken: number
     state: ArtifactPreviewState
   } | null>(null)
-  const [retryToken, setRetryToken] = useState(0)
 
-  const isMedia = previewArtifact
-    ? artifactMediaKind(previewArtifact.mimeType, previewArtifact.filename) !==
-      null
-    : false
-  const preflightState: ArtifactPreviewState | null = !previewArtifact
-    ? { status: "idle" }
-    : !adapter
-      ? { status: "error", reason: "unavailable" }
-      : previewArtifact.sizeBytes !== undefined &&
-          previewArtifact.sizeBytes > MAX_ARTIFACT_BYTES
-        ? { status: "error", reason: "file-too-large" }
-        : !isMedia
-          ? { status: "idle" }
-          : null
+  const preflightState: ArtifactPreviewState | null = !adapter
+    ? { status: "error", reason: "unavailable" }
+    : previewArtifact.sizeBytes !== undefined &&
+        previewArtifact.sizeBytes > MAX_ARTIFACT_BYTES
+      ? { status: "error", reason: "file-too-large" }
+      : null
   const shouldResolve = preflightState === null
 
   useEffect(() => {
-    if (!previewArtifact || !adapter || !shouldResolve) return
+    if (!adapter || !shouldResolve) return
 
     const controller = new AbortController()
     let active = true
     let objectUrl: string | undefined
-    const request = {
-      artifact: previewArtifact,
-      adapter,
-      agentId,
-      sessionId,
-      retryToken,
-    }
+    const request = { artifact: previewArtifact, adapter, agentId, sessionId }
     const finish = (state: ArtifactPreviewState) =>
       setResolved({ ...request, state })
 
@@ -737,32 +565,18 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
       controller.abort()
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [
-    adapter,
-    agentId,
-    isMedia,
-    previewArtifact,
-    retryToken,
-    shouldResolve,
-    sessionId,
-  ])
+  }, [adapter, agentId, previewArtifact, shouldResolve, sessionId])
 
   const isCurrentResolution =
-    previewArtifact !== null &&
     adapter !== undefined &&
     resolved?.artifact === previewArtifact &&
     resolved.adapter === adapter &&
     resolved.agentId === agentId &&
-    resolved.sessionId === sessionId &&
-    resolved.retryToken === retryToken
-  const state =
+    resolved.sessionId === sessionId
+  return (
     preflightState ??
     (isCurrentResolution ? resolved.state : { status: "loading" as const })
-
-  return {
-    state,
-    retry: () => setRetryToken((token) => token + 1),
-  }
+  )
 }
 
 export function ArtifactToolResultCard({

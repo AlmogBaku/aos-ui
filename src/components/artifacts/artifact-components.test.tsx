@@ -65,32 +65,6 @@ describe("artifact workspace", () => {
     expect(next).toBe(first)
   })
 
-  it("renders a validated present_artifact result as a message card", () => {
-    render(
-      workspace({
-        adapter: { resolve: vi.fn<ArtifactAdapter["resolve"]>() },
-        messages: [],
-        children: (
-          <ArtifactToolResultCard
-            result={{
-              id: "tool-output",
-              filename: "tool-output.txt",
-              source: { type: "inline", encoding: "utf8", data: "Output" },
-            }}
-          />
-        ),
-      })
-    )
-
-    expect(screen.getByText("tool-output.txt")).toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: "Open: tool-output.txt" })
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: /^Open$/ })
-    ).not.toBeInTheDocument()
-  })
-
   const audioArtifact = {
     id: "fixture-audio",
     filename: "intro.mp3",
@@ -300,9 +274,11 @@ describe("artifact workspace", () => {
       resolve: vi.fn<ArtifactAdapter["resolve"]>(),
     })
 
+    expect(screen.getByText("capture.bin")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
     expect(
-      screen.getByRole("button", { name: "Open: capture.bin" })
-    ).toBeVisible()
+      screen.queryByRole("button", { name: /^Open/ })
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByLabelText(/^(Audio|Video) output/)
     ).not.toBeInTheDocument()

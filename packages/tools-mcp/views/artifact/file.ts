@@ -1,6 +1,3 @@
-/** The largest file the view reads to preview; a larger one is only offered. */
-export const PREVIEW_LIMIT_BYTES = 64 * 1024 * 1024
-
 export type FilePreview =
   | { kind: "pdf"; blob: Blob }
   | { kind: "image"; url: string }
@@ -12,6 +9,21 @@ export type FileState =
   | { status: "ready"; preview: FilePreview }
 
 type PreviewKind = Exclude<FilePreview["kind"], "none">
+
+export type PreviewLimits = Record<PreviewKind, number>
+
+const MIB = 1024 * 1024
+
+/**
+ * The largest file of each kind, in bytes, the view reads to preview; a larger
+ * one is only offered. The view lays text out itself, so text gets the least.
+ */
+export const PREVIEW_LIMITS: PreviewLimits = {
+  pdf: 64 * MIB,
+  image: 64 * MIB,
+  html: 25 * MIB,
+  text: 2 * MIB,
+}
 
 const TEXT_EXTENSIONS =
   "css csv js json jsx log markdown md py rs sh sql toml ts tsv tsx txt xml yaml yml"
@@ -100,15 +112,15 @@ async function preview(kind: PreviewKind, blob: Blob): Promise<FilePreview> {
 }
 
 /**
- * Fetches the file at `address` whole, up to `limit` bytes, and prepares its
- * preview. The first type that is known decides how it shows: the one the
+ * Fetches the file at `address` whole, up to its kind's limit, and prepares
+ * its preview. The first type that is known decides how it shows: the one the
  * Agent declared, then the file name's, then the response's. A file with no
  * preview is not read at all.
  */
 export async function loadFile(
   address: string,
   file: { filename: string; mimeType?: string | undefined },
-  limit: number,
+  limits: PreviewLimits,
   signal: AbortSignal
 ): Promise<FileState> {
   try {
@@ -130,7 +142,7 @@ export async function loadFile(
       discard(response.body)
       return { status: "ready", preview: { kind: "none" } }
     }
-    const chunks = await readBody(response, limit)
+    const chunks = await readBody(response, limits[kind])
     if (!chunks) return { status: "tooLarge" }
     return {
       status: "ready",

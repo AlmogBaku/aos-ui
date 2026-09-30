@@ -3,7 +3,6 @@ import type { Dictionary } from "../dictionary"
 export const en = {
   productName: "AOS",
   artifacts: {
-    open: "Open",
     download: "Download",
     loading: "Loading output…",
     loadFailed: "This output could not be loaded.",

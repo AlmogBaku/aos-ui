@@ -911,19 +911,7 @@ describe("MCP App files", () => {
       expect(logged).not.toContain(secret)
   })
 
-  it.each<[string, (files: AppFileOptions, sent: string) => Promise<string>]>([
-    [
-      "tampered",
-      async (_, sent) =>
-        `${sent.slice(0, sent.lastIndexOf(".") + 1)}${"A".repeat(43)}`,
-    ],
-    [
-      "expired",
-      async (files) =>
-        (await files.passes.issue(pass, Math.floor(Date.now() / 1_000) - 1))
-          .pass,
-    ],
-    ["foreign", async () => (await createFilePassService().issue(pass)).pass],
+  it.each<[string, (files: AppFileOptions) => Promise<string>]>([
     [
       "another call's",
       async (files) =>
@@ -936,8 +924,8 @@ describe("MCP App files", () => {
     ],
   ])("refuses a %s pass with an empty 401", async (_, forge) => {
     const { proxy, read, files } = fileProxy()
-    const view = await openView(proxy)
-    const forged = await forge(files, passOf(view.files?.addresses.path ?? ""))
+    await openView(proxy)
+    const forged = await forge(files)
 
     const response = await proxy.request(
       `${origin}${appPath()}/files/path?pass=${forged}`

@@ -353,14 +353,13 @@ derived unread count. Browsing the Activity drawer marks nothing read.
 - **Published artifacts:** audio, video, and images are first-class inline
   outcomes with no download control of their own. Audio and video play in the
   message as native players inside a `w-full max-w-[30rem]` container, whose
-  own controls carry the download, and nothing about them opens the Artifact
-  viewer. An image shows in the message as a bounded preview (max height
-  `max-h-64`), never at its original size; the preview opens the viewer, which
-  holds the full picture and the download. Video is likewise bounded
-  (`max-h-96`). Every other artifact stays a compact card that opens the
-  viewer, and the Artifacts roster stays a list of openable rows. A failure
-  states what happened in place, and a provider that no longer holds the bytes
-  says so and drops the retry and download it cannot honor.
+  own controls carry the download. An image shows in the message as a bounded
+  preview (max height `max-h-64`), never at its original size; the download is
+  the browser's own image menu. Video is likewise bounded (`max-h-96`). Every
+  other artifact is a compact card showing the file name, type, and size with a
+  Download control. A failure states what happened in place, and a provider
+  that no longer holds the bytes says so and drops the retry and download it
+  cannot honor.
 - **MCP Apps:** the one exception to "never run arbitrary HTML". A tool whose
   own MCP server declares a `ui://` view renders that server-authored HTML as
   an inline card in the message, inside an opaque-origin double iframe with a
@@ -369,17 +368,16 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   requested height up to 80% of the viewport. The App may ask for fullscreen,
   which covers the viewport in place with a localized close control that
   returns focus to the card, or for the side panel (`pip`), which shows the
-  view where the Artifact viewer opens: in the inspector's place on wide
-  screens and in the focus-managed drawer on phones, one view at a time. The
-  frame reloads whenever the view moves. Its message keeps a localized "Shown
-  in the side panel" note with a control that returns it; the panel's close
-  control, which takes focus when the view arrives, Esc from the panel, and
-  leaving the Session return it too, and focus follows it back to the card.
-  Loading, failure, and an unavailable view read as card states. The card has
-  no header: the view sits in the message, followed by the compact "Used
-  <tool>" row that keeps the call's textual details in every state. A view
-  downloads and opens only its own call's files. Charts, maps, and stats are
-  the `aos-ui` server's own App views (`render_chart`, `render_map`,
+  view in the inspector's place on wide screens and in the focus-managed drawer
+  on phones, one view at a time. The frame reloads whenever the view moves. Its
+  message keeps a localized "Shown in the side panel" note with a control that
+  returns it; the panel's close control, which takes focus when the view
+  arrives, Esc from the panel, and leaving the Session return it too, and focus
+  follows it back to the card. Loading, failure, and an unavailable view read as
+  card states. The card has no header: the view sits in the message, followed by
+  the compact "Used <tool>" row that keeps the call's textual details in every
+  state. A view downloads and opens only its own call's files. Charts, maps, and
+  stats are the `aos-ui` server's own App views (`render_chart`, `render_map`,
   `render_stats`), and `present_artifact`'s view shows the file it presents.
 
 ### Notification ask and settings

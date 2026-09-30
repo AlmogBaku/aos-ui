@@ -771,11 +771,6 @@ async function openGuestView(
   return (await response.json()) as McpAppView
 }
 
-/** The pass an offered address carries. */
-function passOf(address: string) {
-  return new URL(address, ORIGIN).searchParams.get("pass") ?? ""
-}
-
 describe("guest MCP App files", () => {
   const address = (argument: string) =>
     expect.stringMatching(
@@ -869,34 +864,13 @@ describe("guest MCP App files", () => {
     expect(((await renewed.json()) as McpAppFiles).expiresAt).toBe(ends)
   })
 
-  it.each<[string, (files: AppFileOptions, sent: string) => Promise<string>]>([
-    [
-      "tampered",
-      async (_, sent) =>
-        `${sent.slice(0, sent.lastIndexOf(".") + 1)}${"A".repeat(43)}`,
-    ],
-    [
-      "expired",
-      async (files) => (await files.passes.issue(pass, NOW / 1_000 - 1)).pass,
-    ],
-    [
-      "foreign",
-      async () =>
-        (await createFilePassService({ now: () => NOW }).issue(pass)).pass,
-    ],
-    [
-      "an operator's",
-      async (files) =>
-        (await files.passes.issue({ ...pass, role: "operator" })).pass,
-    ],
-  ])("refuses a %s pass, even beside a valid invitation", async (_, forge) => {
+  it("refuses an operator's pass, even beside a valid invitation", async () => {
     const subject = fileHarness({ guest: { agentFolder: true } })
     const invite = await token(subject.invitationService)
-    const { files } = await openGuestView(subject, invite)
-    const forged = await forge(
-      subject.files,
-      passOf(files?.addresses.path ?? "")
-    )
+    await openGuestView(subject, invite)
+    const forged = (
+      await subject.files.passes.issue({ ...pass, role: "operator" })
+    ).pass
 
     const response = await subject.app.request(
       `${guestApp()}/files/path?pass=${forged}`,

@@ -8,7 +8,11 @@ import { lazy, Suspense, useEffect, useState } from "react"
 import { z } from "zod"
 
 import type { PresentArtifactResult } from "../../../shared/presentation/tools"
-import { PREVIEW_LIMIT_BYTES, type FilePreview } from "./artifact/file"
+import {
+  PREVIEW_LIMITS,
+  type FilePreview,
+  type PreviewLimits,
+} from "./artifact/file"
 import { useFile } from "./artifact/use-file"
 import type { ViewLabels } from "./locale"
 import { IconButton } from "./ui/icon-button"
@@ -116,11 +120,11 @@ export function ArtifactView({
   labels,
   app,
   context,
-  previewLimit = PREVIEW_LIMIT_BYTES,
-}: ViewProps<PresentArtifactResult> & { previewLimit?: number }) {
+  previewLimits = PREVIEW_LIMITS,
+}: ViewProps<PresentArtifactResult> & { previewLimits?: PreviewLimits }) {
   const artifact = labels.artifact
   const address = filesSchema.safeParse(context?.["aos/files"]).data?.path
-  const file = useFile(address, value.filename, value.mimeType, previewLimit)
+  const file = useFile(address, value.filename, value.mimeType, previewLimits)
   const pip = context?.displayMode === "pip"
   // In the side panel, Esc returns the view to its message, unless something
   // in the view used the key first.
