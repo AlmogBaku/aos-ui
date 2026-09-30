@@ -182,42 +182,61 @@ every failure; it never logs the path. Reason codes, from
 
 **Refused (404):**
 
-| Code | Meaning |
-| --- | --- |
-| `no_reader` | The runtime cannot read files, or (for a guest) cannot report a file's real path |
-| `call_unknown` | No such tool call in that Session |
-| `server_not_allowed` | The call's MCP server is not in `mcpApps.files.servers` |
-| `argument_not_servable` | The argument is missing, nested, or not an absolute normalized path |
-| `denied` | The folder rules refuse the written path |
-| `real_path_unknown` | The runtime could not report the real path |
-| `real_path_denied` | The real path, after links, falls outside the folder rules |
-| `runtime_refused` | The runtime answered 403 |
-| `missing` | The runtime answered 404 (file not found) |
-| `gone` | The Agent or Session no longer exists |
+| Code                    | Meaning                                                                          |
+| ----------------------- | -------------------------------------------------------------------------------- |
+| `no_reader`             | The runtime cannot read files, or (for a guest) cannot report a file's real path |
+| `call_unknown`          | No such tool call in that Session                                                |
+| `server_not_allowed`    | The call's MCP server is not in `mcpApps.files.servers`                          |
+| `argument_not_servable` | The argument is missing, nested, or not an absolute normalized path              |
+| `denied`                | The folder rules refuse the written path                                         |
+| `real_path_unknown`     | The runtime could not report the real path                                       |
+| `real_path_denied`      | The real path, after links, falls outside the folder rules                       |
+| `runtime_refused`       | The runtime answered 403                                                         |
+| `missing`               | The runtime answered 404 (file not found)                                        |
+| `gone`                  | The Agent or Session no longer exists                                            |
 
 **Unavailable (503):**
 
-| Code | Meaning |
-| --- | --- |
+| Code             | Meaning                                                   |
+| ---------------- | --------------------------------------------------------- |
 | `runtime_status` | The runtime answered a status other than 200, 206, or 416 |
-| `failed` | The read failed for another reason |
+| `failed`         | The read failed for another reason                        |
 
 A 401 response means a bad or expired pass, or a guest without a valid login.
 A 429 response means the file route's own rate limit was hit.
 
-If `open` returns no file addresses (no configured folder for this Agent), the
-card shows "Can't reach this file" and no log line is written.
+If the card shows "Can't reach this file" and the proxy logged nothing, `open`
+returned no address. Every path that leads there:
+
+- The call's MCP server is not in `mcpApps.files.servers`.
+- The runtime cannot read files (OpenCode).
+- No folder is configured for this Agent.
+- The guest is on OpenClaw (guests get no file addresses on OpenClaw).
 
 **OpenCode** cannot yet serve files; the card always shows "Can't reach this file".
 
 **OpenClaw** cannot reach sandboxed Sessions or Sessions on other machines.
-Guests get no file addresses on OpenClaw.
+
+**Hermes** reports the reason when it cannot resolve the real path of a file
+(logged as `hermes.file.real_path_unknown`):
+
+| Code              | Meaning                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `listing_invalid` | The folder path is not a real directory (for example, a broken link loop)          |
+| `listing_refused` | The folder is outside a locked root or Hermes cannot read it                       |
+| `listing_missing` | The folder does not exist                                                          |
+| `listing_failed`  | A broken link whose target Hermes cannot stat                                      |
+| `not_listed`      | The file is not in the folder listing; Hermes omits credential files from listings |
+
+Any of these causes the proxy to log `app_file.refused` with code `real_path_unknown`.
 
 For HTML files shown in the `present_artifact` card:
+
 - The view loads no external or relative resources; an HTML file that needs them must inline everything.
 - Scripts are off; any effect that requires a script will not appear in the preview.
 
 For PDFs:
+
 - JPEG 2000 images inside a PDF stay blank in Safari and WebKit while the rest of the page renders. This is a WebKit limitation.
 
 ### MEDIA: and trusted-delivery Artifacts

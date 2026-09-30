@@ -477,7 +477,7 @@ and a replayed one reach the browser identically. The id must be opaque and
 stable for that Agent and Session; never put a native path in it or in any
 public tool argument or result.
 
-`present_artifact` is now an MCP App. Its result carries
+`present_artifact` is an MCP App. Its result carries
 `{ok: true, type: "aos.presentation", kind: "present_artifact",
 value: {filename, mimeType?}}`; it does not produce an artifact descriptor.
 Emit a descriptor only from a harness's own `MEDIA:` delivery convention or a
