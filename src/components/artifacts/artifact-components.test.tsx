@@ -125,7 +125,7 @@ describe("artifact workspace", () => {
       player: HTMLVideoElement,
     },
   ])(
-    "plays a published $kind artifact inline with no download or viewer of its own",
+    "plays a published $kind artifact inline with no download of its own",
     async ({ kind, artifact, bytes, label, player }) => {
       vi.spyOn(URL, "createObjectURL").mockReturnValue(`blob:${kind}-artifact`)
       vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
@@ -138,12 +138,6 @@ describe("artifact workspace", () => {
       expect(element).toHaveAttribute("preload", "metadata")
       expect(
         screen.queryByRole("button", { name: "Download" })
-      ).not.toBeInTheDocument()
-      expect(
-        screen.queryByRole("button", { name: /^Open/ })
-      ).not.toBeInTheDocument()
-      expect(
-        screen.queryByRole("region", { name: "Output preview" })
       ).not.toBeInTheDocument()
     }
   )
@@ -219,7 +213,7 @@ describe("artifact workspace", () => {
     expect(screen.queryByLabelText(/^Audio output/)).not.toBeInTheDocument()
   })
 
-  it("explains a pruned inline player without retry or download", async () => {
+  it("explains a pruned inline player without a download", async () => {
     renderPublishedArtifact({
       artifact: audioArtifact,
       resolve: async () => {
@@ -238,9 +232,6 @@ describe("artifact workspace", () => {
     expect(screen.getByText("intro.mp3")).toBeVisible()
     expect(
       screen.queryByRole("button", { name: "Download" })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Try again" })
     ).not.toBeInTheDocument()
   })
 
@@ -276,9 +267,6 @@ describe("artifact workspace", () => {
 
     expect(screen.getByText("capture.bin")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
-    expect(
-      screen.queryByRole("button", { name: /^Open/ })
-    ).not.toBeInTheDocument()
     expect(
       screen.queryByLabelText(/^(Audio|Video) output/)
     ).not.toBeInTheDocument()

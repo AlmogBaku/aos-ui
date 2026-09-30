@@ -203,7 +203,6 @@ describe("artifact view", () => {
       )
       const address = "https://aos.test/files/notes.txt?pass=one"
       const view = props(notes)
-      // Only text is held to 8 bytes; every other kind keeps its own limit.
       render(
         <ArtifactView
           {...view}
@@ -266,10 +265,12 @@ describe("artifact view", () => {
       "fetch",
       vi.fn(async () => new Response(html))
     )
+    // HTML keeps its own limit while text is held to 8 bytes.
     render(
       <ArtifactView
         {...props({ filename: "plan.html" })}
         context={files("https://aos.test/files/plan.html?pass=one")}
+        previewLimits={{ ...PREVIEW_LIMITS, text: 8 }}
       />
     )
 

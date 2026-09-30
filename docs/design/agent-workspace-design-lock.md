@@ -15,10 +15,10 @@ Implementation invariants:
   Session drawer.
 - Use the temporary AOS placeholder mark at small scale and the violet/teal palette sparingly.
 - Give every primary Agent a persistent, distinctive icon and a separate status indicator.
-- Keep the inspector limited to Agent identity, status, description, Sessions, and the active
-  Session's explicitly published Artifacts. Opening an Artifact may temporarily
-  replace the inspector with its read-only viewer; closing it restores the
-  Agent inspector. Narrow layouts use the established focus-managed drawer.
+- Keep the inspector limited to Agent identity, status, description, and
+  Sessions. An MCP App view in the side panel may temporarily take its place;
+  returning the view to its message restores the Agent inspector. Narrow
+  layouts use the established focus-managed drawer.
 - A selected `New Agent` draft shows neither the Session tab strip nor the
   inspector; a `Discard draft` control takes the tab strip's place.
 - Do not add department navigation, window traffic lights, dashboard cards, or ornamental effects.

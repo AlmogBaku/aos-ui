@@ -358,8 +358,8 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   the browser's own image menu. Video is likewise bounded (`max-h-96`). Every
   other artifact is a compact card showing the file name, type, and size with a
   Download control. A failure states what happened in place, and a provider
-  that no longer holds the bytes says so and drops the retry and download it
-  cannot honor.
+  that no longer holds the bytes says so and drops the download it cannot
+  honor.
 - **MCP Apps:** the one exception to "never run arbitrary HTML". A tool whose
   own MCP server declares a `ui://` view renders that server-authored HTML as
   an inline card in the message, inside an opaque-origin double iframe with a
