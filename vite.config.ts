@@ -149,7 +149,7 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
 }
 
 /**
- * Adds `Access-Control-Allow-Origin: null` to the three synthetic fixture
+ * Adds `Access-Control-Allow-Origin: null` to the synthetic fixture
  * files the artifact view fetches from an opaque-origin sandbox frame. Mirrors
  * what `packages/proxy/static.ts` does in production.
  */

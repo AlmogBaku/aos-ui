@@ -1,7 +1,30 @@
+import {
+  FIXTURE_MCP_APP_FILES,
+  FIXTURE_MCP_APP_FILES_PATH,
+} from "@shared/presentation/views"
 import { ArtifactUnavailableError } from "@/artifacts/browser-artifact-adapter"
 import type { ArtifactAdapter, ArtifactDescriptor } from "../contracts"
 
 const example = <T extends ArtifactDescriptor>(artifact: T) => artifact
+
+/**
+ * A published attachment whose bytes the preview serves as a static file, so
+ * the artifact view can fetch them from its sandbox as it fetches a real one.
+ */
+const servedExample = (
+  id: string,
+  file: keyof typeof FIXTURE_MCP_APP_FILES,
+  mimeType: string
+) =>
+  example({
+    id,
+    filename: FIXTURE_MCP_APP_FILES[file],
+    mimeType,
+    source: {
+      type: "provider",
+      reference: `${FIXTURE_MCP_APP_FILES_PATH}/${FIXTURE_MCP_APP_FILES[file]}`,
+    },
+  })
 
 const createToneWavBase64 = () => {
   const sampleRate = 8_000
@@ -34,16 +57,15 @@ const createToneWavBase64 = () => {
 
 export const FIXTURE_ARTIFACT_CATALOG = {
   examples: {
-    markdown: example({
-      id: "fixture-market-brief",
-      filename: "enterprise-ai-brief.md",
-      mimeType: "text/markdown",
-      source: {
-        type: "inline",
-        encoding: "utf8",
-        data: "# Enterprise AI brief\n\nInvestment is moving from pilots toward governed deployments.\n\n```ts\nconst governedGrowth = (57 - 42) / 42\n```",
-      },
-    }),
+    markdown: servedExample(
+      "fixture-market-brief",
+      "markdown",
+      "text/markdown"
+    ),
+    csv: servedExample("fixture-market-data", "csv", "text/csv"),
+    json: servedExample("fixture-json", "json", "application/json"),
+    code: servedExample("fixture-code", "code", "application/typescript"),
+    html: servedExample("fixture-market-html", "page", "text/html"),
     image: example({
       id: "fixture-image",
       filename: "market-chart.svg",
@@ -104,6 +126,16 @@ export function createFixtureArtifactAdapter(): ArtifactAdapter {
   return {
     async resolve({ artifact, signal }) {
       if (signal.aborted) throw aborted()
+      if (
+        artifact.source.type === "provider" &&
+        artifact.source.reference.startsWith(`${FIXTURE_MCP_APP_FILES_PATH}/`)
+      ) {
+        const response = await fetch(artifact.source.reference, { signal })
+        if (!response.ok) throw new Error("Fixture file is not served")
+        return new Blob([await response.arrayBuffer()], {
+          type: artifact.mimeType,
+        })
+      }
       if (artifact.source.type === "provider") {
         throw new ArtifactUnavailableError(
           `Fixture artifact reference is unavailable: ${artifact.source.reference}`

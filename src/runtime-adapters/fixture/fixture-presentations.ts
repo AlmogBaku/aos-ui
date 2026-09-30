@@ -26,12 +26,34 @@ export type FixturePresentationCallId =
   | "fixture-present_artifact-png"
   | "fixture-present_artifact-html"
 
+/**
+ * What the artifact view reads as its file's result: the display name and
+ * type, as text and as structured content. A published attachment's view gets
+ * exactly this; an artifact tool call's result also names its tool's `kind`.
+ */
+export function fixtureArtifactResult(
+  filename: string,
+  mimeType: string
+): CallToolResult {
+  const value = { filename, mimeType }
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${filename} is ready for display.\n\nStructured fallback:\n${JSON.stringify(value)}`,
+      },
+    ],
+    structuredContent: { ok: true, type: "aos.presentation", value },
+  }
+}
+
 /** Builds one present_artifact call entry: args + the full structured result. */
 function artifactCall(
   key: keyof typeof FIXTURE_MCP_APP_FILES,
   mimeType: string
 ): FixturePresentationCall {
   const filename = FIXTURE_MCP_APP_FILES[key]
+  const result = fixtureArtifactResult(filename, mimeType)
   return {
     toolName: "present_artifact",
     args: {
@@ -39,17 +61,10 @@ function artifactCall(
       title: filename,
     },
     result: {
-      content: [
-        {
-          type: "text",
-          text: `${filename} is ready for display.\n\nStructured fallback:\n${JSON.stringify({ filename, mimeType })}`,
-        },
-      ],
+      ...result,
       structuredContent: {
-        ok: true,
-        type: "aos.presentation",
+        ...result.structuredContent,
         kind: "present_artifact",
-        value: { filename, mimeType },
       },
     },
   }

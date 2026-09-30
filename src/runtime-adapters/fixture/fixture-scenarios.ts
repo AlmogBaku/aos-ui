@@ -28,6 +28,7 @@ export const fixtureScenarioNames = [
   "image",
   "audio",
   "video",
+  "attachments",
   "mermaid",
   "mermaid-wide",
   "mermaid-incomplete",
@@ -667,6 +668,18 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
     return {
       name: "stats",
       parts: [fixturePresentationPart("fixture-render_stats")],
+    }
+  }
+
+  if (input.includes("attachment")) {
+    const { markdown, csv, json, code, html } =
+      FIXTURE_ARTIFACT_CATALOG.examples
+    return {
+      name: "attachments",
+      parts: [markdown, csv, json, code, html].map(
+        (data) =>
+          ({ type: "data", name: "aos.artifact", data }) as AssistantPart
+      ),
     }
   }
 

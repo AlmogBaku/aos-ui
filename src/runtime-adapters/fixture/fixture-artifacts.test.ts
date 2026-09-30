@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { parseArtifactDescriptor } from "@/artifacts/artifacts"
 import { ArtifactUnavailableError } from "@/artifacts/browser-artifact-adapter"
@@ -37,6 +37,28 @@ describe("fixture artifact adapter", () => {
 
     expect(await text.text()).toBe("Fixture notes")
     expect([...new Uint8Array(await binary.arrayBuffer())]).toEqual([0, 1, 2])
+  })
+
+  it("resolves a published attachment from the file the preview serves", async () => {
+    const fetcher = vi.fn(async () => new Response("Quarter,Spend"))
+    vi.stubGlobal("fetch", fetcher)
+    try {
+      const blob = await createFixtureArtifactAdapter().resolve({
+        artifact: FIXTURE_ARTIFACT_CATALOG.examples.csv,
+        agentId: "agent-aster",
+        sessionId: "thread-aster-market",
+        signal: new AbortController().signal,
+      })
+
+      expect(await blob.text()).toBe("Quarter,Spend")
+      expect(blob.type).toBe("text/csv")
+      expect(fetcher).toHaveBeenCalledWith(
+        "/fixture/mcp-app-files/quarterly-spend.csv",
+        expect.anything()
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("catalogs valid descriptors with unique ids", () => {

@@ -60,15 +60,21 @@ export const FIXTURE_AOS_UI_MCP_PATH = "/fixture/aos-ui-mcp.json"
 export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files"
 
 /**
- * The three synthetic fixture files served at
- * `FIXTURE_MCP_APP_FILES_PATH/<name>` for exercising the artifact view in
- * fixture mode: a PDF with a CCITT Group 4 image, a PNG, and an HTML file
- * whose visible effect confirms that scripts are off.
+ * The synthetic fixture files served at `FIXTURE_MCP_APP_FILES_PATH/<name>`
+ * for exercising the artifact view in fixture mode: a PDF with a CCITT Group 4
+ * image, a PNG, and an HTML file whose visible effect confirms that scripts
+ * are off, which the preview's artifact tool calls show; and the Markdown,
+ * CSV, JSON, code, and HTML files its published attachments carry.
  */
 export const FIXTURE_MCP_APP_FILES = {
   pdf: "report.pdf",
   png: "preview.png",
   html: "test.html",
+  markdown: "enterprise-ai-brief.md",
+  csv: "quarterly-spend.csv",
+  json: "quarterly-spend.json",
+  code: "growth-rate.ts",
+  page: "market-summary.html",
 } as const
 
 /**

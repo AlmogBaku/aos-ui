@@ -6,9 +6,13 @@ import {
   FIXTURE_MCP_APP_FILES_PATH,
 } from "@shared/presentation/views"
 
-import type { McpAppAdapter } from "../contracts"
+import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
+
+import type { McpAppAdapter, McpAppTarget } from "../contracts"
+import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
 import {
   FIXTURE_PRESENTATION_RESULT,
+  fixtureArtifactResult,
   fixturePresentationCall,
   type FixturePresentationCall,
 } from "./fixture-presentations"
@@ -153,6 +157,49 @@ function recordedToolsServer(): () => Promise<RecordedToolsServer> {
     })
 }
 
+/** The viewer a published attachment opens in, as the proxy configures it by default. */
+const ARTIFACT_VIEWER = "ui://aos-ui/artifact"
+
+/**
+ * A published attachment's one file, at the address the preview serves it
+ * from. An id the catalog lacks is gone, as a pruned attachment is; one whose
+ * bytes are inline has no address the sandboxed viewer could fetch.
+ */
+function attachmentFile(artifactId: string) {
+  const artifact = Object.values(FIXTURE_ARTIFACT_CATALOG.examples).find(
+    ({ id }) => id === artifactId
+  )
+  if (!artifact) throw new ArtifactMissingError()
+  if (artifact.source.type !== "provider")
+    throw new Error("Fixture attachment has no served file")
+  return {
+    artifact,
+    addresses: {
+      path: new URL(artifact.source.reference, globalThis.location.href).href,
+    },
+  }
+}
+
+/** A published attachment's view: the recorded viewer, given the file's name and type. */
+async function attachmentView(
+  server: RecordedToolsServer,
+  artifactId: string
+): Promise<McpAppView> {
+  const { artifact, addresses } = attachmentFile(artifactId)
+  const content = server.resources[ARTIFACT_VIEWER]?.contents[0]
+  if (!content || !("text" in content))
+    throw new Error("The artifact viewer is not recorded")
+  const ui = (content._meta as { ui?: { csp?: McpAppView["csp"] } } | undefined)
+    ?.ui
+  return {
+    html: content.text,
+    ...(ui?.csp ? { csp: ui.csp } : {}),
+    toolInput: {},
+    toolResult: fixtureArtifactResult(artifact.filename, artifact.mimeType),
+    files: { addresses },
+  }
+}
+
 /** The view a presentation call's tool declares, as its server serves it. */
 async function presentationView(
   server: RecordedToolsServer,
@@ -182,14 +229,18 @@ async function presentationView(
 
 /**
  * Serves the preview's Apps: charts, maps and stats through the real
- * `aos-ui` server's recorded `tools/list` and `resources/read`, and one
- * launch board whose every refresh answers the next numbered board.
+ * `aos-ui` server's recorded `tools/list` and `resources/read`, one launch
+ * board whose every refresh answers the next numbered board, and each
+ * published attachment in the recorded artifact viewer, which calls no tool.
  */
 export function createFixtureMcpAppAdapter(): McpAppAdapter {
   const server = recordedToolsServer()
   let refreshes = 0
   return {
-    async open({ toolCallId }) {
+    async open(target: McpAppTarget) {
+      if ("artifactId" in target)
+        return attachmentView(await server(), target.artifactId)
+      const { toolCallId } = target
       const presentation = fixturePresentationCall(toolCallId)
       if (presentation) return presentationView(await server(), presentation)
       if (toolCallId !== `fixture-${FIXTURE_MCP_APP_TOOL}`)
@@ -203,7 +254,10 @@ export function createFixtureMcpAppAdapter(): McpAppAdapter {
         },
       }
     },
-    async callTool({ name }) {
+    async callTool(input) {
+      if ("artifactId" in input)
+        throw new Error("A published attachment's view calls no tool")
+      const { name } = input
       if (name !== REFRESH_TOOL)
         return {
           content: [{ type: "text", text: `Unknown tool ${name}` }],
@@ -227,8 +281,10 @@ export function createFixtureMcpAppAdapter(): McpAppAdapter {
         recorded ?? { contents: [{ uri, mimeType: "text/plain", text: "" }] }
       )
     },
-    async renewFiles({ toolCallId }) {
-      const presentation = fixturePresentationCall(toolCallId)
+    async renewFiles(target) {
+      if ("artifactId" in target)
+        return { addresses: attachmentFile(target.artifactId).addresses }
+      const presentation = fixturePresentationCall(target.toolCallId)
       return {
         addresses: presentation
           ? withheldFiles(presentation.args).addresses
