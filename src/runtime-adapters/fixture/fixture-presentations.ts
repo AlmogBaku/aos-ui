@@ -1,13 +1,20 @@
 import type { ThreadAssistantMessagePart } from "@assistant-ui/react"
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 
-import type { PresentationToolName } from "@shared/presentation/tools"
+import type { AosUiToolName } from "@shared/presentation/tools"
+import {
+  FIXTURE_MCP_APP_FILES,
+  FIXTURE_MCP_APP_FILES_PATH,
+} from "@shared/presentation/views"
 import { MCP_APP_TOOL_ARTIFACT } from "@/components/mcp-apps/tool-part"
 
 type ToolCallPart = Extract<ThreadAssistantMessagePart, { type: "tool-call" }>
 
 export type FixturePresentationCall = {
-  toolName: PresentationToolName
+  toolName: AosUiToolName
   args: ToolCallPart["args"]
+  /** Custom MCP tool result; if absent the adapter uses the default short `{ ok: true }`. */
+  result?: CallToolResult
 }
 
 export type FixturePresentationCallId =
@@ -15,6 +22,9 @@ export type FixturePresentationCallId =
   | "fixture-render_chart"
   | "fixture-render_map"
   | "fixture-render_stats"
+  | "fixture-present_artifact-pdf"
+  | "fixture-present_artifact-png"
+  | "fixture-present_artifact-html"
 
 /**
  * Every chart, map and stats call the preview makes, by tool call id. The
@@ -103,6 +113,72 @@ export const fixturePresentationCalls: Record<
       ],
     },
   },
+  "fixture-present_artifact-pdf": {
+    toolName: "present_artifact",
+    args: {
+      path: `${FIXTURE_MCP_APP_FILES_PATH}/${FIXTURE_MCP_APP_FILES.pdf}`,
+      title: FIXTURE_MCP_APP_FILES.pdf,
+    },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: `${FIXTURE_MCP_APP_FILES.pdf} is ready for display.\n\nStructured fallback:\n${JSON.stringify({ filename: FIXTURE_MCP_APP_FILES.pdf, mimeType: "application/pdf" })}`,
+        },
+      ],
+      structuredContent: {
+        ok: true,
+        type: "aos.presentation",
+        kind: "present_artifact",
+        value: {
+          filename: FIXTURE_MCP_APP_FILES.pdf,
+          mimeType: "application/pdf",
+        },
+      },
+    },
+  },
+  "fixture-present_artifact-png": {
+    toolName: "present_artifact",
+    args: {
+      path: `${FIXTURE_MCP_APP_FILES_PATH}/${FIXTURE_MCP_APP_FILES.png}`,
+      title: FIXTURE_MCP_APP_FILES.png,
+    },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: `${FIXTURE_MCP_APP_FILES.png} is ready for display.\n\nStructured fallback:\n${JSON.stringify({ filename: FIXTURE_MCP_APP_FILES.png, mimeType: "image/png" })}`,
+        },
+      ],
+      structuredContent: {
+        ok: true,
+        type: "aos.presentation",
+        kind: "present_artifact",
+        value: { filename: FIXTURE_MCP_APP_FILES.png, mimeType: "image/png" },
+      },
+    },
+  },
+  "fixture-present_artifact-html": {
+    toolName: "present_artifact",
+    args: {
+      path: `${FIXTURE_MCP_APP_FILES_PATH}/${FIXTURE_MCP_APP_FILES.html}`,
+      title: FIXTURE_MCP_APP_FILES.html,
+    },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: `${FIXTURE_MCP_APP_FILES.html} is ready for display.\n\nStructured fallback:\n${JSON.stringify({ filename: FIXTURE_MCP_APP_FILES.html, mimeType: "text/html" })}`,
+        },
+      ],
+      structuredContent: {
+        ok: true,
+        type: "aos.presentation",
+        kind: "present_artifact",
+        value: { filename: FIXTURE_MCP_APP_FILES.html, mimeType: "text/html" },
+      },
+    },
+  },
 }
 
 /** What the real server answers a presentation call with, in short. */
@@ -120,14 +196,14 @@ export function fixturePresentationCall(
 export function fixturePresentationPart(
   toolCallId: FixturePresentationCallId
 ): ToolCallPart {
-  const { toolName, args } = fixturePresentationCalls[toolCallId]
+  const { toolName, args, result } = fixturePresentationCalls[toolCallId]
   return {
     type: "tool-call",
     toolCallId,
     toolName,
     args,
     argsText: JSON.stringify(args),
-    result: FIXTURE_PRESENTATION_RESULT,
+    result: result ?? FIXTURE_PRESENTATION_RESULT,
     artifact: MCP_APP_TOOL_ARTIFACT,
   }
 }

@@ -1,7 +1,10 @@
 import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js"
 
 import type { McpAppView } from "@aos/protocol/mcp-apps"
-import { FIXTURE_AOS_UI_MCP_PATH } from "@shared/presentation/views"
+import {
+  FIXTURE_AOS_UI_MCP_PATH,
+  FIXTURE_MCP_APP_FILES_PATH,
+} from "@shared/presentation/views"
 
 import type { McpAppAdapter } from "../contracts"
 import {
@@ -12,9 +15,6 @@ import {
 
 export const FIXTURE_MCP_APP_TOOL = "show_launch_board"
 const REFRESH_TOOL = "refresh_launch_board"
-
-/** Where the preview serves the files its views read, each by its basename. */
-export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files/"
 
 /**
  * Withholds a call's files as the proxy does: every top-level string argument
@@ -31,7 +31,7 @@ function withheldFiles(args: FixturePresentationCall["args"]) {
     }
     const basename = value.slice(value.lastIndexOf("/") + 1)
     addresses[name] = new URL(
-      `${FIXTURE_MCP_APP_FILES_PATH}${encodeURIComponent(basename)}`,
+      `${FIXTURE_MCP_APP_FILES_PATH}/${encodeURIComponent(basename)}`,
       globalThis.location.href
     ).href
   }
@@ -172,7 +172,7 @@ async function presentationView(
     ...(ui?.csp ? { csp: ui.csp } : {}),
     toolInput,
     ...(Object.keys(addresses).length ? { files: { addresses } } : {}),
-    toolResult: {
+    toolResult: call.result ?? {
       content: [
         { type: "text", text: JSON.stringify(FIXTURE_PRESENTATION_RESULT) },
       ],
