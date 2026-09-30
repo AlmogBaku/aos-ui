@@ -11,6 +11,7 @@ import {
   MAXIMUM_STAGE_REQUEST_BYTES,
 } from "../core/attachment-stages"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
+import type { AppFileOptions } from "../routes/app-files"
 import { createGuestAudioBudget } from "./audio-budget"
 
 export const guestSecurityHeaders = {
@@ -35,6 +36,8 @@ export type GuestAppOptions = {
   invitations: GuestInvitationService
   /** Shared with the guest ACP service so one upload serves either transport. */
   attachmentStages?: ServerAttachmentStages
+  /** Absent means the guest listener serves no MCP App files. */
+  files?: AppFileOptions
   now?: () => number
 }
 
@@ -111,11 +114,4 @@ export function createGuestRoutes(options: GuestAppOptions) {
         : emptyError(status)
     },
   }
-}
-
-export function encodedFilename(filename: string) {
-  return encodeURIComponent(filename).replace(
-    /[!'()*]/gu,
-    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
-  )
 }

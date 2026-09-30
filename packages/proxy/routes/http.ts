@@ -57,6 +57,14 @@ export function errorResponse(
   )
 }
 
+/** A filename as `filename*=UTF-8''` carries it. */
+export function encodedFilename(filename: string) {
+  return encodeURIComponent(filename).replace(
+    /[!'()*]/gu,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  )
+}
+
 export async function boundedJson(request: Request, maxBytes = 16 * 1024) {
   if (
     request.headers.get("content-type")?.split(";", 1)[0] !== "application/json"

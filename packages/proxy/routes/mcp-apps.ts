@@ -7,9 +7,17 @@ import {
 } from "../../protocol/mcp-apps"
 import type { ProxyAppOptions } from "../app"
 import * as ids from "../core/ids"
-import type { ServerRuntime, SessionScope } from "../core/runtime"
+import type { ServerRuntime } from "../core/runtime"
 import { McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
+import {
+  answerAppFile,
+  appFiles,
+  offerAppFiles,
+  type AppCallTarget,
+  type AppFileContext,
+  type AppFileGrant,
+} from "./app-files"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
 
@@ -25,7 +33,7 @@ const RATE_WINDOW_MS = 1_000
 const RATE_MAX_PER_WINDOW = 10
 const RATE_MAX_TRACKED = 4_096
 
-export type McpAppOperation = "open" | "tools/call" | "resources/read"
+export type McpAppOperation = "open" | "tools/call" | "resources/read" | "files"
 
 export type McpAppOutcome =
   | { ok: true; body: unknown }
@@ -49,9 +57,13 @@ const failure = {
 } as const satisfies Record<string, McpAppOutcome>
 
 /** A fixed window per view, so one chatty view cannot flood its server. */
-export function createMcpAppRateLimit(now: () => number = Date.now) {
+function createMcpAppRateLimit(
+  now: () => number = Date.now,
+  max = RATE_MAX_PER_WINDOW
+) {
   const windows = new Map<string, { start: number; count: number }>()
-  return (key: string) => {
+  return ({ agentId, sessionId, toolCallId }: AppCallTarget) => {
+    const key = `${agentId}\u0000${sessionId}\u0000${toolCallId}`
     const at = now()
     const current = windows.get(key)
     if (!current || at - current.start >= RATE_WINDOW_MS) {
@@ -60,8 +72,19 @@ export function createMcpAppRateLimit(now: () => number = Date.now) {
       return true
     }
     current.count += 1
-    return current.count <= RATE_MAX_PER_WINDOW
+    return current.count <= max
   }
+}
+
+/**
+ * One listener's limits, by operation: a view's file reads and renewals have
+ * their own window, so neither they nor the view's other requests starve the
+ * other.
+ */
+export function createMcpAppLimits(now?: () => number, fileRate?: number) {
+  const view = createMcpAppRateLimit(now)
+  const files = createMcpAppRateLimit(now, fileRate)
+  return (operation: McpAppOperation) => (operation === "files" ? files : view)
 }
 
 /**
@@ -69,29 +92,48 @@ export function createMcpAppRateLimit(now: () => number = Date.now) {
  * Session and resolved `scope`; this reads the body, applies the view's rate
  * limit, and maps every failure to an answer that never names a native detail.
  */
-export async function handleMcpAppRequest(input: {
-  runtime: ServerRuntime
-  scope: SessionScope
-  toolCallId: string
-  operation: McpAppOperation
-  request: Request
-  allow: (key: string) => boolean
-}): Promise<McpAppOutcome> {
+export async function handleMcpAppRequest(
+  input: AppFileContext & {
+    operation: McpAppOperation
+    allow: (call: AppCallTarget) => boolean
+  }
+): Promise<McpAppOutcome> {
   const { runtime, scope, toolCallId, operation, request } = input
   const apps = runtime.mcpApps
   if (!apps) return failure.not_found
   if (
-    !input.allow(`${scope.agentId}\u0000${scope.sessionId}\u0000${toolCallId}`)
+    !input.allow({
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      toolCallId,
+    })
   )
     return failure.rate_limited
   try {
     if (operation === "open")
       return {
         ok: true,
-        body: McpAppViewSchema.parse(
-          await apps.open(scope, toolCallId, request.signal)
+        body: await offerAppFiles(
+          McpAppViewSchema.parse(
+            await apps.open(scope, toolCallId, request.signal)
+          ),
+          input
         ),
       }
+    if (operation === "files") {
+      const grant = input.files
+      const call =
+        grant &&
+        (await grant.options.calls.lookup(
+          apps,
+          scope,
+          toolCallId,
+          request.signal
+        ))
+      return grant && call
+        ? { ok: true, body: await appFiles(input, grant, call) }
+        : failure.not_found
+    }
     const json = await boundedJson(request, MAX_REQUEST_BYTES)
     if (operation === "tools/call") {
       const body = McpAppToolCallRequestSchema.safeParse(json)
@@ -147,13 +189,48 @@ export function registerMcpAppRoutes(
   ) => Promise<ids.ProviderSessionId>
 ) {
   const base = `/api/aos/v1/agents/:agentId/sessions/:sessionId${MCP_APP_PATH}`
-  const allow = createMcpAppRateLimit(options.clock)
+  const limit = createMcpAppLimits(options.clock, options.files?.ratePerSecond)
   const routes: Array<[method: "get" | "post", path: string, McpAppOperation]> =
     [
       ["get", base, "open"],
       ["post", `${base}/tools/call`, "tools/call"],
       ["post", `${base}/resources/read`, "resources/read"],
     ]
+  const files: AppFileGrant | undefined = options.files && {
+    options: options.files,
+    role: "operator",
+    root: "/api/aos/v1",
+    sets: [options.files.operator],
+    requiresRealPath: false,
+  }
+  if (files) {
+    routes.push(["post", `${base}/files`, "files"])
+    app.get(`${base}/files/:argument`, async (context) => {
+      const runtime = await requireRuntime(context.req.raw)
+      const target = mcpAppParams(context.req.param())
+      const argument = context.req.param("argument")
+      if (!target || !argument) return errorResponse("not_found", 404)
+      return answerAppFile({
+        request: context.req.raw,
+        runtime,
+        grant: files,
+        target,
+        argument,
+        allow: limit("files"),
+        // The operator listener has no login of its own.
+        login: async () => true,
+        scope: async () => ({
+          agentId: target.agentId,
+          providerSessionId: await requireScopedSession(
+            runtime,
+            target.agentId,
+            target.sessionId
+          ),
+          sessionId: ids.sessionId(target.sessionId),
+        }),
+      })
+    })
+  }
   for (const [method, path, operation] of routes)
     app[method](path, async (context) => {
       const runtime = await requireRuntime(context.req.raw)
@@ -190,7 +267,8 @@ export function registerMcpAppRoutes(
         toolCallId,
         operation,
         request: context.req.raw,
-        allow,
+        allow: limit(operation),
+        files,
       })
       if (outcome.ok) return context.json(outcome.body)
       return errorResponse(

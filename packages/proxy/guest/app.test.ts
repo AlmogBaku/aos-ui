@@ -5,20 +5,26 @@ import { describe, expect, it, vi } from "vitest"
 
 import { captureLogs } from "../../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
+import type { McpAppFiles, McpAppView } from "../../protocol/mcp-apps"
+import { createFilePassService, type FilePassScope } from "../auth/file-pass"
 import {
   createGuestInvitationService,
   type GuestInvitationService,
 } from "../auth/guest-invitation"
+import { createAppFileCalls } from "../core/app-files"
 import type {
   RuntimeInstance,
+  ServerFileReader,
   ServerMcpApps,
   ServerTurnEngine,
   ServerRuntime,
+  SessionScope,
 } from "../core/runtime"
 import { failureOf } from "../core/failures"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
 import { McpAppNotFoundError } from "../mcp-apps/fallback"
+import { appFileSettings, type AppFileOptions } from "../routes/app-files"
 import { createGuestApp } from "./app"
 
 const NOW = 1_700_000_000_000
@@ -106,7 +112,7 @@ function workspaceCapabilities() {
   }
 }
 
-function harness(options: { existing?: boolean } = {}) {
+function harness(options: { existing?: boolean; files?: AppFileOptions } = {}) {
   const engine: ServerTurnEngine = { start: vi.fn(), recover: vi.fn() }
   const resolveInvitedSession = vi.fn(
     async (_agent: string, _ref: string, create?: object) =>
@@ -219,6 +225,7 @@ function harness(options: { existing?: boolean } = {}) {
       publicOrigin: ORIGIN,
       runtime: instance,
       invitations: invitationService,
+      files: options.files,
       now: () => NOW,
     }),
     runtime,
@@ -696,5 +703,243 @@ describe("guest app", () => {
 
     expect(response.status).toBe(401)
     expect(subject.speak).not.toHaveBeenCalled()
+  })
+})
+
+/** One of the invited Session's calls' MCP App path on the guest listener. */
+function guestApp(toolCallId = "call-1") {
+  return `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
+}
+
+/**
+ * A guest app under `configured` file settings whose invited Session holds
+ * `call-1`, an `aos-ui` call naming a file in the Agent folder `/srv/agent`
+ * and one in `/srv/guest`, on a runtime that reads files and, unless
+ * `realPath` is false, reports each one's real path as written.
+ */
+function fileHarness(
+  configured?: Parameters<typeof appFileSettings>[0],
+  realPath = true
+) {
+  const files: AppFileOptions = {
+    ...appFileSettings(configured),
+    passes: createFilePassService({ now: () => NOW }),
+    calls: createAppFileCalls(),
+    logger: captureLogs().logger,
+  }
+  const subject = harness({ existing: true, files })
+  const input = {
+    path: "/srv/agent/report.pdf",
+    notes: "/srv/guest/notes.txt",
+    title: "Q3",
+  }
+  const read = vi.fn<ServerFileReader["read"]>(
+    async () =>
+      new Response("%PDF-1", { headers: { "content-type": "application/pdf" } })
+  )
+  const mcpApps: ServerMcpApps = {
+    describe: vi.fn(async () => true),
+    open: vi.fn(async () => ({ html: "<p>view</p>", toolInput: input })),
+    toolCall: vi.fn(async (scope, toolCallId) =>
+      scope.providerSessionId === STORED && toolCallId === "call-1"
+        ? { server: "aos-ui", tool: "present_artifact", input }
+        : undefined
+    ),
+    callTool: vi.fn(async () => ({ content: [] })),
+    readResource: vi.fn(async () => ({ contents: [] })),
+  }
+  const reader: ServerFileReader = realPath
+    ? { read, realPath: async (_: SessionScope, path: string) => path }
+    : { read }
+  Object.assign(subject.runtime, {
+    mcpApps,
+    agentFolder: vi.fn(async () => "/srv/agent"),
+    readFile: reader,
+  })
+  return { ...subject, files, read }
+}
+
+/** Opens `call-1`'s view with the invitation `invite`. */
+async function openGuestView(
+  subject: ReturnType<typeof fileHarness>,
+  invite: string
+) {
+  const response = await subject.app.request(guestApp(), {
+    headers: headers(invite),
+  })
+  expect(response.status).toBe(200)
+  return (await response.json()) as McpAppView
+}
+
+/** The pass an offered address carries. */
+function passOf(address: string) {
+  return new URL(address, ORIGIN).searchParams.get("pass") ?? ""
+}
+
+describe("guest MCP App files", () => {
+  const address = (argument: string) =>
+    expect.stringMatching(
+      new RegExp(
+        `^/api/guest/v1/agents/${AGENT}/sessions/${REF}/tool-calls/call-1/app/files/${argument}\\?pass=[\\w.-]+$`,
+        "u"
+      )
+    )
+  const pass: FilePassScope = {
+    role: "guest",
+    agentId: AGENT,
+    sessionId: REF,
+    toolCallId: "call-1",
+  }
+
+  it.each<
+    [
+      string,
+      Parameters<typeof appFileSettings>[0],
+      boolean,
+      McpAppFiles,
+      number,
+    ]
+  >([
+    ["no guest folders", undefined, true, { addresses: {} }, 404],
+    [
+      "a runtime that cannot report real paths",
+      { guest: { agentFolder: true } },
+      false,
+      { addresses: {} },
+      404,
+    ],
+    [
+      "the Agent's folder",
+      { guest: { agentFolder: true } },
+      true,
+      {
+        addresses: { path: address("path"), notes: address("notes") },
+        expiresAt: expect.any(String),
+      },
+      200,
+    ],
+  ])(
+    "offers a guest with %s only the files it may read",
+    async (_, configured, realPath, files, status) => {
+      const subject = fileHarness(configured, realPath)
+      const invite = await token(subject.invitationService)
+
+      const view = await openGuestView(subject, invite)
+
+      expect(view.files).toEqual(files)
+      expect(view.toolInput).toEqual({ title: "Q3" })
+      const file = await subject.app.request(`${guestApp()}/files/path`, {
+        headers: headers(invite),
+      })
+      expect(file.status).toBe(status)
+    }
+  )
+
+  it("lets a pass alone read what an operator may too, until the invitation or its Session ends", async () => {
+    const subject = fileHarness({
+      guest: { agentFolder: true, allow: ["/srv/guest"] },
+    })
+    // An invitation that ends sooner than any pass would.
+    const invite = await scopedToken({ exp: NOW / 1_000 + 60 })
+    const ends = new Date(NOW + 60_000).toISOString()
+
+    const { files } = await openGuestView(subject, invite)
+
+    expect(files?.expiresAt).toBe(ends)
+    const read = (path?: string) => subject.app.request(`${ORIGIN}${path}`)
+    expect((await read(files?.addresses.path)).status).toBe(200)
+    // The guest folders allow it, but the operator's do not.
+    const refused = await read(files?.addresses.notes)
+    expect(refused.status).toBe(404)
+    // The guest listener keeps the file route's own policy.
+    expect(refused.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; frame-ancestors 'none'; sandbox"
+    )
+    // A Session the runtime no longer holds gets the same refusal.
+    subject.resolveInvitedSession.mockResolvedValueOnce(undefined)
+    expect((await read(files?.addresses.path)).status).toBe(404)
+    const renew = (origin: string) =>
+      subject.app.request(`${guestApp()}/files`, {
+        method: "POST",
+        headers: { ...headers(invite), origin },
+      })
+    expect((await renew("https://attacker.example.test")).status).toBe(403)
+    const renewed = await renew(ORIGIN)
+    expect(renewed.status).toBe(200)
+    expect(((await renewed.json()) as McpAppFiles).expiresAt).toBe(ends)
+  })
+
+  it.each<[string, (files: AppFileOptions, sent: string) => Promise<string>]>([
+    [
+      "tampered",
+      async (_, sent) =>
+        `${sent.slice(0, sent.lastIndexOf(".") + 1)}${"A".repeat(43)}`,
+    ],
+    [
+      "expired",
+      async (files) => (await files.passes.issue(pass, NOW / 1_000 - 1)).pass,
+    ],
+    [
+      "foreign",
+      async () =>
+        (await createFilePassService({ now: () => NOW }).issue(pass)).pass,
+    ],
+    [
+      "an operator's",
+      async (files) =>
+        (await files.passes.issue({ ...pass, role: "operator" })).pass,
+    ],
+  ])("refuses a %s pass, even beside a valid invitation", async (_, forge) => {
+    const subject = fileHarness({ guest: { agentFolder: true } })
+    const invite = await token(subject.invitationService)
+    const { files } = await openGuestView(subject, invite)
+    const forged = await forge(
+      subject.files,
+      passOf(files?.addresses.path ?? "")
+    )
+
+    const response = await subject.app.request(
+      `${guestApp()}/files/path?pass=${forged}`,
+      { headers: headers(invite) }
+    )
+
+    expect(response.status).toBe(401)
+    expect(await response.text()).toBe("")
+    expect(subject.read).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, () => Promise<Record<string, string>>]>([
+    ["no invitation", async () => ({})],
+    [
+      "another Session's invitation",
+      async () => headers(await scopedToken({ ref: "other_guest_ref" })),
+    ],
+    [
+      "another Agent's invitation",
+      async () => headers(await scopedToken({ agent: "other-agent" })),
+    ],
+    [
+      "an expired invitation",
+      async () =>
+        headers(
+          await scopedToken({ iat: NOW / 1_000 - 100, exp: NOW / 1_000 - 1 })
+        ),
+    ],
+  ])("refuses a file read and a renewal with %s", async (_, sent) => {
+    const subject = fileHarness({ guest: { agentFolder: true } })
+    const login = await sent()
+
+    const file = await subject.app.request(`${guestApp()}/files/path`, {
+      headers: login,
+    })
+    const renewal = await subject.app.request(`${guestApp()}/files`, {
+      method: "POST",
+      headers: { ...login, origin: ORIGIN },
+    })
+
+    expect(file.status).toBe(401)
+    expect(await file.text()).toBe("")
+    expect(renewal.status).toBe(401)
+    expect(subject.read).not.toHaveBeenCalled()
   })
 })

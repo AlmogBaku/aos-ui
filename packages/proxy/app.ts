@@ -15,6 +15,7 @@ import {
 } from "./core/runtime"
 import type { SessionCoordinator } from "./core/session-coordinator"
 import type { PushRegistrations } from "./push/registrations"
+import type { AppFileOptions } from "./routes/app-files"
 import { registerContentRoutes } from "./routes/content"
 import { registerInvitationRoutes } from "./routes/invitations"
 import { registerMcpAppRoutes } from "./routes/mcp-apps"
@@ -65,6 +66,8 @@ export type ProxyAppOptions = {
     publicKey: string
     registrations: PushRegistrations
   }
+  /** Absent means this listener serves no MCP App files. */
+  files?: AppFileOptions
 }
 
 /**
@@ -111,7 +114,9 @@ export function createProxyApp(options: ProxyAppOptions) {
     const startedAt = clock()
     await next()
     for (const [name, value] of Object.entries(securityHeaders))
-      context.header(name, value)
+      // A route that set its own policy, as the file route does, keeps it.
+      if (name !== "content-security-policy" || !context.res.headers.has(name))
+        context.header(name, value)
     context.header("x-request-id", requestId)
     options.logger.info(
       {

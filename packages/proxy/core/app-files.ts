@@ -1,6 +1,8 @@
 import { posix } from "node:path"
 
+import { isAosUiServerName } from "./aos-tool-names"
 import { sensitiveName } from "./artifact-path"
+import type { ServerMcpApps, SessionScope } from "./runtime"
 
 /**
  * The folder rules for the files an MCP App reads through the file route.
@@ -127,4 +129,68 @@ export async function readablePath(
   return allowed(sets, agentFolder, real)
     ? { ok: true, path: real }
     : { ok: false, reason: "real_path_denied" }
+}
+
+/** A call's servable arguments: each top-level one that names a servable path. */
+export function servableArguments(
+  input: Readonly<Record<string, unknown>>
+): ReadonlyMap<string, string> {
+  return new Map(
+    Object.entries(input).filter((entry): entry is [string, string] =>
+      isServablePath(entry[1])
+    )
+  )
+}
+
+/** Whether `server` is one of `servers`; `aos-ui` also names a harness's `aos_ui`. */
+export function serverAllowed(servers: readonly string[], server: string) {
+  return servers.some(
+    (name) =>
+      name === server || (isAosUiServerName(name) && isAosUiServerName(server))
+  )
+}
+
+/** A stored call as the file route reads it: its server and servable arguments. */
+export type AppFileCall = {
+  server: string
+  servable: ReadonlyMap<string, string>
+}
+
+export type AppFileCalls = ReturnType<typeof createAppFileCalls>
+
+/**
+ * The stored calls the file route has looked up, keyed by Agent, Session, and
+ * call, so a view's reads ask the runtime once. A stored call never changes;
+ * a miss is asked again, and past `max` calls the oldest is forgotten.
+ */
+export function createAppFileCalls(max = 256) {
+  const calls = new Map<string, AppFileCall>()
+  return {
+    async lookup(
+      apps: ServerMcpApps | undefined,
+      scope: SessionScope,
+      toolCallId: string,
+      signal?: AbortSignal
+    ): Promise<AppFileCall | undefined> {
+      const key = JSON.stringify([
+        scope.agentId,
+        scope.providerSessionId,
+        toolCallId,
+      ])
+      const known = calls.get(key)
+      if (known) return known
+      const call = await apps?.toolCall?.(scope, toolCallId, signal)
+      if (!call) return undefined
+      const found = {
+        server: call.server,
+        servable: servableArguments(call.input),
+      }
+      if (calls.size >= max) {
+        const [oldest] = calls.keys()
+        calls.delete(oldest)
+      }
+      calls.set(key, found)
+      return found
+    },
+  }
 }

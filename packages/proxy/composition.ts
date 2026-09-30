@@ -7,6 +7,8 @@ import {
   type RuntimeFactory,
 } from "./adapters/create-runtime"
 import { createProxyApp } from "./app"
+import { createFilePassService } from "./auth/file-pass"
+import { createAppFileCalls } from "./core/app-files"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import {
   createGuestInvitationService,
@@ -32,6 +34,7 @@ import { openPushRegistrations } from "./push/registrations"
 import { createPushSender } from "./push/sender"
 import { deriveVapidPublicKey } from "./push/vapid"
 import type { CredentialValues } from "./redaction"
+import { appFileSettings, type AppFileOptions } from "./routes/app-files"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import {
   createOpenAiCompatibleSynthesizer,
@@ -279,6 +282,16 @@ export async function createConfiguredProxy(
         }
       : {}),
   })
+  /**
+   * One set of MCP App file settings, pass key, and looked-up calls per
+   * process, which both listeners share: a pass names the role it admits.
+   */
+  const files: AppFileOptions = {
+    ...appFileSettings(config.mcpApps?.files),
+    passes: createFilePassService(clock),
+    calls: createAppFileCalls(),
+    logger: dependencies.logger,
+  }
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
   const guestListener = (
     publicOrigin: string,
@@ -293,6 +306,7 @@ export async function createConfiguredProxy(
         runtime: runtimeInstance,
         invitations: service,
         attachmentStages,
+        files,
         ...clock,
       }),
       acpService: createGuestAcpService({
@@ -339,6 +353,7 @@ export async function createConfiguredProxy(
     publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
+    files,
     ...(push
       ? {
           push: {

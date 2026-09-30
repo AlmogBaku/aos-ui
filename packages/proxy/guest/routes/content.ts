@@ -10,13 +10,8 @@ import {
 import { projectGuestOutbound } from "../../auth/guest-projection"
 import { MAXIMUM_STAGE_REQUEST_BYTES } from "../../core/attachment-stages"
 import { recordingBytes } from "../../routes/content"
-import { boundedJson } from "../../routes/http"
-import {
-  emptyError,
-  encodedFilename,
-  invitationError,
-  type GuestRoutes,
-} from "../context"
+import { boundedJson, encodedFilename } from "../../routes/http"
+import { emptyError, invitationError, type GuestRoutes } from "../context"
 
 export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
   app.post(

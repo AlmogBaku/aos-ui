@@ -20,7 +20,9 @@ export function createGuestApp(options: GuestAppOptions) {
   app.use("*", async (context, next) => {
     await next()
     for (const [name, value] of Object.entries(guestSecurityHeaders))
-      context.header(name, value)
+      // A route that set its own policy, as the file route does, keeps it.
+      if (name !== "content-security-policy" || !context.res.headers.has(name))
+        context.header(name, value)
   })
 
   registerGuestRuntimeRoute(app, routes)

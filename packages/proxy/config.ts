@@ -281,7 +281,7 @@ const McpAppsServerSchema = z
       })
   })
 
-/** One role's folders for MCP App files; composition fills the defaults. */
+/** One role's folders for MCP App files; `appFileSettings` fills the defaults. */
 const McpAppFolderSetSchema = z.strictObject({
   agentFolder: z.boolean().optional(),
   allow: z.array(AbsoluteDirectorySchema).max(64).optional(),
