@@ -142,7 +142,7 @@ describe("artifact workspace", () => {
     }
   )
 
-  it("reads an inline image's bytes once while the conversation keeps streaming", async () => {
+  it("offers an inline image's Download and reads its bytes once while the conversation keeps streaming", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image-artifact")
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
     const resolve = vi.fn<ArtifactAdapter["resolve"]>(
@@ -174,6 +174,7 @@ describe("artifact workspace", () => {
     expect(
       await screen.findByRole("img", { name: "diagram.png" })
     ).toBeVisible()
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
     expect(resolve).toHaveBeenCalledTimes(1)
 
     rerender(surface("First token, then another"))

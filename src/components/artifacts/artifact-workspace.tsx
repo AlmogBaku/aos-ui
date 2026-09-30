@@ -399,9 +399,8 @@ function ArtifactDownloadAction({
 }
 
 /**
- * Audio, video, and images show in the message with no download control of
- * their own: the native player controls carry one for audio and video, and an
- * image is a bounded preview whose download is the browser's own image menu.
+ * Audio and video show in the message as native players whose own controls
+ * carry the download; an image is a bounded preview with a Download beneath it.
  */
 function ArtifactInlineMedia({
   artifact,
@@ -456,12 +455,13 @@ function ArtifactInlineMedia({
           {labels.loading}
         </p>
       ) : kind === "image" ? (
-        <div className="max-w-sm">
+        <div className="grid max-w-sm gap-1.5">
           <img
             src={url}
             alt={published.filename}
             className="block h-auto max-h-64 w-auto max-w-full rounded-lg border border-border object-contain"
           />
+          <ArtifactDownloadAction artifact={published} />
         </div>
       ) : kind === "audio" ? (
         <audio
