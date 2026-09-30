@@ -66,6 +66,12 @@ export function createOpenClawFileReader(input: {
         agentId: scope.agentId,
       })
       const url = new URL(`${base}${MEDIA_ROUTE}?${query}`, input.origin)
+      // `BASE_PATH` already keeps both; this holds if it ever loosens.
+      if (
+        url.origin !== input.origin ||
+        url.pathname !== `${base}${MEDIA_ROUTE}`
+      )
+        throw new OpenClawNativePayloadError()
       try {
         return await input.fetch(url, {
           headers: {
