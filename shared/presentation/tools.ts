@@ -87,6 +87,20 @@ export const presentationToolDefinitions = {
 
 export type PresentationToolName = keyof typeof presentationToolDefinitions
 
+/** Every tool the `aos-ui` server declares a view for. */
+export type AosUiToolName = PresentationToolName | "present_artifact"
+
+/**
+ * What `present_artifact`'s result hands its view: the file's display name and
+ * declared type, never its path, since a result reaches guests.
+ */
+export const presentArtifactResultSchema = z.object({
+  filename: z.string().min(1),
+  mimeType: z.string().min(1).optional(),
+})
+
+export type PresentArtifactResult = z.infer<typeof presentArtifactResultSchema>
+
 /** Clearly illustrative fixtures; never present these values as user facts. */
 export const presentationExamples = {
   render_chart: {

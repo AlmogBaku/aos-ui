@@ -4,8 +4,16 @@ import { parseArgs } from "node:util"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 
-import { presentationViewNames } from "../../shared/presentation/views"
-import { createToolsServer, type PresentationViewDocuments } from "./server"
+import {
+  PDFJS_WORKER_FILE,
+  presentationViewNames,
+} from "../../shared/presentation/views"
+import {
+  createToolsServer,
+  type PdfjsFiles,
+  type PresentationViewDocuments,
+  type ToolsServerFiles,
+} from "./server"
 
 const USAGE =
   "Usage: cli.ts --stdio | --http [--host 127.0.0.1] [--port 4110] [--views <dir>]"
@@ -31,12 +39,29 @@ async function loadViews(
   return views
 }
 
+/** Reads the pdf.js files the build copied beside the views, once. */
+async function loadPdfjs(directory: string): Promise<PdfjsFiles> {
+  const root = path.join(directory, "pdfjs")
+  const files = new Map<string, Uint8Array>()
+  try {
+    for await (const name of new Bun.Glob("**/*").scan({ cwd: root }))
+      files.set(name, await readFile(path.join(root, name)))
+  } catch {
+    // A missing directory is reported below, as a missing worker.
+  }
+  if (!files.has(PDFJS_WORKER_FILE))
+    throw new Error(
+      `pdf.js is missing at ${root}; run \`bun run tools-mcp:build\` first.`
+    )
+  return files
+}
+
 /** One server and transport per request: the tools keep no state to share. */
 async function handleMcp(
-  views: PresentationViewDocuments,
+  files: ToolsServerFiles,
   request: Request
 ): Promise<Response> {
-  const server = createToolsServer({ views })
+  const server = createToolsServer(files)
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -49,17 +74,13 @@ async function handleMcp(
   }
 }
 
-function serveHttp(
-  views: PresentationViewDocuments,
-  hostname: string,
-  port: number
-) {
+function serveHttp(files: ToolsServerFiles, hostname: string, port: number) {
   const server = Bun.serve({
     hostname,
     port,
     routes: {
       "/health": { GET: () => new Response("ok") },
-      "/mcp": (request) => handleMcp(views, request),
+      "/mcp": (request) => handleMcp(files, request),
     },
     fetch: () => new Response("Not found", { status: 404 }),
   })
@@ -82,13 +103,18 @@ if (import.meta.main) {
     console.error(USAGE)
     process.exit(2)
   }
-  const views = await loadViews(path.resolve(values.views)).catch(
+  const directory = path.resolve(values.views)
+  const files: ToolsServerFiles = await Promise.all([
+    loadViews(directory),
+    loadPdfjs(directory),
+  ]).then(
+    ([views, pdfjs]) => ({ views, pdfjs }),
     (error: Error) => {
       console.error(error.message)
       process.exit(1)
     }
   )
   if (values.stdio)
-    await createToolsServer({ views }).connect(new StdioServerTransport())
-  else serveHttp(views, values.host, port)
+    await createToolsServer(files).connect(new StdioServerTransport())
+  else serveHttp(files, values.host, port)
 }

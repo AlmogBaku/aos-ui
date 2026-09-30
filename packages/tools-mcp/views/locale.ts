@@ -27,6 +27,21 @@ export type ViewLabels = {
     hideLocations: string
     locationsLabel: (title: string) => string
   }
+  artifact: {
+    refresh: string
+    download: string
+    open: string
+    pip: string
+    loading: string
+    unreachable: string
+    noPreview: string
+    tooLarge: string
+    htmlTitle: string
+    pdfTitle: string
+    previousPage: string
+    nextPage: string
+    page: (page: number, pages: number) => string
+  }
 }
 
 export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
@@ -46,6 +61,21 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       hideLocations: "Hide map locations",
       locationsLabel: (title) => `${title} locations`,
     },
+    artifact: {
+      refresh: "Refresh",
+      download: "Download",
+      open: "Open in new tab",
+      pip: "Picture in picture",
+      loading: "Loading file…",
+      unreachable: "Can't reach this file.",
+      noPreview: "No preview is available for this file.",
+      tooLarge: "This file is too large to preview.",
+      htmlTitle: "HTML preview",
+      pdfTitle: "PDF preview",
+      previousPage: "Previous page",
+      nextPage: "Next page",
+      page: (page, pages) => `Page ${page} of ${pages}`,
+    },
   },
   he: {
     waiting: "בהמתנה לנתונים…",
@@ -62,6 +92,21 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       showLocations: "הצגת מיקומי המפה",
       hideLocations: "הסתרת מיקומי המפה",
       locationsLabel: (title) => `${title} — מיקומים`,
+    },
+    artifact: {
+      refresh: "רענון",
+      download: "הורדה",
+      open: "פתיחה בכרטיסייה חדשה",
+      pip: "תמונה בתוך תמונה",
+      loading: "הקובץ נטען…",
+      unreachable: "לא ניתן לגשת לקובץ הזה.",
+      noPreview: "אין תצוגה מקדימה לקובץ הזה.",
+      tooLarge: "הקובץ גדול מדי לתצוגה מקדימה.",
+      htmlTitle: "תצוגה מקדימה של HTML",
+      pdfTitle: "תצוגה מקדימה של PDF",
+      previousPage: "העמוד הקודם",
+      nextPage: "העמוד הבא",
+      page: (page, pages) => `עמוד ${page} מתוך ${pages}`,
     },
   },
 }
