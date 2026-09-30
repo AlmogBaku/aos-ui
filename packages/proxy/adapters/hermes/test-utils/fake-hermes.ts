@@ -1,7 +1,8 @@
 /**
  * fakeHermes — one in-memory Hermes holding one Session, for the runtime and
- * wire contracts: the socket RPCs and dashboard routes a create, a turn and a
- * read reach, and the faults the runtime contract drives. Pair it with the
+ * wire contracts: the socket RPCs and dashboard routes a create, a turn, a
+ * read and an MCP App's file read reach, and the faults the runtime contract
+ * drives. Pair it with the
  * real `HermesGateway` through `fakeHermesGateway`, so the gateway's own dial,
  * heal and refusal handling is what the contracts prove.
  *
@@ -17,6 +18,8 @@
  *   const transport = fakeHermesGateway(hermes, logger)
  *   hermes.progress() // stream a reply fragment into the running turn
  */
+import { posix } from "node:path"
+
 import type { Logger } from "../../../../lifecycle"
 import type { CallerError } from "../../../core/failures"
 import * as ids from "../../../core/ids"
@@ -139,6 +142,12 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   /** The Session waits on a request no socket can be sent any more. */
   let lost = false
   let interrupted: (() => void) | undefined
+  /** Each folder's listing: entry names to their real paths, or its refusal. */
+  const folders = new Map<string, Readonly<Record<string, string>> | number>()
+  /** The files a download serves the Session, by path. */
+  const files = new Map<string, string>()
+  /** Every dashboard request, as Hermes received it. */
+  const httpRequests: { url: URL; headers: Headers }[] = []
 
   const socket = () => sockets.at(-1)
   const latestSeq = () => frames.at(-1)?.seq ?? 0
@@ -407,7 +416,48 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
           : [],
         total: listed ? 1 : 0,
       })
+    // A listing names no Session; each entry carries the real path Hermes
+    // resolved it to, and one it cannot resolve fails the whole listing
+    // (`hermes_cli/web_routers/files.py:367`, `web_server_files.py:181`).
+    if (url.pathname === "/api/files") {
+      const folder = url.searchParams.get("path") ?? ""
+      const listing = folders.get(folder) ?? 404
+      if (typeof listing === "number") return json(listing, { detail: "" })
+      return json(200, {
+        path: folder,
+        parent: folder === "/" ? null : posix.dirname(folder),
+        entries: Object.entries(listing).map(([name, path]) => ({
+          name,
+          path,
+          is_directory: false,
+          size: files.get(path)?.length ?? 0,
+          mtime: 0,
+          mime_type: "text/plain",
+        })),
+        root: null,
+        locked_root: null,
+        can_change_path: true,
+      })
+    }
     if (!listed) return json(404)
+    // A download resolves its path in the Session's own folder and serves
+    // the file whole, as an attachment (`hermes_cli/web_routers/files.py:733`).
+    if (url.pathname === "/api/fs/download") {
+      const file =
+        url.searchParams.get("profile") === PROFILE &&
+        url.searchParams.get("session_id") === STORED_ID
+          ? files.get(url.searchParams.get("path") ?? "")
+          : undefined
+      return file === undefined
+        ? json(404)
+        : new Response(file, {
+            headers: {
+              "content-type": "text/plain; charset=utf-8",
+              "accept-ranges": "bytes",
+              "content-disposition": "attachment",
+            },
+          })
+    }
     // `db.get_session` serves the whole stored row, its cost included.
     if (url.pathname === base)
       return json(200, {
@@ -454,13 +504,35 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       return dialed
     },
 
-    fetcher: (async (input: string | URL | Request) => {
+    fetcher: (async (input: string | URL | Request, init?: RequestInit) => {
       calls += 1
+      const url = new URL(String(input))
+      httpRequests.push({ url, headers: new Headers(init?.headers) })
       if (fault === "down") throw new TypeError("fetch failed")
       if (fault === "refused") return json(401)
       if (fault === "native") return json(NATIVE_FAILURE_STATUS)
-      return route(new URL(String(input)))
+      return route(url)
     }) as unknown as typeof fetch,
+
+    /** The dashboard requests Hermes received for `pathname`. */
+    httpRequests: (pathname: string) =>
+      httpRequests.filter(({ url }) => url.pathname === pathname),
+
+    /**
+     * What listing `folder` answers: each entry's name and the real path
+     * Hermes resolved it to, or the status it refuses the listing with.
+     */
+    listFolder(
+      folder: string,
+      listing: Readonly<Record<string, string>> | number
+    ) {
+      folders.set(folder, listing)
+    },
+
+    /** A file a download serves the Session at `path`. */
+    storeFile(path: string, body: string) {
+      files.set(path, body)
+    },
 
     async progress() {
       startStreaming()

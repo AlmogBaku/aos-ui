@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import {
   createHermesHttp,
   HermesAuthenticationError,
   HermesHttpError,
+  type HermesHttp,
 } from "./http"
 
 describe("bounded Hermes HTTP", () => {
@@ -188,8 +190,17 @@ describe("bounded Hermes HTTP", () => {
     await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce())
   })
 
-  it("redacts credential failures", async () => {
-    const { http } = createHermesHttp({
+  it.each([
+    ["an HTTP read", (native: HermesHttp) => native.http("/api/sessions")],
+    [
+      "a stream",
+      (native: HermesHttp) =>
+        native.stream("/api/fs/download", {
+          signal: new AbortController().signal,
+        }),
+    ],
+  ])("redacts credential failures from %s", async (_name, send) => {
+    const native = createHermesHttp({
       baseUrl: "http://127.0.0.1:9119",
       credentials: vi.fn(async () => {
         throw new Error("token=native-secret from /srv/hermes/private")
@@ -198,7 +209,7 @@ describe("bounded Hermes HTTP", () => {
       timeoutMs: 1_000,
     })
 
-    const request = http("/api/sessions")
+    const request = send(native)
     await expect(request).rejects.toThrow("Hermes request failed")
     await expect(request).rejects.not.toThrow("/srv/hermes")
     await expect(request).rejects.not.toThrow("native-secret")
@@ -252,5 +263,43 @@ describe("bounded Hermes HTTP", () => {
     await expect(
       http("/api/sessions/stored", { method: "DELETE" })
     ).resolves.toBeUndefined()
+  })
+
+  it("bounds only the wait for a stream's headers, never its body", async () => {
+    const clock = useFakeClock()
+    const sent: AbortSignal[] = []
+    const { stream } = createHermesHttp({
+      baseUrl: "http://hermes.test",
+      credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
+      fetcher: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push(init!.signal!)
+        // A Hermes that never answers, then a body that never ends.
+        if (String(input).endsWith("/stalled"))
+          return new Promise<Response>(() => undefined)
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull: () => new Promise<void>(() => undefined),
+          }),
+          { status: 206 }
+        )
+      }),
+      timeoutMs: 1_000,
+    })
+    const caller = new AbortController()
+
+    let stalled: unknown
+    stream("/stalled", { signal: caller.signal }).catch((error: unknown) => {
+      stalled = error
+    })
+    await clock.advance(1_000)
+    expect(stalled).toMatchObject({ message: "Hermes request failed" })
+    expect(sent[0]?.aborted).toBe(true)
+
+    const response = await stream("/api/fs/download", { signal: caller.signal })
+    await clock.advance(2_000)
+    expect(response.status).toBe(206)
+    expect(sent[1]?.aborted).toBe(false)
+    caller.abort()
+    expect(sent[1]?.aborted).toBe(true)
   })
 })

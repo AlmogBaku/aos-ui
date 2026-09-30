@@ -6,11 +6,11 @@
  * the REST half has no relationship to it beyond sharing the base URL and the
  * credential provider.
  *
- * Every response is read through a byte budget with a declared-length pre-check
- * and a JSON depth/node bound, and no native body, path or header ever reaches
- * a thrown error: callers see `HermesHttpError(status)`, a
- * `HermesRpcUncertainError` for a write already sent, or a fixed
- * "Hermes request failed" message.
+ * Every JSON response is read through a byte budget with a declared-length
+ * pre-check and a JSON depth/node bound; a file's `stream` goes to its caller
+ * unread. No native body, path or header ever reaches a thrown error: callers
+ * see `HermesHttpError(status)`, a `HermesRpcUncertainError` for a write
+ * already sent, or a fixed "Hermes request failed" message.
  */
 
 import { Deadline } from "../../../lifecycle"
@@ -37,8 +37,20 @@ export type HermesHttpOptions = {
   timeoutMs?: number
 }
 
+export type HermesStreamInit = {
+  /** One byte range, sent as the `range` header. */
+  range?: string
+  /** Stops the request and its body. */
+  signal: AbortSignal
+}
+
 export type HermesHttp = {
   http(path: string, init?: HermesHttpInit): Promise<unknown>
+  /**
+   * One GET whose response comes back unread, whatever its status, for its
+   * caller to judge: the deadline bounds only the wait for its headers.
+   */
+  stream(path: string, init: HermesStreamInit): Promise<Response>
 }
 
 /** Private native-auth classification; never serialized across the AOS API. */
@@ -212,6 +224,27 @@ export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
         )
           throw error
         if (write && sent) throw new HermesRpcUncertainError({ cause: error })
+        throw new Error("Hermes request failed")
+      }
+    },
+    async stream(path: string, init: HermesStreamInit) {
+      try {
+        return await new Deadline(timeoutMs).run(async (signal) => {
+          const credentials = await options.credentials(signal)
+          signal.throwIfAborted()
+          return await fetcher(`${baseUrl}${path}`, {
+            // The deadline clears once the headers arrive, so only the
+            // caller stops the body.
+            signal: AbortSignal.any([init.signal, signal]),
+            headers: {
+              // A compressed body would misstate its length and its ranges.
+              "accept-encoding": "identity",
+              ...(init.range === undefined ? {} : { range: init.range }),
+              ...credentials,
+            },
+          })
+        })
+      } catch {
         throw new Error("Hermes request failed")
       }
     },

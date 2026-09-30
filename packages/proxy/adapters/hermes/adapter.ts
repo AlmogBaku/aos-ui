@@ -70,6 +70,7 @@ import {
   HermesInteractions,
 } from "./interactions"
 import { HermesDashboardClient } from "./dashboard-client"
+import { createHermesFileReader } from "./file-reader"
 import {
   HermesAttachmentRegistry,
   HermesSessionGoneError,
@@ -78,6 +79,7 @@ import {
 } from "./attachment-registry"
 import {
   ServerAgentUpdateUnsupportedError,
+  type ServerFileReader,
   type ServerMcpApps,
   type ServerRuntime,
   type ServerRuntimeTranslation,
@@ -416,6 +418,8 @@ export class HermesServerAdapter implements ServerRuntime {
     steerAck: "in-history",
   }
   readonly #retry: HermesRetrySchedule
+  /** Absent where the transport streams no dashboard files. */
+  readonly readFile?: ServerFileReader
   readonly mcpApps?: ServerMcpApps
   readonly #mcpToolNames?: McpToolNames
   /**
@@ -448,6 +452,14 @@ export class HermesServerAdapter implements ServerRuntime {
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
       : undefined
+    if (transport.http && transport.stream)
+      this.readFile = createHermesFileReader(
+        {
+          http: (path, init) => transport.http!(path, init),
+          stream: (path, init) => transport.stream!(path, init),
+        },
+        options.log
+      )
     if (this.#dashboard && options.mcp) {
       const dashboard = this.#dashboard
       const apps = createHermesMcpApps({
