@@ -57,8 +57,10 @@ Any intentional visual departure must be called out before it is introduced.
   reading a Session there does not change its read state.
 - **Published Artifacts render inline:** audio and video play as native players
   in the message; an image renders as a bounded preview (max height `max-h-64`)
-  with no viewer and a Download control beneath it. Every other Artifact is a
-  compact card showing the name, type, and size with a Download control.
+  that opens its view in the side panel. Every other Artifact is a compact card
+  showing the name, type, and size; its name opens the side panel and a
+  Download control sits beside it. The inspector's collapsible Artifacts list
+  names every published file, newest first.
 - **Density pass (2026-09-20):** control heights follow a 28/32/36/40 px band
   scale; theme and locale buttons are 1.75 rem square at fine-pointer sizes.
   The `--radius-sm|md|lg` token scale is live in `src/app/globals.css`.
