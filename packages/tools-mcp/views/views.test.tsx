@@ -59,19 +59,17 @@ function props<T>(value: T, locale: ViewLocale = "en") {
 describe("the value a view draws", () => {
   const parsedChart = render_chartSchema.parse(chart)
 
-  it("prefers a valid tool input", () => {
+  it("draws a valid tool input until a valid result replaces it", () => {
     expect(presentationValue(render_chartSchema, chart, undefined)).toEqual(
       parsedChart
     )
-  })
-
-  it("falls back to the result's structured value", () => {
+    const retitled = { ...chart, title: "Retitled" }
     expect(
-      presentationValue(render_chartSchema, undefined, {
+      presentationValue(render_chartSchema, chart, {
         content: [],
-        structuredContent: { ok: true, value: chart },
+        structuredContent: { ok: true, value: retitled },
       })
-    ).toEqual(parsedChart)
+    ).toEqual(render_chartSchema.parse(retitled))
   })
 
   it("falls back to the JSON a text-only result ends with", () => {

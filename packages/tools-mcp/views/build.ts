@@ -164,10 +164,18 @@ async function buildPdfWorker(): Promise<Uint8Array> {
  */
 const PDFJS_DATA_DIRECTORIES = ["cmaps", "standard_fonts"]
 const PDFJS_DECODERS = ["wasm/jbig2.wasm", "wasm/openjpeg.wasm"]
+/** The licenses of pdf.js and its decoders; each data folder holds its own. */
+const PDFJS_LICENSES = [
+  "LICENSE",
+  "wasm/LICENSE_JBIG2",
+  "wasm/LICENSE_OPENJPEG",
+  "wasm/LICENSE_PDFJS_JBIG2",
+  "wasm/LICENSE_PDFJS_OPENJPEG",
+]
 
-/** Every pdf.js file the artifact view reads, keyed by its path. */
+/** Every pdf.js file the artifact view reads, and their licenses, by path. */
 export async function buildPdfjs(): Promise<Map<string, Uint8Array>> {
-  const names = [...PDFJS_DECODERS]
+  const names = [...PDFJS_DECODERS, ...PDFJS_LICENSES]
   for (const directory of PDFJS_DATA_DIRECTORIES)
     for (const name of await readdir(path.join(PDFJS_DIRECTORY, directory)))
       names.push(`${directory}/${name}`)

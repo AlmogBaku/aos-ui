@@ -48,9 +48,9 @@ function parseJson(text: string): unknown {
 }
 
 /**
- * What a result carries for a view that missed the tool input: the server's
- * `structuredContent.value`, or the JSON its text fallback ends with. A harness
- * that forwards only text still reaches the view this way.
+ * What a result carries for its view: the server's `structuredContent.value`,
+ * or the JSON its text fallback ends with. A harness that forwards only text
+ * still reaches the view this way.
  */
 export function resultValue(result: CallToolResult | undefined): unknown {
   if (!result) return undefined
@@ -69,13 +69,17 @@ export function resultValue(result: CallToolResult | undefined): unknown {
   return undefined
 }
 
-/** The tool input when it is valid, else whatever the result carries. */
+/**
+ * What the result carries when it is valid, else the tool input. The input
+ * draws while the call runs; the server's own result then replaces it, since
+ * the page withholds every argument that starts with `/` from the input.
+ */
 export function presentationValue<T>(
   schema: z.ZodType<T>,
   input: unknown,
   result: CallToolResult | undefined
 ): T | undefined {
-  for (const candidate of [input, resultValue(result)]) {
+  for (const candidate of [resultValue(result), input]) {
     if (candidate === undefined) continue
     const parsed = schema.safeParse(candidate)
     if (parsed.success) return parsed.data
@@ -154,8 +158,9 @@ function ViewRoot<T>({
 
 /**
  * Mounts one presentation view: it connects to the host over `postMessage`,
- * renders from the tool input as soon as the host sends it, falls back to the
- * result's structured value, and reports every size change (`autoResize`).
+ * renders from the tool input as soon as the host sends it, then from the
+ * result's structured value once one arrives, and reports every size change
+ * (`autoResize`).
  * Every handler is set before `connect` so no notification is missed.
  */
 export function startView<T>(
