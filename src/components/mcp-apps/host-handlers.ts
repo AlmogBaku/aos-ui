@@ -3,14 +3,24 @@
  * is testable without a sandboxed frame.
  */
 
+import type { McpAppFiles } from "@aos/protocol/mcp-apps"
+import { presentationViews } from "@shared/presentation/views"
+
 type ContentBlock = { readonly type: string; readonly text?: unknown }
 
-/** A view may open a link only in a new, unrelated `https` browsing context. */
+type OpenWindow = (url: string, target: string, features: string) => unknown
+
+/**
+ * A view may open a link only in a new, unrelated `https` browsing context.
+ * One of its own file addresses, which this page serves, may be `http` as the
+ * page is on a loopback deployment.
+ */
 export function openAppLink(
   url: string,
-  open: (url: string, target: string, features: string) => unknown = (
-    ...args
-  ) => window.open(...args)
+  {
+    ownFile = false,
+    open = (...args) => window.open(...args),
+  }: { ownFile?: boolean; open?: OpenWindow } = {}
 ): { isError?: true } {
   let parsed: URL
   try {
@@ -18,9 +28,114 @@ export function openAppLink(
   } catch {
     return { isError: true }
   }
-  if (parsed.protocol !== "https:") return { isError: true }
+  const secure =
+    parsed.protocol === "https:" || (ownFile && parsed.protocol === "http:")
+  if (!secure) return { isError: true }
   open(parsed.href, "_blank", "noopener,noreferrer")
   return {}
+}
+
+/**
+ * Where a file address points, as a CSP source and for comparing addresses:
+ * its origin and path, every path segment percent-encoded, without the query
+ * that carries its pass; `undefined` for anything but an absolute http(s) URL.
+ */
+export function fileLocation(address: string): string | undefined {
+  try {
+    const url = new URL(address)
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined
+    const path = url.pathname
+      .split("/")
+      .map((segment) => encodeURIComponent(decodeURIComponent(segment)))
+      .join("/")
+    return `${url.origin}${path}`
+  } catch {
+    return undefined
+  }
+}
+
+/** The argument whose file `url` addresses, whatever pass `url` carries. */
+export function fileArgument(
+  url: string,
+  files: McpAppFiles | undefined
+): string | undefined {
+  const location = fileLocation(url)
+  if (location === undefined || !files) return undefined
+  return Object.entries(files.addresses).find(
+    ([, address]) => fileLocation(address) === location
+  )?.[0]
+}
+
+/**
+ * The name a download is saved under: the view's name for it, without any
+ * directory or any reserved or control character. Empty leaves the name to the
+ * browser, which takes the file's own.
+ */
+export function downloadName(name: string): string {
+  const base = name.split(/[/\\]/).at(-1) ?? ""
+  return base
+    .replace(/[\p{Cc}"*:<>?|]/gu, "_")
+    .trim()
+    .replace(/^\.+/, "")
+}
+
+/**
+ * Saves one of the view's own files as a click on a link to it would. Only a
+ * same-origin address can be saved under a name of the host's choosing.
+ */
+export function saveAppFile(address: string, name: string): boolean {
+  let url: URL
+  try {
+    url = new URL(address)
+  } catch {
+    return false
+  }
+  if (url.origin !== window.location.origin) return false
+  const link = document.createElement("a")
+  link.href = url.href
+  link.download = downloadName(name)
+  link.click()
+  return true
+}
+
+/**
+ * The MCP server a tool comes from: `aos-ui` for its bare tools, and
+ * `<server>` for any other named `mcp__<server>__<tool>`.
+ */
+export function mcpToolServer(toolName: string | undefined) {
+  if (toolName === undefined) return undefined
+  if (Object.hasOwn(presentationViews, toolName)) return "aos-ui"
+  return /^mcp__(.+?)__./.exec(toolName)?.[1]
+}
+
+/**
+ * Shares each `ui://` resource read per Agent and server, a read still in
+ * flight included: a view's templates and assets stay put while it runs, and
+ * a view that moves reloads and reads them again. It keeps the latest `limit`
+ * reads and forgets a failed one; every other resource is read each time.
+ */
+export function createResourceCache<T>(limit = 64) {
+  const reads = new Map<string, Promise<T>>()
+  return (
+    request: { agentId: string; toolName?: string; uri: string },
+    read: () => Promise<T>
+  ): Promise<T> => {
+    const server = mcpToolServer(request.toolName)
+    if (server === undefined || !request.uri.startsWith("ui://")) return read()
+    const key = JSON.stringify([request.agentId, server, request.uri])
+    const cached = reads.get(key)
+    if (cached) return cached
+    const pending = read()
+    reads.set(key, pending)
+    pending.catch(() => {
+      if (reads.get(key) === pending) reads.delete(key)
+    })
+    for (const oldest of reads.keys()) {
+      if (reads.size <= limit) break
+      reads.delete(oldest)
+    }
+    return pending
+  }
 }
 
 /**

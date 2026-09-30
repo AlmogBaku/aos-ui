@@ -8,7 +8,10 @@ import {
   type McpUiHostContext,
   type McpUiStyles,
 } from "@modelcontextprotocol/ext-apps/app-bridge"
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import type {
+  CallToolResult,
+  ReadResourceResult,
+} from "@modelcontextprotocol/sdk/types.js"
 import { XIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
@@ -27,9 +30,12 @@ import { appliedMcpAppCsp, buildMcpAppCsp } from "./csp"
 import {
   appMessageText,
   createRateLimiter,
+  createResourceCache,
+  fileArgument,
   grantDisplayMode,
   offeredDisplayModes,
   openAppLink,
+  saveAppFile,
   type AppDisplayMode,
   type AppPlacement,
 } from "./host-handlers"
@@ -38,8 +44,24 @@ import {
   prepareAppDocument,
   sandboxProxyUrl,
 } from "./sandbox-proxy"
+import { useAppFiles, type AppConnectionStatus } from "./use-app-files"
 
 const HOST_INFO = { name: "AOS", version: "1.0.0" }
+
+/** Each adapter's shared resource reads, which every view it hosts reuses. */
+const resourceReads = new WeakMap<
+  McpAppAdapter,
+  ReturnType<typeof createResourceCache<ReadResourceResult>>
+>()
+function sharedReads(adapter: McpAppAdapter) {
+  let reads = resourceReads.get(adapter)
+  if (!reads) {
+    reads = createResourceCache<ReadResourceResult>()
+    resourceReads.set(adapter, reads)
+  }
+  return reads
+}
+
 /** An App view grows with its content up to this share of the viewport. */
 const MAX_HEIGHT_SHARE = 0.8
 /** A sandbox that has not reported ready by then will not render the view. */
@@ -104,6 +126,10 @@ function styleVariables(): McpUiStyles {
 
 export type McpAppFrameProps = {
   view: McpAppView
+  /** When `view` arrived; its files' passes count from then. */
+  openedAt: number
+  /** The runtime connection's state; its recovery renews the view's files. */
+  connectionStatus?: AppConnectionStatus
   /** The call's complete arguments, once known; sent to the view once. */
   input?: Record<string, unknown>
   /** The call's result, once settled; sent once, after the input. */
@@ -133,11 +159,14 @@ export type McpAppFrameProps = {
  * Hosts one MCP App view (spec 2026-01-26) behind the sandbox proxy. The bridge
  * answers the view from this Session only: its tool calls and resource reads go
  * to the runtime's App adapter, its messages become the operator's next turn in
- * this thread, and nothing else it asks for is granted. The view mounts while
- * its call still runs and receives the input and the result as each arrives.
+ * this thread, it may open links and download its call's own files, and
+ * nothing else it asks for is granted. The view mounts while its call still
+ * runs and receives the input and the result as each arrives.
  */
 export default function McpAppFrame({
   view,
+  openedAt,
+  connectionStatus,
   input,
   result,
   cancelled,
@@ -168,11 +197,23 @@ export default function McpAppFrame({
     (forcedTheme !== "light" && resolvedTheme === "dark")
       ? "dark"
       : "light"
-  const csp = useMemo(() => buildMcpAppCsp(view.csp), [view.csp])
+  // A renewal changes only the passes, which the policy leaves out, so the
+  // view keeps running.
+  const csp = useMemo(
+    () => buildMcpAppCsp(view.csp, view.files),
+    [view.csp, view.files]
+  )
   const allow = useMemo(
     () => buildAllowAttribute(view.permissions),
     [view.permissions]
   )
+  const { files, renew } = useAppFiles({
+    files: view.files,
+    openedAt,
+    adapter,
+    target,
+    connectionStatus,
+  })
   const context = useRef({
     aui,
     locale,
@@ -181,6 +222,8 @@ export default function McpAppFrame({
     toolName,
     placement,
     onMove,
+    files,
+    renew,
   })
   useEffect(() => {
     context.current = {
@@ -191,8 +234,20 @@ export default function McpAppFrame({
       toolName,
       placement,
       onMove,
+      files,
+      renew,
     }
-  }, [aui, direction, locale, onMove, onUnavailable, placement, toolName])
+  }, [
+    aui,
+    direction,
+    files,
+    locale,
+    onMove,
+    onUnavailable,
+    placement,
+    renew,
+    toolName,
+  ])
 
   const hostContext = (): McpUiHostContext => ({
     ...(toolName === undefined
@@ -219,6 +274,8 @@ export default function McpAppFrame({
     safeAreaInsets:
       displayMode === "fullscreen" ? viewportSafeAreaInsets() : NO_INSETS,
     styles: { variables: styleVariables() },
+    // Where the view fetches each file its call names, by argument.
+    ...(files ? { "aos/files": files.addresses } : {}),
     // Inline, the view grows with its content; elsewhere it fills its space.
     ...(size === undefined
       ? {}
@@ -236,6 +293,11 @@ export default function McpAppFrame({
   useEffect(() => {
     latestHostContext.current = hostContext
   })
+  // Renewed addresses reach the view at once, before their old passes lapse.
+  useEffect(() => {
+    if (initialized)
+      bridgeRef.current?.setHostContext(latestHostContext.current())
+  }, [files, initialized])
 
   useEffect(() => {
     const element = container.current
@@ -315,6 +377,7 @@ export default function McpAppFrame({
         serverResources: {},
         message: { text: {} },
         logging: {},
+        ...(view.files ? { downloadFile: {} } : {}),
         sandbox: {
           ...(appliedCsp ? { csp: appliedCsp } : {}),
           ...(view.permissions ? { permissions: view.permissions } : {}),
@@ -336,10 +399,42 @@ export default function McpAppFrame({
     bridge.onreadresource = async (params) => {
       if (!admit()) refuse()
       const request = McpAppResourceReadRequestSchema.parse({ uri: params.uri })
-      return adapter.readResource({ ...target, ...request })
+      const { agentId } = target
+      return sharedReads(adapter)(
+        { agentId, toolName: context.current.toolName, uri: request.uri },
+        () => adapter.readResource({ ...target, ...request })
+      )
     }
-    bridge.onopenlink = async ({ url }) =>
-      admit() ? openAppLink(url) : { isError: true }
+    // The view's own files open and download by a fresh pass, never by the
+    // address it names.
+    bridge.onopenlink = async ({ url }) => {
+      if (!admit()) return { isError: true }
+      const { files, renew } = context.current
+      const argument = fileArgument(url, files)
+      if (argument === undefined) return openAppLink(url)
+      const fresh = await renew().catch(() => undefined)
+      const address = fresh?.addresses[argument]
+      return address === undefined
+        ? { isError: true }
+        : openAppLink(address, { ownFile: true })
+    }
+    bridge.ondownloadfile = async ({ contents }) => {
+      if (!admit()) return { isError: true }
+      const { files, renew } = context.current
+      const links = contents.flatMap((item) => {
+        if (item.type !== "resource_link") return []
+        const argument = fileArgument(item.uri, files)
+        return argument === undefined ? [] : [{ argument, name: item.name }]
+      })
+      if (links.length === 0 || links.length !== contents.length)
+        return { isError: true }
+      const fresh = await renew().catch(() => undefined)
+      const saved = links.every(({ argument, name }) => {
+        const address = fresh?.addresses[argument]
+        return address !== undefined && saveAppFile(address, name)
+      })
+      return saved ? {} : { isError: true }
+    }
     bridge.onmessage = async (params) => {
       const text = admit() ? appMessageText(params) : undefined
       if (text === undefined) return { isError: true }

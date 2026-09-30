@@ -190,6 +190,38 @@ describe("MCP App routing", () => {
     expect(views.size).toBe(1)
   })
 
+  it.each([
+    [
+      "the input the proxy recorded to a view given files",
+      true,
+      { title: "Q3" },
+    ],
+    [
+      "the call's own arguments to any other view",
+      false,
+      { path: "/srv/reports/q3.pdf", title: "Q3" },
+    ],
+  ])("hands %s", async (_label, withFiles, input) => {
+    const files = {
+      addresses: { path: `${window.location.origin}/files/path?pass=p` },
+    }
+    const apps = adapter(async () => ({
+      html: "<p>app</p>",
+      toolInput: { title: "Q3" },
+      ...(withFiles ? { files } : {}),
+    }))
+    renderHosted(
+      toolPart({
+        toolName: "show_board",
+        args: { path: "/srv/reports/q3.pdf", title: "Q3" },
+        artifact: MCP_APP_TOOL_ARTIFACT,
+      }),
+      apps
+    )
+    expect(await screen.findByTitle("show_board app")).toBeInTheDocument()
+    expect(lastFrame()?.input).toEqual(input)
+  })
+
   it("says the App is unavailable and keeps the call when the view fails", async () => {
     const apps = adapter(async () => {
       throw new Error("gone")

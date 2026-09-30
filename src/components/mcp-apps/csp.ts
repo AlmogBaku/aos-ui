@@ -1,4 +1,10 @@
-import { isMcpAppCspDomain, type McpUiCsp } from "@aos/protocol/mcp-apps"
+import {
+  isMcpAppCspDomain,
+  type McpAppFiles,
+  type McpUiCsp,
+} from "@aos/protocol/mcp-apps"
+
+import { fileLocation } from "./host-handlers"
 
 /** The declared origins the shared rule admits, lowercased and deduplicated. */
 export const acceptedDomains = (
@@ -40,16 +46,26 @@ const sources = (base: readonly string[], domains: readonly string[]) =>
 
 /**
  * The MCP Apps default policy (spec 2026-01-26), widened only by the domains
- * the view's resource declared, and never allowing plugins or form posts.
+ * the view's resource declared and by the call's own file addresses, each by
+ * its exact path, and never allowing plugins or form posts. Views may compile
+ * WebAssembly, as a document renderer's decoders do.
  */
-export function buildMcpAppCsp(csp: McpUiCsp | undefined): string {
-  const connect = acceptedDomains("connectDomains", csp?.connectDomains)
+export function buildMcpAppCsp(
+  csp: McpUiCsp | undefined,
+  files?: McpAppFiles
+): string {
+  const connect = [
+    ...acceptedDomains("connectDomains", csp?.connectDomains),
+    ...Object.values(files?.addresses ?? {}).flatMap(
+      (address) => fileLocation(address) ?? []
+    ),
+  ]
   const resource = acceptedDomains("resourceDomains", csp?.resourceDomains)
   const frame = acceptedDomains("frameDomains", csp?.frameDomains)
   const baseUri = acceptedDomains("baseUriDomains", csp?.baseUriDomains)
   return [
     "default-src 'none'",
-    `script-src ${sources(["'self'", "'unsafe-inline'"], resource)}`,
+    `script-src ${sources(["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"], resource)}`,
     `style-src ${sources(["'self'", "'unsafe-inline'"], resource)}`,
     `img-src ${sources(["'self'", "data:"], resource)}`,
     `font-src ${sources(["'self'", "data:"], resource)}`,

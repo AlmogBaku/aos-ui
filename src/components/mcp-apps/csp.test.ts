@@ -68,7 +68,7 @@ describe("MCP App CSP", () => {
     const policy = buildMcpAppCsp(undefined)
     expect(directive(policy, "default-src")).toBe("default-src 'none'")
     expect(directive(policy, "script-src")).toBe(
-      "script-src 'self' 'unsafe-inline'"
+      "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'"
     )
     expect(directive(policy, "connect-src")).toBe("connect-src 'none'")
     expect(directive(policy, "worker-src")).toBe("worker-src 'self' blob:")
@@ -107,6 +107,22 @@ describe("MCP App CSP", () => {
     )
     expect(directive(policy, "base-uri")).toBe("base-uri https://base.example")
     expect(policy).not.toContain("insecure.example")
+  })
+
+  it("admits the call's own files by exact path, never their passes", () => {
+    const policy = buildMcpAppCsp(undefined, {
+      addresses: {
+        path: "https://aos.example/api/aos/v1/agents/a/sessions/s;1/tool-calls/t%201/app/files/path?pass=secret",
+        broken: "not a url",
+      },
+    })
+    expect(directive(policy, "connect-src")).toBe(
+      "connect-src https://aos.example/api/aos/v1/agents/a/sessions/s%3B1/tool-calls/t%201/app/files/path"
+    )
+    expect(policy).not.toContain("secret")
+    expect(buildMcpAppCsp(undefined, { addresses: {} })).toBe(
+      buildMcpAppCsp(undefined)
+    )
   })
 })
 

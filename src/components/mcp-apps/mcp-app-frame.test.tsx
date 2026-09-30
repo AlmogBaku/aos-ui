@@ -1,21 +1,30 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps/app-bridge"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ToolUiLocaleProvider } from "@/components/tool-ui"
-import type { McpAppAdapter } from "@/runtime-adapters/contracts"
+import {
+  McpAppFilesRefusedError,
+  type McpAppAdapter,
+} from "@/runtime-adapters/contracts"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
 import McpAppFrame, { type McpAppFrameProps } from "./mcp-app-frame"
+import type { AppConnectionStatus } from "./use-app-files"
 
 type DisplayModeHandler = (params: {
   mode: string
 }) => Promise<{ mode: string }>
+type Answer = { isError?: boolean }
 
 const { FakeBridge, bridges } = vi.hoisted(() => {
   const bridges: InstanceType<typeof FakeBridge>[] = []
   class FakeBridge {
     onrequestdisplaymode?: DisplayModeHandler
+    onopenlink?: (params: { url: string }) => Promise<Answer>
+    ondownloadfile?: (params: { contents: unknown[] }) => Promise<Answer>
+    onreadresource?: (params: { uri: string }) => Promise<unknown>
     readonly contexts: McpUiHostContext[] = []
     constructor(
       _client: unknown,
@@ -94,6 +103,7 @@ function renderFrame(
     <ToolUiLocaleProvider locale={locale}>
       <McpAppFrame
         view={{ html: "<p>app</p>" }}
+        openedAt={0}
         target={target}
         adapter={adapter}
         title="show_board app"
@@ -240,6 +250,7 @@ describe("MCP App tool data", () => {
       <ToolUiLocaleProvider locale="en">
         <McpAppFrame
           view={view}
+          openedAt={0}
           target={target}
           adapter={adapter}
           title="show_board app"
@@ -321,6 +332,7 @@ describe("MCP App lifecycle", () => {
     <ToolUiLocaleProvider locale="en">
       <McpAppFrame
         view={view}
+        openedAt={0}
         target={target}
         adapter={adapter}
         title="show_board app"
@@ -366,6 +378,7 @@ describe("MCP App lifecycle", () => {
         <ToolUiLocaleProvider locale="en">
           <McpAppFrame
             view={view}
+            openedAt={0}
             target={target}
             adapter={adapter}
             title="show_board app"
@@ -390,6 +403,7 @@ describe("MCP App lifecycle", () => {
         <ToolUiLocaleProvider locale="en">
           <McpAppFrame
             view={view}
+            openedAt={0}
             target={target}
             adapter={adapter}
             title="show_board app"
@@ -403,5 +417,247 @@ describe("MCP App lifecycle", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("MCP App files", () => {
+  const address = (toolCallId: string, pass: string) =>
+    `${window.location.origin}/api/aos/v1/agents/researcher/sessions/session-1/tool-calls/${toolCallId}/app/files/path?pass=${pass}`
+  const files = (pass: string, expiresAt: number) => ({
+    addresses: { path: address("t1", pass) },
+    expiresAt: new Date(expiresAt).toISOString(),
+  })
+  let clock: ReturnType<typeof useFakeClock>
+  beforeEach(() => {
+    clock = useFakeClock()
+  })
+
+  /** A view whose ten-minute passes arrived at 0, mounted at `mountedAt`. */
+  function mountFiles({
+    renewFiles = async () => files("fresh", 1_200_000),
+    connectionStatus,
+    mountedAt = 0,
+  }: {
+    renewFiles?: McpAppAdapter["renewFiles"]
+    connectionStatus?: AppConnectionStatus
+    mountedAt?: number
+  } = {}) {
+    vi.setSystemTime(mountedAt)
+    const apps = { ...adapter, renewFiles: vi.fn(renewFiles) }
+    const view = { html: "<p>app</p>", files: files("first", 600_000) }
+    const frame = (status?: AppConnectionStatus) => (
+      <ToolUiLocaleProvider locale="en">
+        <McpAppFrame
+          view={view}
+          openedAt={0}
+          connectionStatus={status}
+          target={target}
+          adapter={apps}
+          title="report app"
+        />
+      </ToolUiLocaleProvider>
+    )
+    const { rerender, unmount } = render(frame(connectionStatus))
+    const bridge = bridges.at(-1)!
+    act(() => bridge.initialize())
+    return {
+      bridge,
+      renewFiles: apps.renewFiles,
+      unmount,
+      setStatus: (status: AppConnectionStatus) =>
+        act(async () => rerender(frame(status))),
+    }
+  }
+  const viewFiles = (bridge: FakeBridge) =>
+    bridge.contexts.at(-1)?.["aos/files"]
+
+  it("renews the passes at half their life and hands the view the fresh addresses", async () => {
+    const { bridge, renewFiles } = mountFiles()
+    expect(viewFiles(bridge)).toEqual({ path: address("t1", "first") })
+
+    await act(() => clock.advance(299_999))
+    expect(renewFiles).not.toHaveBeenCalled()
+    await act(() => clock.advance(1))
+    expect(renewFiles.mock.calls).toEqual([[target]])
+    expect(viewFiles(bridge)).toEqual({ path: address("t1", "fresh") })
+    expect(bridges).toHaveLength(1)
+  })
+
+  it("renews at once a view that mounts past its passes' half-life", async () => {
+    const { renewFiles } = mountFiles({ mountedAt: 400_000 })
+    await act(() => clock.advance(0))
+    expect(renewFiles.mock.calls).toEqual([[target]])
+  })
+
+  it("stops renewing once the view is gone", async () => {
+    const { renewFiles, unmount } = mountFiles()
+    unmount()
+    await clock.advance(600_000)
+    expect(renewFiles).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      "shows again",
+      () => document.dispatchEvent(new Event("visibilitychange")),
+    ],
+    ["comes back online", () => window.dispatchEvent(new Event("online"))],
+  ])(
+    "renews past half-life when the page %s, since its timer may have stalled",
+    async (_label, wake) => {
+      const { renewFiles } = mountFiles()
+      await act(async () => wake())
+      expect(renewFiles).not.toHaveBeenCalled()
+
+      vi.setSystemTime(300_000)
+      await act(async () => wake())
+      expect(renewFiles.mock.calls).toEqual([[target]])
+    }
+  )
+
+  it("renews when the connection comes back, but not on mounting after it did", async () => {
+    const { renewFiles, setStatus } = mountFiles({
+      connectionStatus: "reconnected",
+    })
+    await setStatus("reconnecting")
+    expect(renewFiles).not.toHaveBeenCalled()
+    await setStatus("reconnected")
+    expect(renewFiles.mock.calls).toEqual([[target]])
+  })
+
+  it("retries a failed renewal with backoff until the proxy refuses it", async () => {
+    const { renewFiles, setStatus } = mountFiles({
+      renewFiles: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockRejectedValueOnce(new McpAppFilesRefusedError("gone")),
+    })
+    await act(() => clock.advance(300_000))
+    expect(renewFiles).toHaveBeenCalledTimes(1)
+    await act(() => clock.advance(1_000))
+    expect(renewFiles).toHaveBeenCalledTimes(2)
+
+    await act(() => clock.advance(600_000))
+    await setStatus("reconnecting")
+    await setStatus("reconnected")
+    expect(renewFiles).toHaveBeenCalledTimes(2)
+  })
+
+  function recordDownloads() {
+    const downloads: Array<{ href: string; name: string }> = []
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function record(this: HTMLAnchorElement) {
+        downloads.push({ href: this.href, name: this.download })
+      }
+    )
+    return downloads
+  }
+  const link = (uri: string, name = "report.pdf") => ({
+    type: "resource_link",
+    uri,
+    name,
+  })
+
+  it("downloads the view's own file by a fresh pass, under a safe name", async () => {
+    const downloads = recordDownloads()
+    const { bridge, renewFiles } = mountFiles()
+    let answer: Answer | undefined
+    await act(async () => {
+      answer = await bridge.ondownloadfile?.({
+        contents: [link(address("t1", "first"), "../Q3: final.pdf")],
+      })
+    })
+    expect(answer).toEqual({})
+    expect(renewFiles).toHaveBeenCalledOnce()
+    expect(downloads).toEqual([
+      { href: address("t1", "fresh"), name: "Q3_ final.pdf" },
+    ])
+  })
+
+  it.each([
+    ["another call's file", link(address("t2", "first"))],
+    ["an outside address", link("https://example.com/report.pdf")],
+    ["a data URL", link("data:text/plain,hi")],
+    ["a script URL", link("javascript:alert(1)")],
+    [
+      "contents the view embedded",
+      {
+        type: "resource",
+        resource: { uri: address("t1", "first"), text: "hi" },
+      },
+    ],
+  ])("refuses to download %s", async (_label, contents) => {
+    const downloads = recordDownloads()
+    const { bridge, renewFiles } = mountFiles()
+    let answer: Answer | undefined
+    await act(async () => {
+      answer = await bridge.ondownloadfile?.({ contents: [contents] })
+    })
+    expect(answer).toEqual({ isError: true })
+    expect(renewFiles).not.toHaveBeenCalled()
+    expect(downloads).toEqual([])
+  })
+
+  it("counts downloads against the view's request limit", async () => {
+    const downloads = recordDownloads()
+    const { bridge, renewFiles } = mountFiles()
+    const download = (uri: string) =>
+      bridge.ondownloadfile?.({ contents: [link(uri)] })
+    let answer: Answer | undefined
+    await act(async () => {
+      await Promise.all(
+        Array.from({ length: 10 }, () =>
+          download("https://example.com/report.pdf")
+        )
+      )
+      answer = await download(address("t1", "first"))
+    })
+    expect(answer).toEqual({ isError: true })
+    expect(renewFiles).not.toHaveBeenCalled()
+    expect(downloads).toEqual([])
+  })
+
+  it("opens the view's own file by a fresh pass", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null)
+    const { bridge } = mountFiles()
+    let answer: Answer | undefined
+    await act(async () => {
+      answer = await bridge.onopenlink?.({ url: address("t1", "stale") })
+    })
+    expect(answer).toEqual({})
+    expect(open.mock.calls).toEqual([
+      [address("t1", "fresh"), "_blank", "noopener,noreferrer"],
+    ])
+  })
+
+  it("reads a server's view resource once for all the views it hosts", async () => {
+    const uri = "ui://aos-ui/pdfjs/viewer.mjs"
+    const read = { contents: [{ uri, text: "export {}" }] }
+    let finish: ((value: typeof read) => void) | undefined
+    const readResource = vi.fn(
+      () =>
+        new Promise<typeof read>((resolve) => {
+          finish = resolve
+        })
+    )
+    const apps = { ...adapter, readResource }
+    for (const toolCallId of ["t1", "t2"])
+      render(
+        <ToolUiLocaleProvider locale="en">
+          <McpAppFrame
+            view={{ html: "<p>app</p>" }}
+            openedAt={0}
+            target={{ ...target, toolCallId }}
+            adapter={apps}
+            title={`${toolCallId} app`}
+            toolName="present_artifact"
+          />
+        </ToolUiLocaleProvider>
+      )
+
+    const reads = bridges.map((bridge) => bridge.onreadresource?.({ uri }))
+    finish?.(read)
+    expect(await Promise.all(reads)).toEqual([read, read])
+    expect(readResource).toHaveBeenCalledOnce()
   })
 })

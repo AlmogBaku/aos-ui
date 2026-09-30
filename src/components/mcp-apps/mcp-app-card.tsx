@@ -39,7 +39,12 @@ const McpAppFrame = lazy(() => import("./mcp-app-frame"))
 
 type ViewState =
   | { status: "loading" }
-  | { status: "ready"; view: McpAppView; openedSettled: boolean }
+  | {
+      status: "ready"
+      view: McpAppView
+      openedSettled: boolean
+      openedAt: number
+    }
   | { status: "failed" }
 
 function AppLoading() {
@@ -126,7 +131,13 @@ function HostedMcpApp({
     const controller = new AbortController()
     const openedSettled = settledNow.current
     adapter.open(target, controller.signal).then(
-      (view) => setState({ status: "ready", view, openedSettled }),
+      (view) =>
+        setState({
+          status: "ready",
+          view,
+          openedSettled,
+          openedAt: Date.now(),
+        }),
       () => {
         if (!controller.signal.aborted) setState({ status: "failed" })
       }
@@ -143,8 +154,13 @@ function HostedMcpApp({
     adapter.open(target, controller.signal).then(setSettledView, () => {})
     return () => controller.abort()
   }, [adapter, awaitingResult, target])
-  const input =
-    mcpAppToolInput(part) ?? settledView?.toolInput ?? opened?.view.toolInput
+  // A view given files takes the arguments the proxy handed it, which hold
+  // none of the host paths the call's own arguments name.
+  const input = opened?.view.files
+    ? (opened.view.toolInput ?? settledView?.toolInput)
+    : (mcpAppToolInput(part) ??
+      settledView?.toolInput ??
+      opened?.view.toolInput)
   const result = opened?.view.toolResult ?? settledView?.toolResult
   const cancelled =
     result === undefined ? mcpAppToolCancellation(part) : undefined
@@ -162,6 +178,7 @@ function HostedMcpApp({
       showInPip({
         target,
         view: opened.view,
+        openedAt: opened.openedAt,
         toolName,
         input,
         result,
@@ -205,6 +222,8 @@ function HostedMcpApp({
       ) : (
         <AppFrame
           view={state.view}
+          openedAt={state.openedAt}
+          connectionStatus={host.connectionStatus}
           input={input}
           result={result}
           cancelled={cancelled}
@@ -303,6 +322,8 @@ function PipPanel({ host, pip }: { host: McpAppHost; pip: McpAppPip }) {
         ) : (
           <AppFrame
             view={pip.view}
+            openedAt={pip.openedAt}
+            connectionStatus={host.connectionStatus}
             input={pip.input}
             result={pip.result}
             cancelled={pip.cancelled}
