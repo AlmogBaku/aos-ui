@@ -281,10 +281,26 @@ const McpAppsServerSchema = z
       })
   })
 
+/** One role's folders for MCP App files; composition fills the defaults. */
+const McpAppFolderSetSchema = z.strictObject({
+  agentFolder: z.boolean().optional(),
+  allow: z.array(AbsoluteDirectorySchema).max(64).optional(),
+  deny: z.array(AbsoluteDirectorySchema).max(64).optional(),
+})
+
 const McpAppsSchema = z.strictObject({
-  fallback: z.strictObject({
-    servers: z.record(z.string().min(1).max(256), McpAppsServerSchema),
-  }),
+  fallback: z
+    .strictObject({
+      servers: z.record(z.string().min(1).max(256), McpAppsServerSchema),
+    })
+    .optional(),
+  files: z
+    .strictObject({
+      servers: z.array(z.string().min(1).max(256)).max(64).optional(),
+      operator: McpAppFolderSetSchema.optional(),
+      guest: McpAppFolderSetSchema.optional(),
+    })
+    .optional(),
 })
 
 export const ProxyConfigSchema = z

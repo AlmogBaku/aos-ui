@@ -486,7 +486,7 @@ describe("MCP Apps fallback credentials", () => {
     const parsed = parseProxyConfig(
       withHeaders({ Authorization: { file: "/run/secrets/weather-mcp" } })
     )
-    expect(parsed.mcpApps?.fallback.servers.weather?.headers).toEqual({
+    expect(parsed.mcpApps?.fallback?.servers.weather?.headers).toEqual({
       Authorization: { file: "/run/secrets/weather-mcp" },
     })
   })
@@ -511,7 +511,7 @@ describe("MCP Apps fallback credentials", () => {
     const parsed = parseProxyConfig(
       withServer({ url: "http://tools-mcp:4110/mcp" })
     )
-    expect(parsed.mcpApps?.fallback.servers["aos-ui"]).toEqual({
+    expect(parsed.mcpApps?.fallback?.servers["aos-ui"]).toEqual({
       url: "http://tools-mcp:4110/mcp",
     })
   })
@@ -523,7 +523,7 @@ describe("MCP Apps fallback credentials", () => {
     ])
       expect(
         parseProxyConfig(withServer({ url, headers: header })).mcpApps?.fallback
-          .servers["aos-ui"]
+          ?.servers["aos-ui"]
       ).toEqual({ url, headers: header })
   })
 
@@ -535,6 +535,23 @@ describe("MCP Apps fallback credentials", () => {
       {},
     ])
       expect(() => parseProxyConfig(withServer(server))).toThrow(
+        "Invalid proxy configuration"
+      )
+  })
+})
+
+describe("MCP App files", () => {
+  const withFolder = (folder: string) => ({
+    ...validConfig(),
+    mcpApps: { files: { guest: { allow: [folder], deny: [folder] } } },
+  })
+
+  it("rejects a relative or home-relative folder", () => {
+    expect(
+      parseProxyConfig(withFolder("/srv/shared")).mcpApps?.files?.guest
+    ).toEqual({ allow: ["/srv/shared"], deny: ["/srv/shared"] })
+    for (const folder of ["srv/shared", "~/shared"])
+      expect(() => parseProxyConfig(withFolder(folder))).toThrow(
         "Invalid proxy configuration"
       )
   })

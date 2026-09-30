@@ -117,7 +117,7 @@ async function readMcpServerOverrides(
   mcpApps: McpAppsConfig | undefined,
   readers: SecretReaders
 ): Promise<McpServerOverrides> {
-  const servers = Object.entries(mcpApps?.fallback.servers ?? {})
+  const servers = Object.entries(mcpApps?.fallback?.servers ?? {})
   return new Map(
     await Promise.all(
       servers.map(

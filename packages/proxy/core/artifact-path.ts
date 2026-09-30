@@ -27,7 +27,8 @@ const SENSITIVE_NAMES: ReadonlySet<string> = new Set([
   "pairing",
 ])
 
-function sensitive(component: string) {
+/** Whether one path component names credentials or pairing state. */
+export function sensitiveName(component: string) {
   const lowered = component.toLowerCase()
   return SENSITIVE_NAMES.has(lowered) || lowered.startsWith(".env.")
 }
@@ -44,7 +45,7 @@ function checkedPath(path: string) {
     return undefined
   return path
     .split(/[\\/]/u)
-    .some((component) => component === ".." || sensitive(component))
+    .some((component) => component === ".." || sensitiveName(component))
     ? undefined
     : path
 }
