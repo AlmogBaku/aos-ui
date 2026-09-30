@@ -15,7 +15,7 @@ import { translateHistory } from "./history"
 
 const PNG = "data:image/png;base64,iVBORw0KGgo="
 
-/** What `present_artifact` publishes: a size, and no media type it could guess. */
+/** A published artifact: a size, and no media type it could guess. */
 const ARTIFACT = {
   id: "art-1",
   filename: "chart.png",

@@ -8,12 +8,7 @@ import {
   OpenCodeNativeMessageSchema,
   parseOpenCodeMessageCatalog,
 } from "./native-schemas"
-import { openCodeArtifactReceipt } from "./content"
-import {
-  canonicalOpenCodeToolCall,
-  canonicalOpenCodeToolName,
-  openCodeToolKind,
-} from "./tool-names"
+import { canonicalOpenCodeToolCall, openCodeToolKind } from "./tool-names"
 
 export type NativeMessage = typeof OpenCodeNativeMessageSchema._output
 type ProjectedHistory = SessionMessage[]
@@ -33,54 +28,6 @@ function safeImage(url: string) {
   return /^data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/u.test(url)
     ? url
     : undefined
-}
-
-type NativeAssistantPart = Extract<
-  NativeMessage,
-  { type: "assistant" }
->["content"][number]
-
-/** The artifact a completed `aos-ui` `present_artifact` call's receipt publishes. */
-function toolArtifact(part: NativeAssistantPart) {
-  if (
-    part.type !== "tool" ||
-    part.state.status !== "completed" ||
-    canonicalOpenCodeToolName(part.name) !== "present_artifact"
-  )
-    return undefined
-  const text = part.state.content
-    .flatMap((item) =>
-      item &&
-      typeof item === "object" &&
-      "type" in item &&
-      item.type === "text" &&
-      "text" in item &&
-      typeof item.text === "string"
-        ? [item.text]
-        : []
-    )
-    .join("\n")
-  return openCodeArtifactReceipt(part.id, text)
-}
-
-/**
- * Resolve an artifact id to its native path by scanning this Session's own
- * authoritative messages newest-first. Only a receipt the Session still holds
- * grants read authority, so an id from any other Session resolves to nothing.
- */
-export function publishedOpenCodeArtifact(
-  messages: readonly NativeMessage[],
-  artifactId: string
-) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!
-    if (message.type !== "assistant") continue
-    for (const part of message.content) {
-      const artifact = toolArtifact(part)
-      if (artifact?.descriptor.id === artifactId) return artifact
-    }
-  }
-  return undefined
 }
 
 /**
@@ -168,8 +115,6 @@ function projectMessage(
         )
         const kind = openCodeToolKind(call.toolName)
         const { completed } = part.time
-        const artifact = toolArtifact(part)
-        const result = artifact?.result ?? call.result
         content.push({
           type: "tool-call",
           toolCallId: part.id,
@@ -186,15 +131,9 @@ function projectMessage(
             part.state.status === "pending" && objectArgs
               ? part.state.input
               : JSON.stringify(call.args),
-          ...(result === undefined ? {} : { result }),
+          ...(call.result === undefined ? {} : { result: call.result }),
           ...(part.state.status === "error" ? { isError: true } : {}),
         })
-        if (artifact)
-          content.push({
-            type: "data",
-            name: "aos.artifact",
-            data: artifact.descriptor,
-          })
       }
     }
     return content.length

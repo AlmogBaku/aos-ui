@@ -279,51 +279,6 @@ describe("OpenClaw ServerRuntime assembly", () => {
 })
 
 describe("OpenClaw artifact reads", () => {
-  const receipt = {
-    ok: true,
-    type: "aos.artifact",
-    artifact: {
-      path: "/workspace/report.txt",
-      filename: "report.txt",
-      mimeType: "text/plain",
-    },
-  }
-  const receiptHistory = {
-    messages: [
-      {
-        id: "assistant",
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "publish",
-            name: "aos-ui__present_artifact",
-            arguments: {},
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "publish",
-        toolName: "aos-ui__present_artifact",
-        content: [{ type: "text", text: JSON.stringify(receipt) }],
-      },
-    ],
-    sessionInfo: { hasActiveRun: false, activeRunIds: [] },
-  }
-
-  function sessionFile(file: Record<string, unknown>) {
-    return {
-      sessionKey,
-      file: {
-        path: "/workspace/report.txt",
-        name: "report.txt",
-        kind: "modified",
-        ...file,
-      },
-    }
-  }
-
   function nativeDownload(extra: Record<string, unknown>) {
     return {
       artifact: {
@@ -356,66 +311,6 @@ describe("OpenClaw artifact reads", () => {
     })
     return { adapter, request }
   }
-
-  async function receiptId(adapter: OpenClawServerAdapter) {
-    const page = await adapter.history("research", sessionKey, 200, 0)
-    const part = page.messages[0]!.content.find(
-      (item) => item.type === "data"
-    ) as { data: { id: string } }
-    return part.data.id
-  }
-
-  it("reads a published receipt through the Session workspace in utf8 and base64", async () => {
-    let file = sessionFile({
-      missing: false,
-      content: "hello",
-      contentEncoding: "utf8",
-    })
-    const { adapter, request } = artifactAdapter({
-      "chat.history": () => receiptHistory,
-      "sessions.files.get": () => file,
-    })
-    const id = await receiptId(adapter)
-
-    const text = await adapter.artifact("research", sessionKey, id)
-    expect(new TextDecoder().decode(text.bytes)).toBe("hello")
-    expect(text).toMatchObject({
-      filename: "report.txt",
-      mimeType: "text/plain",
-    })
-    expect(request).toHaveBeenCalledWith("sessions.files.get", {
-      agentId: "research",
-      sessionKey,
-      path: "/workspace/report.txt",
-    })
-
-    file = sessionFile({
-      missing: false,
-      content: Buffer.from([1, 2, 3]).toString("base64"),
-      contentEncoding: "base64",
-    })
-    const binary = await adapter.artifact("research", sessionKey, id)
-    expect([...binary.bytes]).toEqual([1, 2, 3])
-  })
-
-  it("reports a missing or refused receipt file as not found", async () => {
-    let answer: () => unknown = () => sessionFile({ missing: true })
-    const { adapter } = artifactAdapter({
-      "chat.history": () => receiptHistory,
-      "sessions.files.get": () => answer(),
-    })
-    const id = await receiptId(adapter)
-
-    await expect(
-      adapter.artifact("research", sessionKey, id)
-    ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
-    answer = () => {
-      throw new OpenClawClientRequestError("rejected")
-    }
-    await expect(
-      adapter.artifact("research", sessionKey, id)
-    ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
-  })
 
   it("does not find an artifact id this Session never published", async () => {
     const { adapter, request } = artifactAdapter({

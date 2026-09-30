@@ -34,10 +34,7 @@ import {
   REDACTED,
   redactCredentials,
 } from "../../../../shared/credentials"
-import {
-  projectHermesArtifactReceipt,
-  projectHermesMediaArtifacts,
-} from "./media-artifacts"
+import { projectHermesMediaArtifacts } from "./media-artifacts"
 
 /** Hermes' native tool names AOS renames. */
 export const CANONICAL_TOOL_NAMES = new Map<string, string>([
@@ -493,14 +490,6 @@ export function unwrapToolCall(
 // Argument canonicalization
 // ---------------------------------------------------------------------------
 
-const PUBLIC_ARTIFACT_ARG_KEYS = [
-  "id",
-  "title",
-  "filename",
-  "mimeType",
-  "sizeBytes",
-]
-const PUBLIC_ARTIFACT_RECEIPT_KEYS = ["ok", "status", "message"]
 const DELEGATE_DESCRIPTION_FALLBACK_KEYS = [
   "goal",
   "goals",
@@ -578,18 +567,6 @@ export function canonicalToolArgs(
   return candidate ? { ...args, description: candidate } : args
 }
 
-function publicToolArgs(
-  name: string,
-  args: NativeToolArgs
-): HermesPublicJsonRecord {
-  const projected = projectHermesToolArgs(args)
-  if (canonicalToolName(name) !== "present_artifact") return projected
-  const artifactArgs: HermesPublicJsonRecord = {}
-  for (const key of PUBLIC_ARTIFACT_ARG_KEYS)
-    if (key in projected) artifactArgs[key] = projected[key]!
-  return artifactArgs
-}
-
 /** The public name and arguments of one native Hermes tool call. */
 export function projectHermesToolCall(
   name: string,
@@ -599,8 +576,7 @@ export function projectHermesToolCall(
   const unwrapped = unwrapToolCall(name, args)
   return {
     toolName: canonicalToolName(unwrapped.name, resolve),
-    args: publicToolArgs(
-      unwrapped.name,
+    args: projectHermesToolArgs(
       canonicalToolArgs(unwrapped.name, unwrapped.args)
     ),
   }
@@ -673,40 +649,24 @@ function publicToolResult(
     const responses = projectQuestionResponses(value)
     if (responses) return responses
   }
-  const projected = projectHermesToolResult(value, isError)
-  if (
-    canonicalName !== "present_artifact" ||
-    typeof projected !== "object" ||
-    projected === null ||
-    Array.isArray(projected)
-  )
-    return projected
-  // An artifact receipt AOS could not publish keeps only its status fields: the
-  // rest of a native receipt is a filesystem path.
-  const receipt: HermesPublicJsonRecord = {}
-  for (const key of PUBLIC_ARTIFACT_RECEIPT_KEYS)
-    if (key in projected) receipt[key] = projected[key]!
-  return Object.keys(receipt).length
-    ? receipt
-    : { status: isError ? "failed" : "completed" }
+  return projectHermesToolResult(value, isError)
 }
 
-type HermesArtifactReceipt = NonNullable<
-  ReturnType<typeof projectHermesArtifactReceipt>
->
 type HermesMediaDescriptor = ReturnType<
   typeof projectHermesMediaArtifacts
 >[number]["descriptor"]
 
-export type HermesToolDataPart =
-  | HermesArtifactReceipt["part"]
-  | { type: "data"; name: string; data: HermesMediaDescriptor }
+export type HermesToolDataPart = {
+  type: "data"
+  name: string
+  data: HermesMediaDescriptor
+}
 
 export type HermesToolOutcome = {
   /** Whether the tool failed, from the native flag or its result envelope. */
   isError: boolean
   /** The inspectable result the operator sees. */
-  result: HermesPublicJsonValue | HermesArtifactReceipt["result"]
+  result: HermesPublicJsonValue
   /** Public artifact descriptors this outcome publishes, in emission order. */
   parts: HermesToolDataPart[]
   /** Native references this outcome grants media authority to. */
@@ -716,8 +676,7 @@ export type HermesToolOutcome = {
 /**
  * The public outcome of one native Hermes tool call: error classification, the
  * inspectable result, and the artifact descriptors the outcome publishes. A
- * failed tool publishes nothing, so no receipt can grant authority to media the
- * provider never produced.
+ * failed tool publishes nothing.
  */
 export function projectHermesToolOutcome(
   toolCallId: string,
@@ -728,25 +687,17 @@ export function projectHermesToolOutcome(
   const result = unwrappedToolText(wrapped)
   const canonicalName = canonicalToolName(name)
   const isError = hermesToolResultIsError(result, nativeIsError)
-  const artifact =
-    canonicalName === "present_artifact" && !isError
-      ? projectHermesArtifactReceipt(toolCallId, result)
-      : undefined
   const media = isError
     ? []
     : projectHermesMediaArtifacts(toolCallId, canonicalName, result)
   return {
     isError,
-    result:
-      artifact?.result ?? publicToolResult(canonicalName, result, isError),
-    parts: [
-      ...(artifact ? [artifact.part] : []),
-      ...media.map(({ descriptor }) => ({
-        type: "data" as const,
-        name: "aos.artifact",
-        data: descriptor,
-      })),
-    ],
+    result: publicToolResult(canonicalName, result, isError),
+    parts: media.map(({ descriptor }) => ({
+      type: "data" as const,
+      name: "aos.artifact",
+      data: descriptor,
+    })),
     trustedMedia: media.map(({ reference }) => reference),
   }
 }

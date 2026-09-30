@@ -70,6 +70,7 @@ import {
   HermesInteractions,
 } from "./interactions"
 import { HermesDashboardClient } from "./dashboard-client"
+import { createHermesFileReader } from "./file-reader"
 import {
   HermesAttachmentRegistry,
   HermesSessionGoneError,
@@ -78,6 +79,7 @@ import {
 } from "./attachment-registry"
 import {
   ServerAgentUpdateUnsupportedError,
+  type ServerFileReader,
   type ServerMcpApps,
   type ServerRuntime,
   type ServerRuntimeTranslation,
@@ -205,8 +207,16 @@ function historyPagination(
  * rows. A healthy Session spends none of the budget.
  */
 const MAX_EXTRA_HISTORY_PAGE_FETCHES = 32
-/** Rows per raw history read; artifact grants page past the first. */
+/**
+ * Rows per raw history read; artifact grants and MCP tool-call lookups page
+ * past the first.
+ */
 const RAW_HISTORY_PAGE = 500
+/** A Session whose raw rows are read; a lazy draft's `info` reads as none. */
+type RawHistoryScope = Pick<
+  HermesWorkspaceSession,
+  "agentId" | "providerSessionId"
+> & { info?: unknown }
 
 /**
  * A stored Hermes row never says a turn is live. Its `is_active` only means the
@@ -416,6 +426,9 @@ export class HermesServerAdapter implements ServerRuntime {
     steerAck: "in-history",
   }
   readonly #retry: HermesRetrySchedule
+  readonly #rawHistoryPage: number
+  /** Absent where the transport streams no dashboard files. */
+  readonly readFile?: ServerFileReader
   readonly mcpApps?: ServerMcpApps
   readonly #mcpToolNames?: McpToolNames
   /**
@@ -441,18 +454,30 @@ export class HermesServerAdapter implements ServerRuntime {
        * without one, no tool opens a view.
        */
       mcp?: { client: McpAppClient; logger: Logger }
+      /** Rows per raw history read. */
+      rawHistoryPage?: number
     } = {}
   ) {
     this.link = transport.link ?? READY_LINK
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
+    this.#rawHistoryPage = options.rawHistoryPage ?? RAW_HISTORY_PAGE
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
       : undefined
+    if (transport.http && transport.stream)
+      this.readFile = createHermesFileReader(
+        {
+          http: (path, init) => transport.http!(path, init),
+          stream: (path, init) => transport.stream!(path, init),
+        },
+        options.log
+      )
     if (this.#dashboard && options.mcp) {
       const dashboard = this.#dashboard
       const apps = createHermesMcpApps({
         servers: (profile) => dashboard.listMcpServers(profile),
         rawHistory: (scope) => this.#rawHistory(scope),
+        scanHistory: (scope, find) => this.#scanRawHistory(scope, find),
         ...options.mcp,
       })
       this.mcpApps = apps.mcpApps
@@ -500,13 +525,9 @@ export class HermesServerAdapter implements ServerRuntime {
         requireArtifact: async (scope, artifactId) => {
           const published = this.#publishedArtifacts.find(scope, artifactId)
           if (published) return published
-          // A long Session's artifact can sit far past the newest page, so the
-          // grant scan keeps reading older pages until Hermes runs out.
-          for (let offset = 0; ; offset += RAW_HISTORY_PAGE) {
-            const rows = await this.#rawHistory(scope, offset)
-            const found = publishedArtifact(rows, artifactId)
-            if (found || rows.length < RAW_HISTORY_PAGE) return found
-          }
+          return this.#scanRawHistory(scope, (rows) =>
+            publishedArtifact(rows, artifactId)
+          )
         },
         publishArtifact: (scope, artifact) =>
           this.#publishedArtifacts.record(scope, artifact),
@@ -929,12 +950,24 @@ export class HermesServerAdapter implements ServerRuntime {
     )
   }
 
-  async #rawHistory(
-    scope: Pick<HermesWorkspaceSession, "agentId" | "providerSessionId"> & {
-      info?: unknown
-    },
-    offset = 0
+  /**
+   * What `find` makes of the first page of raw rows that answers it, newest
+   * page first: a long Session's row can sit far past the newest page, so the
+   * scan keeps reading older pages until Hermes runs out.
+   */
+  async #scanRawHistory<T>(
+    scope: RawHistoryScope,
+    find: (rows: readonly unknown[]) => T | undefined
   ) {
+    for (let offset = 0; ; offset += this.#rawHistoryPage) {
+      const rows = await this.#rawHistory(scope, offset)
+      const found = find(rows)
+      if (found !== undefined || rows.length < this.#rawHistoryPage)
+        return found
+    }
+  }
+
+  async #rawHistory(scope: RawHistoryScope, offset = 0) {
     if (!this.#dashboard) throw new HermesUnavailableError()
     const storedId = storedSessionIdentity(
       scope.agentId,
@@ -946,7 +979,7 @@ export class HermesServerAdapter implements ServerRuntime {
       value = await this.#dashboard.getSessionMessages(
         scope.agentId,
         storedId,
-        RAW_HISTORY_PAGE,
+        this.#rawHistoryPage,
         offset
       )
     } catch (error) {

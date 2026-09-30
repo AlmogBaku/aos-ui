@@ -4,10 +4,7 @@ import {
   OpenCodeClientError,
   OpenCodeMutationUncertainError,
 } from "./client"
-import {
-  OpenCodeContentUnavailableError,
-  OpenCodeContentUnreadableError,
-} from "./content"
+import { OpenCodeContentUnavailableError } from "./content"
 import { OpenCodeInteractionPublicError } from "./interactions"
 import {
   OpenCodeWorkspaceScopeError,
@@ -31,12 +28,7 @@ export function openCodeFailure(cause: unknown): PublicFailure | undefined {
     if (cause.code === "conflict") return failureOf("revision_conflict", cause)
     return failureOf("unavailable", cause)
   }
-  if (
-    cause instanceof OpenCodeWorkspaceScopeError ||
-    // The receipt is still authoritative, but OpenCode cannot read its file:
-    // unlike a 503, "not found" never invites a retry that cannot succeed.
-    cause instanceof OpenCodeContentUnreadableError
-  )
+  if (cause instanceof OpenCodeWorkspaceScopeError)
     return failureOf("gone", cause)
   if (cause instanceof OpenCodeWorkspaceUnavailableError)
     return failureOf("unavailable", cause)

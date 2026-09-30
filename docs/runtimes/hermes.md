@@ -141,9 +141,9 @@ AOS UI ships its own stateless MCP server, `packages/tools-mcp`, separate from
 the proxy. It offers four tools: `render_chart`, `render_map`, `render_stats`,
 and `present_artifact({path, title?, mimeType?})`, where `path` is an absolute
 path. The first three are [MCP Apps](../mcp-apps.md) whose views draw the
-chart, map, or stats in the message; `present_artifact` has no view. Each
-tool's description carries its usage guidance; there is no AOS system prompt
-to install.
+chart, map, or stats in the message; `present_artifact` has an App view that
+shows the file; the proxy reads it through Hermes. Each tool's description carries its usage
+guidance; there is no AOS system prompt to install.
 
 Run it on the Hermes host, bound to loopback:
 
@@ -154,9 +154,8 @@ bun run tools-mcp:serve -- --port 4111      # another port
 
 The Compose stack runs the same server as the `tools-mcp` service, published
 on `127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`. It serves `/mcp` (Streamable
-HTTP) and `/health`, has no authentication, and never reads files itself:
-`present_artifact` only returns a receipt, and the proxy later reads the file
-through Hermes.
+HTTP) and `/health`, has no authentication, and never reads files itself: the
+proxy reads them through Hermes when the view requests a file.
 
 Register it in each profile that should use the tools. Hermes reads
 `mcp_servers` from the profile's own `config.yaml`
@@ -244,11 +243,33 @@ This fallback is temporary and goes away once Hermes serves MCP Apps itself.
 ## Sessions and Artifacts
 
 Sessions the proxy creates carry `source: "aos-ui"`. An Artifact is published
-either by a `present_artifact` receipt or by an assistant `MEDIA:/absolute/path`
-line, Hermes's own delivery convention. The proxy removes each `MEDIA:` line
-from the prose, validates the path, and reads the bytes through
-`GET /api/fs/read-data-url`. A path that is relative, traverses, or names a
-credential file such as `.env` or `auth.json` is refused.
+by an assistant `MEDIA:/absolute/path` line, Hermes's own delivery convention.
+The proxy removes each `MEDIA:` line from the prose, validates the path, and
+reads the bytes through `GET /api/fs/read-data-url`. A path that is relative,
+traverses, or names a credential file such as `.env` or `auth.json` is refused.
+
+### MCP App file reads
+
+To read a file named by a `present_artifact` call's App view, the proxy
+first lists the file's folder with
+`GET /api/files?path=<folder>&profile=<profile>&session_id=<sessionId>`. The
+listing entry's `path` is the real path — every link followed — and that is the
+path the proxy's [folder rules](../configuration.md#mcp-app-files) judge. A listing that answers 400 is a
+link loop or a non-folder path (`listing_invalid`); 403 means the folder is
+outside a locked root or Hermes may not read it (`listing_refused`); 404 is a
+missing folder (`listing_missing`); 500 is a broken link (`listing_failed`). If
+the real path cannot be determined because the file is not listed, the proxy
+logs `hermes.file.real_path_unknown` with reason `not_listed`. A broken or
+looping link anywhere in the folder makes the whole listing fail, blocking every
+file in it. A folder outside a locked Hermes root cannot be served. On Python
+3.13+ a link loop answers 500 instead of 400.
+
+Once the real path passes, the proxy streams bytes with
+`GET /api/fs/download?path=<realPath>&profile=<profile>&session_id=<sessionId>`.
+
+To look up the call's input when the App opens, the proxy pages the stored raw
+rows with `GET /api/sessions/:id/messages`. Hermes stores a call's row before
+the tool runs, so a call whose turn is still live is found.
 
 ## Creator profile
 

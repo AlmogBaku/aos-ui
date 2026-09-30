@@ -5,16 +5,14 @@ import type {
 } from "../../../protocol"
 
 import {
-  canonicalAosToolName,
   canonicalToolName,
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
 import { validIdentifier } from "../../core/identifier"
+import type { McpToolCall } from "../../core/runtime"
 import type { JsonValue } from "../json-value"
 import {
-  openClawArtifactReceipt,
   openClawMediaArtifact,
-  publicArtifactArgs,
   type OpenClawArtifactDescriptor,
 } from "./artifacts"
 import { safeClone } from "./json-copy"
@@ -98,16 +96,9 @@ function nativeSequence(row: Record<string, unknown>, index: number) {
 type ToolOutcome = Readonly<{
   result?: JsonValue
   isError: boolean
-  artifact?: ReturnType<typeof openClawArtifactReceipt>
   /** The MCP server and tool OpenClaw records on an MCP tool's result. */
   mcp?: Readonly<{ server: string; tool: string }>
 }>
-
-/** The AOS tool a native tool name refers to. */
-function aosToolName(value: unknown) {
-  const name = identifier(value)
-  return name && canonicalAosToolName(name)
-}
 
 function mcpTool(details: unknown) {
   const server = record(details) ? identifier(details.mcpServer) : undefined
@@ -133,31 +124,21 @@ function historyToolName(
   return canonical === name ? undefined : canonical
 }
 
-/**
- * Each `toolResult` row's outcome by call id. A `present_artifact` receipt
- * yields its published artifact and a result without the native path.
- */
+/** Each `toolResult` row's outcome by call id. */
 function toolOutcomes(rows: readonly unknown[]) {
   const outcomes = new Map<string, ToolOutcome>()
   for (const row of rows) {
     if (!record(row) || row.role !== "toolResult") continue
     const toolCallId = identifier(row.toolCallId)
     if (!toolCallId) continue
-    const artifact =
-      aosToolName(row.toolName) === "present_artifact"
-        ? openClawArtifactReceipt(toolCallId, row)
-        : undefined
     const mcp = mcpTool(row.details)
-    const result = artifact
-      ? artifact.result
-      : safeClone({
-          content: row.content,
-          ...(row.details === undefined ? {} : { details: row.details }),
-        })
+    const result = safeClone({
+      content: row.content,
+      ...(row.details === undefined ? {} : { details: row.details }),
+    })
     outcomes.set(toolCallId, {
       ...(result === undefined ? {} : { result }),
       isError: row.isError === true,
-      ...(artifact ? { artifact } : {}),
       ...(mcp ? { mcp } : {}),
     })
   }
@@ -176,11 +157,7 @@ function toolCallParts(
   const toolCallId = identifier(block.id)
   const outcome = toolCallId ? outcomes.get(toolCallId) : undefined
   const name = historyToolName(block.name, outcome, resolve)
-  const args = safeClone(
-    name === "present_artifact"
-      ? publicArtifactArgs(block.arguments)
-      : block.arguments
-  )
+  const args = safeClone(block.arguments)
   if (!toolCallId || !name || !record(args)) return []
   const argsRecord = args as { [key: string]: JsonValue }
   return [
@@ -193,7 +170,6 @@ function toolCallParts(
       ...(outcome?.result === undefined ? {} : { result: outcome.result }),
       ...(outcome?.isError ? { isError: true } : {}),
     },
-    ...(outcome?.artifact ? [artifactPart(outcome.artifact.descriptor)] : []),
   ]
 }
 
@@ -297,10 +273,29 @@ function storedMcpAppView(rows: readonly unknown[], toolCallId: string) {
   return undefined
 }
 
-/** The published receipt artifact `artifactId` names among these rows. */
-function publishedReceipt(rows: readonly unknown[], artifactId: string) {
-  for (const outcome of toolOutcomes(rows).values())
-    if (outcome.artifact?.descriptor.id === artifactId) return outcome.artifact
+/**
+ * The native name and arguments of the call `toolCallId` names among these
+ * rows, as OpenClaw stored them. OpenClaw stores the assistant row when its
+ * message ends (`src/agents/sessions/agent-session-base.ts:405`), before its
+ * tools run (`packages/agent-core/src/agent-loop.ts:353`), so a running call
+ * is there too.
+ */
+function storedToolCall(rows: readonly unknown[], toolCallId: string) {
+  for (const row of rows) {
+    if (!record(row) || row.role !== "assistant" || !Array.isArray(row.content))
+      continue
+    for (const block of row.content)
+      if (
+        record(block) &&
+        block.type === "toolCall" &&
+        identifier(block.id) === toolCallId
+      ) {
+        const name = identifier(block.name)
+        return name && record(block.arguments)
+          ? { name, input: block.arguments }
+          : undefined
+      }
+  }
   return undefined
 }
 
@@ -350,20 +345,21 @@ export type OpenClawHistoryOperations = Readonly<{
     agentId: string,
     sessionKey: string
   ): Promise<{ state: "running" | "idle" }>
-  /** The receipt artifact `artifactId` names anywhere in this Session. */
-  publishedArtifact(
-    agentId: string,
-    sessionKey: string,
-    artifactId: string
-  ): Promise<
-    { path: string; descriptor: OpenClawArtifactDescriptor } | undefined
-  >
   /** The MCP App view this Session's own `toolCallId` result opened. */
   mcpAppViewId(
     agentId: string,
     sessionKey: string,
     toolCallId: string
   ): Promise<string | undefined>
+  /**
+   * This Session's own `toolCallId` call with its stored arguments, when the
+   * Session's names list its tool.
+   */
+  mcpToolCall(
+    agentId: string,
+    sessionKey: string,
+    toolCallId: string
+  ): Promise<McpToolCall | undefined>
 }>
 
 export function createOpenClawHistory(input: {
@@ -525,14 +521,20 @@ export function createOpenClawHistory(input: {
           : { cost: { amount: session.estimatedCostUsd, currency: "USD" } }),
       }
     },
-    publishedArtifact: (agentId, sessionKey, artifactId) =>
-      scanHistory(agentId, sessionKey, (rows) =>
-        publishedReceipt(rows, artifactId)
-      ),
     mcpAppViewId: (agentId, sessionKey, toolCallId) =>
       scanHistory(agentId, sessionKey, (rows) =>
         storedMcpAppView(rows, toolCallId)
       ),
+    // The stored arguments, never the projection the browser reads.
+    async mcpToolCall(agentId, sessionKey, toolCallId) {
+      const call = await scanHistory(agentId, sessionKey, (rows) =>
+        storedToolCall(rows, toolCallId)
+      )
+      const tool =
+        call &&
+        (await input.mcpToolNames?.listed(agentId, sessionKey, call.name))
+      return tool && { ...tool, input: call.input }
+    },
     async activity(agentId, sessionKey) {
       const history = await authoritativeHistory(agentId, sessionKey, 1, 0)
       return {

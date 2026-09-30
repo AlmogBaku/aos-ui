@@ -11,6 +11,7 @@ import {
 } from "../../../protocol"
 import type {
   ServerAttachmentStage,
+  ServerFileReader,
   ServerMcpApps,
   ServerTurnEngine,
   ServerRuntime,
@@ -28,14 +29,13 @@ import {
   artifactMime,
   downloadBytes,
   isNativeArtifactId,
-  isReceiptArtifactId,
   OpenClawArtifactUnavailableError,
   OpenClawArtifactUnreadableError,
-  sessionFileBytes,
 } from "./artifacts"
 import { OpenClawContentPublicError } from "./content"
 import { openClawCapabilities } from "./capabilities"
 import { stageOpenClawChatAttachments } from "./content"
+import { createOpenClawFileReader } from "./file-reader"
 import {
   createOpenClawHistory,
   OpenClawHistoryUnavailableError,
@@ -51,9 +51,7 @@ import {
 import {
   OpenClawNativePayloadError,
   openClawArtifactDownloadParams,
-  openClawSessionFileParams,
   parseOpenClawArtifactDownload,
-  parseOpenClawSessionFile,
 } from "./native-schemas"
 import {
   createOpenClawWorkspace,
@@ -135,8 +133,13 @@ type OpenClawServerAdapterOptions = Readonly<{
   turns: ServerTurnEngine
   hiddenAgentIds?: readonly string[]
   subscribeSession: OpenClawHistorySubscription
-  /** The gateway's HTTP origin, where a ticketed media download resolves. */
+  /**
+   * The gateway's HTTP origin, where a ticketed media download and an MCP
+   * App's files resolve.
+   */
   gatewayOrigin?: string
+  /** The device token an MCP App's file read presents, read afresh each time. */
+  deviceToken?: () => Promise<string>
   fetch?: typeof fetch
   /** Shared with the turn engine so live and stored tool names agree. */
   mcpToolNames?: OpenClawMcpToolNames
@@ -150,6 +153,8 @@ export class OpenClawServerAdapter implements ServerRuntime {
   readonly link: ServerLink
   readonly turns: ServerTurnEngine
   readonly mcpApps: ServerMcpApps
+  /** Absent without the gateway's origin and a device token. */
+  readonly readFile?: ServerFileReader
   readonly #workspace
   readonly #history
   readonly #client: OpenClawGatewayClient
@@ -181,9 +186,19 @@ export class OpenClawServerAdapter implements ServerRuntime {
           this.#workspace.getSession(agentId, sessionKey),
         mcpAppViewId: (agentId, sessionKey, toolCallId) =>
           this.#history.mcpAppViewId(agentId, sessionKey, toolCallId),
+        mcpToolCall: (agentId, sessionKey, toolCallId) =>
+          this.#history.mcpToolCall(agentId, sessionKey, toolCallId),
       },
       start: () => this.#start(),
     })
+    if (options.gatewayOrigin && options.deviceToken)
+      this.readFile = createOpenClawFileReader({
+        client: options.client,
+        start: () => this.#start(),
+        origin: options.gatewayOrigin,
+        deviceToken: options.deviceToken,
+        fetch: this.#fetch,
+      })
   }
 
   resolveProviderSessionId(agentId: string, publicSessionId: string) {
@@ -361,34 +376,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
   ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }> {
     await this.#start()
     await this.#workspace.getSession(agentId, publicSessionId)
-    return isReceiptArtifactId(artifactId)
-      ? this.#receiptArtifact(agentId, publicSessionId, artifactId)
-      : this.#nativeArtifact(agentId, publicSessionId, artifactId)
-  }
-
-  /** A `present_artifact` receipt's file, read through the Session workspace. */
-  async #receiptArtifact(agentId: string, sessionKey: string, id: string) {
-    const artifact = await this.#history.publishedArtifact(
-      agentId,
-      sessionKey,
-      id
-    )
-    if (!artifact) throw new OpenClawWorkspaceOwnershipError()
-    const file = parseOpenClawSessionFile(
-      await readable(() =>
-        this.#client.request(
-          "sessions.files.get",
-          openClawSessionFileParams(agentId, sessionKey, artifact.path)
-        )
-      )
-    )
-    const { filename, mimeType } = artifact.descriptor
-    const nativeMime = artifactMime(file.mimeType)
-    return {
-      bytes: sessionFileBytes(file),
-      ...(mimeType || nativeMime ? { mimeType: mimeType ?? nativeMime } : {}),
-      filename,
-    }
+    return this.#nativeArtifact(agentId, publicSessionId, artifactId)
   }
 
   /** OpenClaw's own transcript artifact; the gateway scopes it to the Session. */

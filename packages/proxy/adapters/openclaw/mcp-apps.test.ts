@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { OpenClawServerAdapter } from "./adapter"
-import { OpenClawClientRequestError } from "./client"
 import {
+  OpenClawClientRequestError,
+  OpenClawClientUnavailableError,
+} from "./client"
+import {
+  AGENT_WORKSPACE,
   RESEARCH_AGENTS,
   idleTurns,
   stubOpenClawClient,
@@ -58,7 +62,10 @@ const appHistory = {
 }
 
 function gateway(answers: Record<string, (params: never) => unknown> = {}) {
+  let up = false
   const request = vi.fn(async (method: string, params?: unknown) => {
+    // A call before the link is up fails, as the real client's does.
+    if (!up) throw new OpenClawClientUnavailableError()
     if (method in answers) return answers[method]!(params as never)
     if (method === "agents.list") return RESEARCH_AGENTS
     if (method === "sessions.list")
@@ -78,7 +85,11 @@ function gateway(answers: Record<string, (params: never) => unknown> = {}) {
     throw new Error(`Unexpected method ${method}`)
   })
   const adapter = new OpenClawServerAdapter({
-    client: stubOpenClawClient(request),
+    client: stubOpenClawClient(request, {
+      start: async () => {
+        up = true
+      },
+    }),
     turns: idleTurns(),
     subscribeSession: async () => () => undefined,
   })
@@ -193,5 +204,68 @@ describe("OpenClaw MCP Apps", () => {
     await expect(
       mcpApps.readResource(scope, "call-1", "ui://excalidraw/data.json")
     ).rejects.toSatisfy(isNotFound(adapter))
+  })
+})
+
+describe("the OpenClaw MCP tool-call lookup", () => {
+  const input = { path: `${AGENT_WORKSPACE}/report.md`, title: "Report" }
+  const presentArtifact = {
+    id: "aos-ui__present_artifact",
+    label: "present_artifact",
+    description: "",
+    rawDescription: "",
+    source: "mcp",
+    mcpServer: "aos-ui",
+    mcpToolName: "present_artifact",
+  }
+  /** The MCP Apps of a gateway whose `sessionKey` runs one call, listing `tools`. */
+  const running = (tools: unknown[]) =>
+    gateway({
+      "chat.history": (params: { sessionKey: string }) =>
+        params.sessionKey === sessionKey
+          ? {
+              messages: [
+                {
+                  id: "assistant",
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "toolCall",
+                      id: "call-2",
+                      name: "aos-ui__present_artifact",
+                      arguments: input,
+                    },
+                  ],
+                },
+              ],
+              sessionInfo: { hasActiveRun: true, activeRunIds: ["run-1"] },
+            }
+          : { messages: [], sessionInfo: { hasActiveRun: false } },
+      "tools.effective": () => ({
+        agentId: "research",
+        profile: "default",
+        groups: [{ id: "mcp", label: "MCP", source: "mcp", tools }],
+      }),
+    }).mcpApps
+
+  it("finds a running call with its own input right after a restart", async () => {
+    await expect(
+      running([presentArtifact]).toolCall!(scope, "call-2")
+    ).resolves.toEqual({ server: "aos-ui", tool: "present_artifact", input })
+  })
+
+  it.each([
+    ["an id the Session lacks", scope, "call-unknown", [presentArtifact]],
+    [
+      "another Session's call",
+      { ...scope, providerSessionId: otherKey },
+      "call-2",
+      [presentArtifact],
+    ],
+    ["a tool the Session's catalog does not list", scope, "call-2", []],
+  ])("finds nothing for %s", async (_case, callScope, toolCallId, tools) => {
+    await expect(
+      running(tools).toolCall!(callScope, toolCallId)
+    ).resolves.toBeUndefined()
   })
 })

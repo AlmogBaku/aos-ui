@@ -58,13 +58,3 @@ function checkedPath(path: string) {
 export function safeArtifactPath(path: string): string | undefined {
   return path.startsWith("/") ? checkedPath(path) : undefined
 }
-
-/**
- * The same rules for a path the provider resolves against its own working
- * directory: it must be non-empty and neither rooted nor drive-qualified.
- */
-export function safeRelativeArtifactPath(path: string): string | undefined {
-  return path && !/^(?:[\\/]|[A-Za-z]:)/u.test(path)
-    ? checkedPath(path)
-    : undefined
-}

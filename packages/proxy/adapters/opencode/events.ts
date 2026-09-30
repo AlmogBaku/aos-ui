@@ -11,7 +11,6 @@ import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 
 import type { OpenCodeDurableEvent } from "./client"
-import { openCodeArtifactReceipt } from "./content"
 import {
   openCodeModelOptionId,
   openCodeStopReason,
@@ -784,30 +783,19 @@ export class OpenCodeEventProjector {
       const failed = type === "session.next.tool.failed"
       const completedAt = occurredAt(data)
       const text = failed ? undefined : safeTextContent(data.content)
-      const artifact =
-        text !== undefined &&
-        canonicalOpenCodeToolName(tool.name) === "present_artifact"
-          ? openCodeArtifactReceipt(callId, text)
-          : undefined
       events.push(
         { kind: TurnEventKind.ToolCallInputEnded, toolCallId: callId },
         {
           kind: TurnEventKind.ToolCallFinished,
           toolCallId: callId,
-          output: artifact
-            ? JSON.stringify(artifact.result)
-            : text === undefined
+          output:
+            text === undefined
               ? JSON.stringify({ status: "error" })
               : toolResultContent(tool.name, text),
           failed,
           ...(completedAt ? { completedAt } : {}),
         }
       )
-      if (artifact)
-        events.push({
-          kind: TurnEventKind.ArtifactPublished,
-          artifact: artifact.descriptor,
-        })
       // A written list is authoritative; a failed write left the plan alone.
       if (!failed && tool.todoInput) {
         const todos = projectTodos(tool.todoInput, TODO_STATUS_ALIASES)

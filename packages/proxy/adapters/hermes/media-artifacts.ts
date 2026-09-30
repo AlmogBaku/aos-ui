@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto"
-import {
-  safeArtifactPath,
-  safeRelativeArtifactPath,
-} from "../../core/artifact-path"
+import { safeArtifactPath } from "../../core/artifact-path"
 import { MediaLineFilter, mediaReference } from "./media-lines"
 import {
   containsPrivateValue,
@@ -346,120 +343,15 @@ function safeArtifactToken(value: string, maxLength: number) {
   )
 }
 
-/**
- * The `artifact` of a successful receipt. Hermes stores an MCP tool's text
- * content wrapped as `{"result": "<text>"}` (`tools/mcp_tool_handlers.py`
- * `_render_call_tool_result`), so a wrapped receipt is unwrapped once.
- */
-function receiptArtifact(raw: unknown) {
-  const outer = parsedRecord(raw)
-  const value =
-    outer && outer.type === undefined && "result" in outer
-      ? parsedRecord(outer.result)
-      : outer
-  if (!value || value.ok !== true || value.type !== "aos.artifact")
-    return undefined
-  return isRecord(value.artifact) ? value.artifact : undefined
-}
-
-/**
- * The public id and native reference of one receipt. The `aos-ui` MCP server
- * names an absolute path and no id, so the id derives from the call; the
- * retired plugin carried its own id and a workdir-relative path, which live
- * Sessions still hold. `reference` is absent when no readable path results.
- */
-function receiptSource(toolCallId: string, artifact: Record<string, unknown>) {
-  const path = trimmedText(artifact.path)
-  const legacyId = trimmedText(artifact.id)
-  if (legacyId) {
-    // Without a usable absolute workdir Hermes resolves the relative path
-    // against the Session's cwd, which is how the oldest receipts still read.
-    const relative = path ? safeRelativeArtifactPath(path) : undefined
-    const workdir = trimmedText(artifact.workdir)?.replace(/\/+$/u, "")
-    const root = workdir ? safeArtifactPath(workdir) : undefined
-    return {
-      id: legacyId,
-      reference:
-        relative && root ? safeArtifactPath(`${root}/${relative}`) : relative,
-    }
-  }
-  const reference = path ? safeArtifactPath(path) : undefined
-  return reference && toolCallId
-    ? { id: artifactId(toolCallId, reference), reference }
-    : undefined
-}
-
-/**
- * Project a native `present_artifact` receipt into the public opaque artifact
- * descriptor. The native path never leaves this function; the public reference
- * is the artifact id the content operations resolve back to a path.
- */
-export function projectHermesArtifactReceipt(toolCallId: string, raw: unknown) {
-  const artifact = receiptArtifact(raw)
-  const id = artifact && receiptSource(toolCallId, artifact)?.id
-  const filename = trimmedText(artifact?.filename)
-  const mimeType = trimmedText(artifact?.mimeType)
-  const sizeBytes = artifact?.sizeBytes
-  if (
-    !id ||
-    !filename ||
-    !safeArtifactToken(id, 256) ||
-    !safeArtifactToken(filename, 255) ||
-    (mimeType !== undefined &&
-      !/^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u.test(
-        mimeType
-      )) ||
-    (sizeBytes !== undefined &&
-      (!Number.isSafeInteger(sizeBytes) || (sizeBytes as number) < 0))
-  )
-    return undefined
-  const descriptor = {
-    id,
-    filename,
-    ...(mimeType ? { mimeType } : {}),
-    ...(typeof sizeBytes === "number" ? { sizeBytes } : {}),
-  }
-  return {
-    result: { ok: true, type: "aos.artifact", artifact: descriptor },
-    part: {
-      type: "data" as const,
-      name: "aos.artifact",
-      data: {
-        ...descriptor,
-        source: { type: "provider" as const, reference: id },
-      },
-    },
-  }
-}
-
 /** The media a durable row delivers, keyed by the artifact id each one reads as. */
 function rowMedia(row: Record<string, unknown>): HermesMediaArtifact[] {
   if (row.role === "tool") {
-    // Read the row as the live projection did, inside Hermes's untrusted-data
-    // block, so the id it published resolves back to the same receipt.
     const content = unwrappedToolText(row.content ?? row.result)
     const toolCallId = trimmedText(row.tool_call_id ?? row.toolCallId) ?? ""
     const toolName = trimmedText(row.tool_name ?? row.toolName)
-    const artifact = receiptArtifact(content)
-    const receipt = artifact && receiptSource(toolCallId, artifact)
-    const filename = trimmedText(artifact?.filename)
-    return [
-      ...(toolName
-        ? projectHermesMediaArtifacts(toolCallId, toolName, content)
-        : []),
-      ...(receipt?.reference && filename
-        ? [
-            {
-              reference: receipt.reference,
-              descriptor: {
-                id: receipt.id,
-                filename,
-                source: { type: "provider" as const, reference: receipt.id },
-              },
-            },
-          ]
-        : []),
-    ]
+    return toolName
+      ? projectHermesMediaArtifacts(toolCallId, toolName, content)
+      : []
   }
   if (trimmedText(row.display_kind)) return []
   const text = rowText(row, parseJsonOrValue(row.content))

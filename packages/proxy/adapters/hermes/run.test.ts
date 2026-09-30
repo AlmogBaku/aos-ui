@@ -4972,14 +4972,7 @@ describe("live and refreshed Hermes tool projection agree", () => {
   }
 
   const path = "/workspace/app/notes.md"
-  const reportPath = "/home/alice/reports/q3.pdf"
   const audio = "/home/alice/voice-memos/out/brief.mp3"
-  const publicArtifact = {
-    id: "report-1",
-    filename: "report.md",
-    mimeType: "text/markdown",
-    sizeBytes: 42,
-  }
 
   /**
    * Each row: the call, what the agreed projection must hold (compared with
@@ -5009,70 +5002,6 @@ describe("live and refreshed Hermes tool projection agree", () => {
       },
     ],
     [
-      "projects a published artifact receipt identically",
-      {
-        toolCallId: "artifact-parity",
-        name: "present_artifact",
-        args: {
-          id: "report-1",
-          title: "Report",
-          path: "/srv/hermes/private/report.md",
-        },
-        result: {
-          ok: true,
-          type: "aos.artifact",
-          artifact: {
-            ...publicArtifact,
-            path: "/srv/hermes/private/report.md",
-          },
-        },
-      },
-      {
-        isError: false,
-        args: { id: "report-1", title: "Report" },
-        result: { ok: true, type: "aos.artifact", artifact: publicArtifact },
-        artifacts: [
-          {
-            ...publicArtifact,
-            source: { type: "provider", reference: "report-1" },
-          },
-        ],
-      },
-      "/srv/hermes",
-    ],
-    [
-      "projects an aos-ui MCP artifact receipt identically",
-      {
-        toolCallId: "mcp-artifact-parity",
-        name: "mcp__aos_ui__present_artifact",
-        args: { path: reportPath },
-        // Hermes decodes the handler's `{"result": <text content>}` for the frame.
-        result: {
-          result: JSON.stringify({
-            ok: true,
-            type: "aos.artifact",
-            artifact: {
-              path: reportPath,
-              filename: "q3.pdf",
-              mimeType: "application/pdf",
-            },
-          }),
-        },
-      },
-      {
-        isError: false,
-        toolName: "present_artifact",
-        artifacts: [
-          expect.objectContaining({
-            id: expect.stringMatching(/^hermes-media-[a-f0-9]{32}$/u),
-            filename: "q3.pdf",
-            mimeType: "application/pdf",
-          }),
-        ],
-      },
-      "/home/alice",
-    ],
-    [
       "names mcp__aos_ui__render_chart by its bare aos-ui tool identically",
       {
         toolCallId: "render-chart-parity",
@@ -5081,25 +5010,6 @@ describe("live and refreshed Hermes tool projection agree", () => {
         result: { result: "Quarter is ready for display." },
       },
       { toolName: "render_chart" },
-    ],
-    [
-      "collapses an unpublishable artifact receipt identically",
-      {
-        toolCallId: "artifact-unsafe-parity",
-        name: "present_artifact",
-        args: { path: "/srv/private/report.md" },
-        result: {
-          ok: true,
-          type: "aos.artifact",
-          artifact: {
-            id: "/srv/private/report.md",
-            filename: "../report.md",
-            path: "/srv/private/report.md",
-          },
-        },
-      },
-      { isError: false, args: {}, result: { ok: true }, artifacts: [] },
-      "/srv/private",
     ],
     [
       "projects a text_to_speech receipt and its trusted media identically",

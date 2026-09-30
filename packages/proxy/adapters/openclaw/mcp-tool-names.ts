@@ -41,6 +41,14 @@ export function openClawMcpNames(value: unknown): OpenClawMcpName[] {
   return [...tools, ...servers]
 }
 
+/** The server and tool of the tool `names` lists under `rawName`. */
+function listedMcpTool(names: readonly OpenClawMcpName[], rawName: string) {
+  const listed = names.find((name) => name.id === rawName)
+  return listed?.id === undefined
+    ? undefined
+    : { server: listed.server, tool: listed.tool }
+}
+
 /**
  * OpenClaw names an MCP tool `<server>__<tool>`: a listed tool resolves
  * exactly, and an unlisted one by its configured server's prefix.
@@ -49,9 +57,8 @@ export function openClawMcpResolver(
   names: readonly OpenClawMcpName[]
 ): McpToolNameResolver {
   return (rawName) => {
-    const listed = names.find((name) => name.id === rawName)
-    if (listed?.id !== undefined)
-      return { server: listed.server, tool: listed.tool }
+    const listed = listedMcpTool(names, rawName)
+    if (listed) return listed
     const split = rawName.indexOf("__")
     const server = rawName.slice(0, split)
     const tool = rawName.slice(split + 2)
@@ -77,6 +84,16 @@ export type OpenClawMcpToolNames = Readonly<{
   ): Promise<void>
   /** Resolves against the last names loaded; a miss refetches in the background. */
   resolver(agentId: string, sessionKey: string): McpToolNameResolver
+  /**
+   * The server and tool the Session's names list under `rawName`, refetching
+   * once on a miss. A prefix never counts: `a__b__c` could be server `a` or
+   * `a__b`. Never throws.
+   */
+  listed(
+    agentId: string,
+    sessionKey: string,
+    rawName: string
+  ): Promise<{ server: string; tool: string } | undefined>
   /** Frees the Session's names; a fetch still in flight lands on nothing. */
   forget(agentId: string, sessionKey: string): void
   /** How many Sessions hold names. */
@@ -117,31 +134,34 @@ export function createOpenClawMcpToolNames(
     sessions.set(key, created)
     return created
   }
-  const settle = (list: Promise<unknown>): void => {
-    list.then(
-      () => undefined,
-      () => undefined
-    )
-  }
   return {
     async load(agentId, sessionKey, expected = []) {
       const names = record(agentId, sessionKey)
-      await settle(names.cache.get(NAMES))
+      await names.cache.get(NAMES).catch(() => undefined)
       if (
         expected.some(
           (rawName) => mayBeMcpToolName(rawName) && !names.latest?.(rawName)
         )
       )
-        await settle(names.cache.refresh(NAMES))
+        await names.cache.refresh(NAMES).catch(() => undefined)
     },
     resolver(agentId, sessionKey) {
       const names = record(agentId, sessionKey)
       return (rawName) => {
         const hit = names.latest?.(rawName)
         if (!hit && mayBeMcpToolName(rawName))
-          settle(names.cache.refresh(NAMES))
+          names.cache.refresh(NAMES).catch(() => undefined)
         return hit
       }
+    },
+    async listed(agentId, sessionKey, rawName) {
+      const names = record(agentId, sessionKey)
+      const find = (list?: readonly OpenClawMcpName[]) =>
+        list && listedMcpTool(list, rawName)
+      return (
+        find(await names.cache.get(NAMES).catch(() => undefined)) ??
+        find(await names.cache.refresh(NAMES).catch(() => undefined))
+      )
     },
     forget(agentId, sessionKey) {
       sessions.delete(keyOf(agentId, sessionKey))

@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from "vitest"
 
 import type { ServerTurnEngine } from "../../core/runtime"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
-import { OpenCodeClientError } from "./client"
-import { openCodeArtifactReceipt } from "./content"
 
 const turnEngine: ServerTurnEngine = {
   async start() {
@@ -337,26 +335,6 @@ describe("OpenCode server adapter", () => {
       expect(longTurn.nextOffset).toBe(4)
     })
 
-    it("keeps its other history readers ascending", async () => {
-      const native = transcriptClient(conversation)
-      const adapter = new OpenCodeServerAdapter({
-        client: native,
-        turns: turnEngine,
-      })
-
-      await expect(
-        adapter.artifact("research", "session-1", "missing-artifact")
-      ).rejects.toThrow()
-      expect(native.sessions.messages).toHaveBeenCalledWith("session-1", {
-        limit: 100,
-        order: "asc",
-      })
-      expect(native.sessions.messages).not.toHaveBeenCalledWith("session-1", {
-        limit: 100,
-        order: "desc",
-      })
-    })
-
     it("reports older history as truncated past the native read reach", async () => {
       const adapter = new OpenCodeServerAdapter({
         client: transcriptClient(
@@ -573,173 +551,6 @@ describe("OpenCode server adapter", () => {
   })
 
   describe("artifact reads", () => {
-    const receipt = (path: string, filename: string, mimeType?: string) =>
-      JSON.stringify({
-        ok: true,
-        type: "aos.artifact",
-        artifact: { path, filename, ...(mimeType ? { mimeType } : {}) },
-      })
-    const artifactMessage = (callId: string, text: string) => ({
-      id: `assistant-${callId}`,
-      type: "assistant" as const,
-      agent: "research",
-      model: { providerID: "openai", id: "gpt-5" },
-      time: { created: 3_000 },
-      content: [
-        {
-          id: callId,
-          type: "tool" as const,
-          name: "aos-ui_present_artifact",
-          time: { created: 3_000 },
-          state: {
-            status: "completed" as const,
-            input: {},
-            content: [{ type: "text", text }],
-            structured: {},
-          },
-        },
-      ],
-    })
-
-    function artifactClient(
-      read: (path: string) => Promise<unknown>,
-      messages: unknown[] = [
-        artifactMessage(
-          "call-pdf",
-          receipt(
-            "/workspaces/aos/out/report.pdf",
-            "report.pdf",
-            "application/pdf"
-          )
-        ),
-        artifactMessage(
-          "call-notes",
-          receipt("/workspaces/aos/out/notes.md", "notes.md", "text/markdown")
-        ),
-      ]
-    ) {
-      const native = client()
-      return {
-        ...native,
-        sessions: {
-          ...native.sessions,
-          messages: vi.fn(async () => ({ data: messages, cursor: {} })),
-        },
-        files: { read: vi.fn(read) },
-      }
-    }
-
-    function idOf(callId: string, text: string) {
-      return openCodeArtifactReceipt(callId, text)!.descriptor.id
-    }
-
-    it("decodes a base64 binary file and a text file named by the Session's receipts", async () => {
-      const native = artifactClient(async (path) =>
-        path.endsWith(".pdf")
-          ? {
-              type: "binary",
-              content: Buffer.from([1, 2, 3]).toString("base64"),
-              encoding: "base64",
-              mimeType: "application/octet-stream",
-            }
-          : { type: "text", content: "# Notes" }
-      )
-      const adapter = new OpenCodeServerAdapter({
-        client: native,
-        turns: turnEngine,
-      })
-
-      await expect(
-        adapter.artifact(
-          "research",
-          "session-1",
-          idOf(
-            "call-pdf",
-            receipt(
-              "/workspaces/aos/out/report.pdf",
-              "report.pdf",
-              "application/pdf"
-            )
-          )
-        )
-      ).resolves.toEqual({
-        bytes: new Uint8Array([1, 2, 3]),
-        mimeType: "application/pdf",
-        filename: "report.pdf",
-      })
-      await expect(
-        adapter.artifact(
-          "research",
-          "session-1",
-          idOf(
-            "call-notes",
-            receipt("/workspaces/aos/out/notes.md", "notes.md", "text/markdown")
-          )
-        )
-      ).resolves.toEqual({
-        bytes: new TextEncoder().encode("# Notes"),
-        mimeType: "text/markdown",
-        filename: "notes.md",
-      })
-      expect(native.files.read).toHaveBeenCalledWith(
-        "/workspaces/aos/out/report.pdf"
-      )
-    })
-
-    it("reports a missing or denied file as unreadable", async () => {
-      const id = idOf(
-        "call-pdf",
-        receipt(
-          "/workspaces/aos/out/report.pdf",
-          "report.pdf",
-          "application/pdf"
-        )
-      )
-      const missing = new OpenCodeServerAdapter({
-        client: artifactClient(async () => ({ type: "text", content: "" })),
-        turns: turnEngine,
-      })
-      const denied = new OpenCodeServerAdapter({
-        client: artifactClient(async () => {
-          throw new OpenCodeClientError("not_found")
-        }),
-        turns: turnEngine,
-      })
-
-      for (const adapter of [missing, denied]) {
-        const failure = adapter.artifact("research", "session-1", id)
-        await expect(failure).rejects.toMatchObject({
-          name: "OpenCodeContentUnreadableError",
-        })
-        expect(
-          adapter.publicError(await failure.catch((error) => error))?.kind
-        ).toBe("gone")
-      }
-    })
-
-    it("does not resolve an artifact id another Session published", async () => {
-      const native = artifactClient(async () => ({
-        type: "text",
-        content: "never read",
-      }))
-      const adapter = new OpenCodeServerAdapter({
-        client: native,
-        turns: turnEngine,
-      })
-
-      await expect(
-        adapter.artifact(
-          "research",
-          "session-1",
-          idOf(
-            "call-elsewhere",
-            receipt("/workspaces/aos/out/other.pdf", "other.pdf")
-          )
-        )
-      ).rejects.toMatchObject({ name: "OpenCodeWorkspaceScopeError" })
-      expect(native.files.read).not.toHaveBeenCalled()
-    })
-
     it("reports artifacts as available in the Session's capabilities", async () => {
       const adapter = new OpenCodeServerAdapter({
         client: client(),
@@ -749,7 +560,7 @@ describe("OpenCode server adapter", () => {
       await expect(
         adapter.workspaceCapabilities("research", "session-1")
       ).resolves.toMatchObject({
-        content: { artifacts: { status: "available", scope: "session" } },
+        content: { artifacts: { status: "unavailable" } },
       })
     })
   })

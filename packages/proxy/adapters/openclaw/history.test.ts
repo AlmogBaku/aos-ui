@@ -394,12 +394,6 @@ describe("OpenClaw authoritative history", () => {
 })
 
 describe("OpenClaw history AOS tools and artifacts", () => {
-  const receipt = {
-    ok: true,
-    type: "aos.artifact",
-    artifact: { path: "/workspace/report.pdf", filename: "report.pdf" },
-  }
-
   function historyOf(messages: unknown[]) {
     return createOpenClawHistory({
       authority: authority(),
@@ -407,112 +401,6 @@ describe("OpenClaw history AOS tools and artifacts", () => {
       subscribeSession: async () => () => undefined,
     })
   }
-
-  function publishRows(path = receipt.artifact.path) {
-    const published = { ...receipt, artifact: { ...receipt.artifact, path } }
-    return [
-      {
-        id: "assistant",
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "publish",
-            name: "aos-ui__present_artifact",
-            arguments: { path, title: "report.pdf" },
-          },
-          {
-            type: "toolCall",
-            id: "chart",
-            name: "aos-ui__render_chart",
-            arguments: { title: "Sales" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "publish",
-        toolName: "aos-ui__present_artifact",
-        content: [{ type: "text", text: JSON.stringify(published) }],
-        details: { structuredContent: published },
-      },
-    ]
-  }
-
-  it("replays AOS tool calls canonically with the receipt's artifact and no native path", async () => {
-    const output = "x".repeat(5000)
-    const rows: unknown[] = publishRows()
-    ;(rows[0] as { content: unknown[] }).content.push({
-      type: "toolCall",
-      id: "read",
-      name: "files__read",
-      arguments: { path: "notes/plan.md" },
-    })
-    rows.push({
-      role: "toolResult",
-      toolCallId: "read",
-      toolName: "files__read",
-      content: [{ type: "text", text: output }],
-      details: { mcpServer: "files", mcpTool: "read" },
-    })
-    const result = await historyOf(rows).history(
-      "analyst",
-      "agent:analyst:main",
-      200,
-      0
-    )
-
-    const content = result.messages[0]!.content
-    expect(content).toEqual([
-      expect.objectContaining({
-        type: "tool-call",
-        toolCallId: "publish",
-        toolName: "present_artifact",
-        args: { title: "report.pdf" },
-        result: {
-          ok: true,
-          type: "aos.artifact",
-          artifact: { id: expect.any(String), filename: "report.pdf" },
-        },
-      }),
-      {
-        type: "data",
-        name: "aos.artifact",
-        data: expect.objectContaining({
-          id: expect.stringMatching(/^openclaw-artifact-/u),
-          filename: "report.pdf",
-        }),
-      },
-      expect.objectContaining({
-        type: "tool-call",
-        toolName: "render_chart",
-        args: { title: "Sales" },
-      }),
-      expect.objectContaining({
-        type: "tool-call",
-        toolName: "mcp__files__read",
-        args: { path: "notes/plan.md" },
-        result: {
-          content: [{ type: "text", text: output }],
-          details: { mcpServer: "files", mcpTool: "read" },
-        },
-      }),
-    ])
-    expect(JSON.stringify(result)).not.toContain("/workspace")
-  })
-
-  it("replays no artifact for a receipt with an unsafe path", async () => {
-    const result = await historyOf(publishRows("/workspace/.env")).history(
-      "analyst",
-      "agent:analyst:main",
-      200,
-      0
-    )
-
-    expect(
-      result.messages[0]!.content.some((part) => part.type === "data")
-    ).toBe(false)
-  })
 
   it("lists a native media block under OpenClaw's own artifact id", async () => {
     const result = await historyOf([
@@ -548,22 +436,5 @@ describe("OpenClaw history AOS tools and artifacts", () => {
       },
     ])
     expect(JSON.stringify(result)).not.toContain("/api/")
-  })
-
-  it("resolves a published receipt only from its own Session's rows", async () => {
-    const history = historyOf(publishRows())
-    const page = await history.history("analyst", "agent:analyst:main", 200, 0)
-    const id = (
-      page.messages[0]!.content.find((part) => part.type === "data") as {
-        data: { id: string }
-      }
-    ).data.id
-
-    await expect(
-      history.publishedArtifact("analyst", "agent:analyst:main", id)
-    ).resolves.toMatchObject({ path: "/workspace/report.pdf" })
-    await expect(
-      historyOf([]).publishedArtifact("analyst", "agent:analyst:main", id)
-    ).resolves.toBeUndefined()
   })
 })
