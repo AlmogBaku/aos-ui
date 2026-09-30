@@ -174,29 +174,57 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
 
 ## A published Artifact cannot load
 
-The proxy logs `app_file.refused` with a reason code for each refusal, and `app_file.unavailable` when the runtime does not answer. It never logs the path. Read reason codes in `packages/proxy/routes/app-files.ts`.
+### present_artifact file not loading
 
-Common causes and fixes:
+The proxy logs `app_file.refused` (404) or `app_file.unavailable` (503) for
+every failure; it never logs the path. Reason codes, from
+`packages/proxy/routes/app-files.ts`:
 
-- **`no_reader`**: the `aos-ui` MCP server is not in `mcpApps.files.servers`. The default value is `["aos-ui"]`; confirm the proxy configuration includes it and that the server name matches.
-- **No folder**: no folder rule is configured for the Agent. Operators get the Agent's working folder by default in Hermes and OpenClaw; guests get nothing until `mcpApps.files.guest` is configured.
-- **`denied` / `real_path_denied`**: the path is outside the folder rules, names a credential file (`.env`, `auth.json`, `config.yaml`, and similar), or matches the built-in deny list. The deny list cannot be lifted by configuration.
-- **`missing`**: the file does not exist at the path the Agent named. Re-run the tool after the file is written.
-- **`runtime_status`**: the runtime did not answer in time. Check the runtime and the proxy logs for the underlying error.
-- **OpenCode**: file serving is not yet supported. The card shows "Can't reach this file".
-- **OpenClaw**: sandboxed Sessions and Sessions on machines other than the one running the proxy cannot reach files. Guests get no file addresses on OpenClaw.
+**Refused (404):**
 
-For `MEDIA:` line Artifacts and trusted native delivery Artifacts (Hermes text-to-speech):
-- `MEDIA:` and `present_artifact` take an absolute path. AOS refuses a relative path, a path that traverses with `..`, and any path naming a credential file.
-- Artifacts larger than 25 MiB are not read back.
-- Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
+| Code | Meaning |
+| --- | --- |
+| `no_reader` | The runtime cannot read files, or (for a guest) cannot report a file's real path |
+| `call_unknown` | No such tool call in that Session |
+| `server_not_allowed` | The call's MCP server is not in `mcpApps.files.servers` |
+| `argument_not_servable` | The argument is missing, nested, or not an absolute normalized path |
+| `denied` | The folder rules refuse the written path |
+| `real_path_unknown` | The runtime could not report the real path |
+| `real_path_denied` | The real path, after links, falls outside the folder rules |
+| `runtime_refused` | The runtime answered 403 |
+| `missing` | The runtime answered 404 (file not found) |
+| `gone` | The Agent or Session no longer exists |
 
-For HTML files shown by `present_artifact`:
+**Unavailable (503):**
+
+| Code | Meaning |
+| --- | --- |
+| `runtime_status` | The runtime answered a status other than 200, 206, or 416 |
+| `failed` | The read failed for another reason |
+
+A 401 response means a bad or expired pass, or a guest without a valid login.
+A 429 response means the file route's own rate limit was hit.
+
+If `open` returns no file addresses (no configured folder for this Agent), the
+card shows "Can't reach this file" and no log line is written.
+
+**OpenCode** cannot yet serve files; the card always shows "Can't reach this file".
+
+**OpenClaw** cannot reach sandboxed Sessions or Sessions on other machines.
+Guests get no file addresses on OpenClaw.
+
+For HTML files shown in the `present_artifact` card:
 - The view loads no external or relative resources; an HTML file that needs them must inline everything.
 - Scripts are off; any effect that requires a script will not appear in the preview.
 
 For PDFs:
-- JPEG 2000 images inside a PDF stay blank in Safari and WebKit while the rest of the page renders. This is a WebKit limitation unrelated to the proxy or the runtime.
+- JPEG 2000 images inside a PDF stay blank in Safari and WebKit while the rest of the page renders. This is a WebKit limitation.
+
+### MEDIA: and trusted-delivery Artifacts
+
+- `MEDIA:` takes an absolute path. AOS refuses a relative path, a path that traverses with `..`, and any path naming a credential file such as `.env`, `auth.json`, or `config.yaml`.
+- Artifacts larger than 25 MiB are not read back.
+- Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
 
 ## A route points to missing work
 

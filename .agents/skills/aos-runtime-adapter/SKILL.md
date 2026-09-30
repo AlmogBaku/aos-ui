@@ -97,10 +97,6 @@ Treat attachment and media planes as different public concepts:
 | Successful delivery tool output such as Hermes text-to-speech | Assistant Artifact | The trusted native tool receipt |
 | Path mentioned in prose, or an unclaimed `MEDIA:` line | Nothing, or `[Media unavailable]` | None |
 
-Note: an older `present_artifact` receipt of the form
-`{ok: true, type: "aos.artifact", artifact: {path, filename, mimeType?}}`
-is no longer authoritative for an Artifact descriptor. Ignore it.
-
 Parse attachment envelopes server-side. Preserve authorship and safe filename,
 MIME, size, and opaque identity; remove native paths, injected context,
 filesystem warnings, and private retrieval URLs.

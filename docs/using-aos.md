@@ -78,13 +78,13 @@ A file over 64 MiB shows Download and Open in new tab instead of a preview.
 
 The tool's description tells the Agent to call it again after each change so the card shows the latest version.
 
-**pip** moves the card into the side panel beside the conversation, or into a drawer over the conversation on phones. The message shows a short placeholder with a control that brings the view back. Moving the view reloads it, so a PDF reopens at its first page. Only one card is in pip at a time, within a Session. Close the panel, press Escape, or use the card's own inline control to return it.
+**pip** moves the view into the side panel beside the conversation, or into a drawer over the conversation on phones. The message shows a short placeholder with a control that brings the view back. Moving the view reloads it, so a PDF reopens at its first page. Only one view is in pip at a time, within a Session. Close the panel, press Escape, or use the view's own inline control to return it.
 
 The proxy serves the file; the `aos-ui` MCP server never opens it. The page receives a signed address that is valid for about ten minutes and renewed while the card is open. The address serves only the path the tool call named. Which paths may be served is governed by the `mcpApps.files` folder rules; see [Configuration](configuration.md) and [MCP Apps](mcp-apps.md).
 
 **What can prevent a file from loading.** Each failure logs `app_file.refused` or `app_file.unavailable` at the proxy. Common reasons:
 
-- The `aos-ui` server is not in `mcpApps.files.servers` (the default).
+- The tool's MCP server is not in `mcpApps.files.servers`, which defaults to `["aos-ui"]`.
 - The runtime cannot read files (OpenCode, and OpenClaw for sandboxed or remote Sessions or guests).
 - No folder is configured to serve from.
 - The path is outside the folder rules or matches the built-in deny list (credential files and keys).
