@@ -364,15 +364,23 @@ derived unread count. Browsing the Activity drawer marks nothing read.
 - **MCP Apps:** the one exception to "never run arbitrary HTML". A tool whose
   own MCP server declares a `ui://` view renders that server-authored HTML as
   an inline card in the message, inside an opaque-origin double iframe with a
-  CSP built from the view's declared domains; nothing else ever runs there.
-  The card follows the App's requested height up to 80% of the viewport, and
-  the App may ask for fullscreen, which covers the viewport in place with a
-  localized close control that returns focus to the card. Loading, failure, and
-  an unavailable view read as card states. The card has no header: the view
-  sits in the message, followed by the compact "Used <tool>" row that keeps the
-  call's textual details in every state. Charts, maps, and stats are the
-  `aos-ui` server's own App views (`render_chart`, `render_map`,
-  `render_stats`); `present_artifact` has no view.
+  CSP built from the view's declared domains and its call's own file
+  addresses; nothing else ever runs there. The card follows the App's
+  requested height up to 80% of the viewport. The App may ask for fullscreen,
+  which covers the viewport in place with a localized close control that
+  returns focus to the card, or for the side panel (`pip`), which shows the
+  view where the Artifact viewer opens: in the inspector's place on wide
+  screens and in the focus-managed drawer on phones, one view at a time. The
+  frame reloads whenever the view moves. Its message keeps a localized "Shown
+  in the side panel" note with a control that returns it; the panel's close
+  control, which takes focus when the view arrives, Esc from the panel, and
+  leaving the Session return it too, and focus follows it back to the card.
+  Loading, failure, and an unavailable view read as card states. The card has
+  no header: the view sits in the message, followed by the compact "Used
+  <tool>" row that keeps the call's textual details in every state. A view
+  downloads and opens only its own call's files. Charts, maps, and stats are
+  the `aos-ui` server's own App views (`render_chart`, `render_map`,
+  `render_stats`), and `present_artifact`'s view shows the file it presents.
 
 ### Notification ask and settings
 
