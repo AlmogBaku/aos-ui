@@ -220,13 +220,16 @@ returned no address. Every path that leads there:
 **Hermes** reports the reason when it cannot resolve the real path of a file
 (logged as `hermes.file.real_path_unknown`):
 
-| Code              | Meaning                                                                            |
-| ----------------- | ---------------------------------------------------------------------------------- |
-| `listing_invalid` | The folder path is not a real directory (for example, a broken link loop)          |
-| `listing_refused` | The folder is outside a locked root or Hermes cannot read it                       |
-| `listing_missing` | The folder does not exist                                                          |
-| `listing_failed`  | A broken link whose target Hermes cannot stat                                      |
-| `not_listed`      | The file is not in the folder listing; Hermes omits credential files from listings |
+| Code              | Meaning                                                                             |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `listing_invalid` | A link loop anywhere in the folder, or a path that is not a folder                  |
+| `listing_refused` | The folder is outside a locked root or Hermes cannot read it                        |
+| `listing_missing` | The folder does not exist                                                           |
+| `listing_failed`  | A broken link anywhere in the folder (on Python 3.13+ a link loop also answers 500) |
+| `not_listed`      | The file is not in the folder listing; Hermes omits credential files from listings  |
+
+Hermes fails the whole folder listing when it cannot resolve even one entry, so
+one bad link blocks every file in that folder.
 
 Any of these causes the proxy to log `app_file.refused` with code `real_path_unknown`.
 
