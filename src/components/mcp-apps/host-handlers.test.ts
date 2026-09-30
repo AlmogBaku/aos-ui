@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest"
 import {
   appMessageText,
   createRateLimiter,
+  createResourceCache,
+  downloadName,
   grantDisplayMode,
   offeredDisplayModes,
   openAppLink,
@@ -11,7 +13,7 @@ import {
 describe("openAppLink", () => {
   it("opens an https link in a new unrelated context", () => {
     const open = vi.fn()
-    expect(openAppLink("https://example.com/docs?q=1", open)).toEqual({})
+    expect(openAppLink("https://example.com/docs?q=1", { open })).toEqual({})
     expect(open).toHaveBeenCalledWith(
       "https://example.com/docs?q=1",
       "_blank",
@@ -28,8 +30,91 @@ describe("openAppLink", () => {
     "not a url",
   ])("refuses %s", (url) => {
     const open = vi.fn()
-    expect(openAppLink(url, open)).toEqual({ isError: true })
+    expect(openAppLink(url, { open })).toEqual({ isError: true })
     expect(open).not.toHaveBeenCalled()
+  })
+})
+
+describe("downloadName", () => {
+  it.each([
+    ["../../etc/passwd", "passwd"],
+    ["C:\\reports\\q3.pdf", "q3.pdf"],
+    ["q3\u0000draft?.pdf", "q3_draft_.pdf"],
+    [" .hidden ", "hidden"],
+    ["", ""],
+  ])("saves %j as %j", (name, saved) => {
+    expect(downloadName(name)).toBe(saved)
+  })
+})
+
+describe("createResourceCache", () => {
+  it("shares a view resource's read per Agent, server, and URI", async () => {
+    const cached = createResourceCache<void>()
+    const reads: string[] = []
+    const read = (
+      label: string,
+      agentId: string,
+      toolName: string,
+      uri: string
+    ) =>
+      cached({ agentId, toolName, uri }, async () => {
+        reads.push(label)
+      })
+    await read("first", "researcher", "present_artifact", "ui://aos-ui/view")
+    await read("same server", "researcher", "render_chart", "ui://aos-ui/view")
+    await read("other Agent", "writer", "present_artifact", "ui://aos-ui/view")
+    await read(
+      "other server",
+      "researcher",
+      "mcp__maps__show",
+      "ui://aos-ui/view"
+    )
+    await read(
+      "data",
+      "researcher",
+      "present_artifact",
+      "https://example.com/d"
+    )
+    await read(
+      "data again",
+      "researcher",
+      "present_artifact",
+      "https://example.com/d"
+    )
+    await read("unknown server", "researcher", "show_board", "ui://board/view")
+    await read("unknown again", "researcher", "show_board", "ui://board/view")
+    expect(reads).toEqual([
+      "first",
+      "other Agent",
+      "other server",
+      "data",
+      "data again",
+      "unknown server",
+      "unknown again",
+    ])
+  })
+
+  it("forgets a failed read and keeps only the latest reads", async () => {
+    const cached = createResourceCache<string>(2)
+    const request = (uri: string) => ({
+      agentId: "researcher",
+      toolName: "present_artifact",
+      uri,
+    })
+    await expect(
+      cached(request("ui://aos-ui/a"), async () => {
+        throw new Error("offline")
+      })
+    ).rejects.toThrow("offline")
+    expect(await cached(request("ui://aos-ui/a"), async () => "a")).toBe("a")
+    await cached(request("ui://aos-ui/b"), async () => "b")
+    await cached(request("ui://aos-ui/c"), async () => "c")
+    expect(await cached(request("ui://aos-ui/a"), async () => "a again")).toBe(
+      "a again"
+    )
+    expect(await cached(request("ui://aos-ui/c"), async () => "c again")).toBe(
+      "c"
+    )
   })
 })
 

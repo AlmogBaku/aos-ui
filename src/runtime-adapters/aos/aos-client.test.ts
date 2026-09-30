@@ -453,17 +453,18 @@ describe("MCP App routes", () => {
 
   it("hands a view absolute file addresses and renews them with a bare POST", async () => {
     const files = `/api/aos/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}/files`
-    const fetcher = vi.fn(
-      async (input: RequestInfo | URL, _init?: RequestInit) =>
-        String(input).endsWith("/app/files")
-          ? Response.json({ addresses: { path: `${files}/path?pass=next` } })
-          : Response.json({
-              html: "<p>app</p>",
-              files: {
-                addresses: { path: `${files}/path?pass=first` },
-                expiresAt: "2026-09-30T12:10:00.000Z",
-              },
-            })
+    const fetcher = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async (input) =>
+      String(input).endsWith("/app/files")
+        ? Response.json({ addresses: { path: `${files}/path?pass=next` } })
+        : Response.json({
+            html: "<p>app</p>",
+            files: {
+              addresses: { path: `${files}/path?pass=first` },
+              expiresAt: "2026-09-30T12:10:00.000Z",
+            },
+          })
     )
     const client = new AosRemoteClient({
       fetcher,

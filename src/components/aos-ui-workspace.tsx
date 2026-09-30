@@ -218,6 +218,7 @@ function ArtifactWorkspaceBridge({
         adapter={bundle.mcpApps}
         agentId={agentId}
         sessionId={artifactThreadId}
+        connectionStatus={bundle.connectionStatus}
       >
         <ArtifactWorkspaceContent {...shell} locale={locale}>
           {children}

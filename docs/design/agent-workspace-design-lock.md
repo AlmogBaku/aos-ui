@@ -95,3 +95,12 @@ Any intentional visual departure must be called out before it is introduced.
   indicator already shows. The aside pose stays under reduced motion, so
   waiting still reads differently from idle. Each silhouette caps how far its
   pair may look aside, so no bar leaves its backdrop.
+- **An MCP App view can take the Artifact viewer's place (2026-09-30):** an
+  App that asks for picture-in-picture (`pip`) shows in the side panel rather
+  than floating over the conversation, which stays the dominant surface. The
+  side panel is the Artifact viewer's slot: it takes the inspector's place on
+  wide screens and opens as the focus-managed drawer on phones, and it holds
+  one view at a time. A frame cannot move without reloading, so the view
+  reloads each time it moves. Its message keeps a "Shown in the side panel"
+  note with a control that returns it, as the panel's close control and Esc
+  do, and leaving the Session returns it to its message.

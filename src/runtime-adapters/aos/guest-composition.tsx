@@ -207,6 +207,7 @@ function GuestArtifactShell({
         adapter={mcpApps}
         agentId={agentId}
         sessionId={sessionId}
+        connectionStatus={connectionStatus}
       >
         <GuestConversationShell
           locale={locale}

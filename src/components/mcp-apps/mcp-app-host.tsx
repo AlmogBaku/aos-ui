@@ -14,6 +14,8 @@ import {
 import type { McpAppView } from "@aos/protocol/mcp-apps"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
+import type { AppConnectionStatus } from "./use-app-files"
+
 /** What a call reports to its view, which the side panel's view needs too. */
 export type McpAppPipData = {
   input?: Record<string, unknown>
@@ -28,6 +30,8 @@ export type McpAppPipData = {
 export type McpAppPip = McpAppPipData & {
   target: McpAppTarget
   view: McpAppView
+  /** When `view` arrived, which its files' passes count from. */
+  openedAt: number
   /** The tool's name, when the call reported one. */
   toolName?: string
 }
@@ -36,6 +40,8 @@ export type McpAppHost = {
   adapter: McpAppAdapter
   agentId: string
   sessionId: string
+  /** The runtime connection's state, which the views' files follow. */
+  connectionStatus?: AppConnectionStatus
   /** The view in the side panel, while its Session is the one shown. */
   pip?: McpAppPip
   /** Shows a view in the side panel, returning any other to its message. */
@@ -61,11 +67,13 @@ export function McpAppHostProvider({
   adapter,
   agentId,
   sessionId,
+  connectionStatus,
   children,
 }: {
   adapter?: McpAppAdapter
   agentId?: string
   sessionId?: string
+  connectionStatus?: AppConnectionStatus
   children: ReactNode
 }) {
   const [pip, setPip] = useState<McpAppPip>()
@@ -106,13 +114,14 @@ export function McpAppHostProvider({
             adapter,
             agentId,
             sessionId,
+            connectionStatus,
             pip: shown,
             showInPip: setPip,
             leavePip,
             updatePip,
           }
         : undefined,
-    [adapter, agentId, leavePip, sessionId, shown, updatePip]
+    [adapter, agentId, connectionStatus, leavePip, sessionId, shown, updatePip]
   )
   return (
     <McpAppHostContext.Provider value={host}>
