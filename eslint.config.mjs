@@ -56,6 +56,7 @@ const styleRead =
 export default defineConfig([
   globalIgnores([
     "dist/**",
+    "packages/tools-mcp/dist/**",
     "coverage/**",
     "**/.venv/**",
     ".agents/**",
