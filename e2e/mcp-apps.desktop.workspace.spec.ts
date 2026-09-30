@@ -70,8 +70,12 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   }
 
   // The artifact view frame is the inner frame inside the sandbox proxy.
+  // Use .last() so each call targets the most-recently-added card.
   const artifactFrame = (toolCall: string) =>
-    page.frameLocator(`iframe[title="${toolCall} app"]`).frameLocator("iframe")
+    page
+      .frameLocator(`iframe[title="${toolCall} app"]`)
+      .last()
+      .frameLocator("iframe")
 
   // --- report.pdf ---
   await send("Publish an artifact")
@@ -118,8 +122,10 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   // --- test.html ---
   await send("Show an html artifact")
   const htmlFrame = artifactFrame("present_artifact")
-  // The sandboxed HTML rendered ("scripts are off" is the initial text and
-  // stays that way because the script cannot run).
-  await expect(htmlFrame.getByText("scripts are off")).toBeVisible()
-  await expect(htmlFrame.getByText("scripts are on")).toBeHidden()
+  // The artifact view embeds the HTML in a sandboxed iframe. Confirm it
+  // rendered: the "scripts are off" paragraph is the initial text and
+  // stays that way because the sandbox prevents the script from running.
+  const htmlInner = htmlFrame.frameLocator('iframe[title="HTML preview"]')
+  await expect(htmlInner.getByText("scripts are off")).toBeVisible()
+  await expect(htmlInner.getByText("scripts are on")).toBeHidden()
 })
