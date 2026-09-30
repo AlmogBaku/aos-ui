@@ -1,7 +1,15 @@
+import type { CodeLanguage } from "./code"
+
+/** How a text file lays out: as prose, a table, or highlighted source. */
+export type TextFormat =
+  | { format: "plain" | "markdown" | "csv" | "json" }
+  | { format: "code"; language: CodeLanguage }
+
 export type FilePreview =
   | { kind: "pdf"; blob: Blob }
   | { kind: "image"; url: string }
-  | { kind: "text" | "html"; text: string }
+  | { kind: "html"; text: string }
+  | ({ kind: "text"; text: string } & TextFormat)
   | { kind: "none" }
 
 export type FileState =
@@ -25,8 +33,25 @@ export const PREVIEW_LIMITS: PreviewLimits = {
   text: 2 * MIB,
 }
 
-const TEXT_EXTENSIONS =
-  "css csv js json jsx log markdown md py rs sh sql toml ts tsv tsx txt xml yaml yml"
+const TEXT_EXTENSIONS = "log sql toml tsv txt xml"
+
+/** The language each source type is highlighted in; TSX's grammar reads all four scripts. */
+const CODE_LANGUAGES: Record<string, CodeLanguage> = {
+  "application/javascript": "tsx",
+  "application/typescript": "tsx",
+  "application/x-javascript": "tsx",
+  "application/x-typescript": "tsx",
+  "text/javascript": "tsx",
+  "text/jsx": "tsx",
+  "text/typescript": "tsx",
+  "text/tsx": "tsx",
+  "text/css": "css",
+  "text/x-python": "python",
+  "text/x-rust": "rust",
+  "text/x-shellscript": "shellscript",
+  "application/yaml": "yaml",
+  "application/x-yaml": "yaml",
+}
 
 /** The type a file's extension names, for a file whose type was not declared. */
 const EXTENSION_TYPES: Record<string, string> = {
@@ -40,13 +65,27 @@ const EXTENSION_TYPES: Record<string, string> = {
   png: "image/png",
   svg: "image/svg+xml",
   webp: "image/webp",
+  markdown: "text/markdown",
+  md: "text/markdown",
+  csv: "text/csv",
+  json: "application/json",
+  css: "text/css",
+  js: "text/javascript",
+  jsx: "text/jsx",
+  ts: "text/typescript",
+  tsx: "text/tsx",
+  py: "text/x-python",
+  rs: "text/x-rust",
+  sh: "text/x-shellscript",
+  yaml: "application/yaml",
+  yml: "application/yaml",
   ...Object.fromEntries(
     TEXT_EXTENSIONS.split(" ").map((extension) => [extension, "text/plain"])
   ),
 }
 
 const TEXT_TYPE =
-  /^text\/|^application\/(?:json|xml|javascript|typescript|yaml|x-yaml|toml)$|\+(?:json|xml)$/u
+  /^text\/|^application\/(?:json|xml|javascript|typescript|x-javascript|x-typescript|yaml|x-yaml|toml)$|\+(?:json|xml)$/u
 
 /** A media type without its parameters, such as `; charset=utf-8`. */
 function mediaType(value: string | null | undefined) {
@@ -64,6 +103,14 @@ function kindOf(type: string | undefined): PreviewKind | undefined {
   if (type?.startsWith("image/")) return "image"
   if (type !== undefined && TEXT_TYPE.test(type)) return "text"
   return undefined
+}
+
+function textFormat(type: string): TextFormat {
+  if (type === "text/markdown") return { format: "markdown" }
+  if (type === "text/csv") return { format: "csv" }
+  if (type === "application/json") return { format: "json" }
+  const language = CODE_LANGUAGES[type]
+  return language ? { format: "code", language } : { format: "plain" }
 }
 
 function discard(body: ReadableStream | null) {
@@ -104,11 +151,17 @@ function dataUrl(blob: Blob) {
   })
 }
 
-async function preview(kind: PreviewKind, blob: Blob): Promise<FilePreview> {
+async function preview(
+  kind: PreviewKind,
+  type: string,
+  blob: Blob
+): Promise<FilePreview> {
   if (kind === "pdf") return { kind, blob }
   // The view's policy loads images only from `data:` addresses.
   if (kind === "image") return { kind, url: await dataUrl(blob) }
-  return { kind, text: await blob.text() }
+  const text = await blob.text()
+  if (kind === "html") return { kind, text }
+  return { kind, text, ...textFormat(type) }
 }
 
 /**
@@ -138,7 +191,7 @@ export async function loadFile(
       extensionType(file.filename) ??
       mediaType(response.headers.get("content-type"))
     const kind = kindOf(type)
-    if (kind === undefined) {
+    if (type === undefined || kind === undefined) {
       discard(response.body)
       return { status: "ready", preview: { kind: "none" } }
     }
@@ -146,7 +199,7 @@ export async function loadFile(
     if (!chunks) return { status: "tooLarge" }
     return {
       status: "ready",
-      preview: await preview(kind, new Blob(chunks, { type })),
+      preview: await preview(kind, type, new Blob(chunks, { type })),
     }
   } catch {
     return { status: "unreachable" }

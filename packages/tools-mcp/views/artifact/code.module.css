@@ -1,0 +1,8 @@
+/* Shiki sets both themes' colour on each run of text; the view's theme picks one. */
+.code span {
+  color: var(--shiki-light);
+}
+
+:global([data-theme="dark"]) .code span {
+  color: var(--shiki-dark);
+}
