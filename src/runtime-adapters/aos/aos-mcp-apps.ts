@@ -1,10 +1,21 @@
-import type { McpAppAdapter } from "../contracts"
-import type { AosRemoteClient } from "./aos-client"
+import { McpAppFilesRefusedError, type McpAppAdapter } from "../contracts"
+import { AosClientError, type AosRemoteClient } from "./aos-client"
 
 type McpAppClient = Pick<
   AosRemoteClient,
-  "openMcpApp" | "callMcpAppTool" | "readMcpAppResource"
+  "openMcpApp" | "callMcpAppTool" | "readMcpAppResource" | "renewMcpAppFiles"
 >
+
+/** A client error no retry fixes: every 4xx but the rate limit's 429. */
+function refusal(error: unknown): error is AosClientError {
+  return (
+    error instanceof AosClientError &&
+    error.status !== undefined &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 429
+  )
+}
 
 /**
  * The tool call id is all an App request names: the proxy resolves the view's
@@ -30,4 +41,13 @@ export class AosMcpAppAdapter implements McpAppAdapter {
     toolCallId,
     uri,
   }) => this.client.readMcpAppResource(sessionId, toolCallId, { uri })
+
+  renewFiles: McpAppAdapter["renewFiles"] = ({ sessionId, toolCallId }) =>
+    this.client
+      .renewMcpAppFiles(sessionId, toolCallId)
+      .catch((error: unknown) => {
+        throw refusal(error)
+          ? new McpAppFilesRefusedError(error.message)
+          : error
+      })
 }

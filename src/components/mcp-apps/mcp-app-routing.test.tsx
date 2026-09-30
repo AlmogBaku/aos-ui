@@ -52,6 +52,7 @@ function adapter(
     open: vi.fn(open),
     callTool: vi.fn(),
     readResource: vi.fn(),
+    renewFiles: vi.fn(),
   } satisfies McpAppAdapter
 }
 

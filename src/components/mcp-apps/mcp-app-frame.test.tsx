@@ -78,6 +78,7 @@ const adapter: McpAppAdapter = {
   open: vi.fn(),
   callTool: vi.fn(),
   readResource: vi.fn(),
+  renewFiles: vi.fn(),
 }
 const target = {
   agentId: "researcher",
