@@ -384,7 +384,19 @@ Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `typ
 
 ## Artifacts
 
-A published Artifact reaches the browser as an ACP `resource_link` content
+### present_artifact as an MCP App
+
+`present_artifact` is an ordinary MCP App tool call on the wire. Its view
+(`ui://aos-ui/artifact`) renders PDFs (with pdf.js), images, plain text, and
+sandboxed HTML. The view reads the file from the signed address the proxy
+grants in the host-context key `aos/files`; the `aos-ui` MCP server never
+opens the file. The file route and folder rules are documented in
+[MCP Apps](../mcp-apps.md).
+
+### MEDIA: and trusted-delivery Artifacts
+
+An Artifact from a `MEDIA:` line or a trusted native delivery receipt (such as
+Hermes text-to-speech) reaches the browser as an ACP `resource_link` content
 block inside the turn's `agent_message_chunk` (or `user_message_chunk`), both
 live and on replay (`packages/proxy/acp/translate/updates.ts`):
 
@@ -409,8 +421,8 @@ The browser fetches the bytes from the artifact route of the Session it is
 viewing: a same-origin
 `GET /api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` on
 the operator listener, or the `/api/guest/v1/...` mirror with the guest's
-invitation token as a Bearer `Authorization` header. The proxy resolves the id only against that Session's own
-provider history.
+invitation token as a Bearer `Authorization` header. The proxy resolves the id
+only against that Session's own provider history.
 
 ## Interactions: permission and elicitation
 

@@ -23,6 +23,8 @@ export const fixtureScenarioNames = [
   "map",
   "stats",
   "artifact",
+  "artifact-png",
+  "artifact-html",
   "image",
   "audio",
   "video",
@@ -707,16 +709,24 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
     }
   }
 
+  if (input.includes("png")) {
+    return {
+      name: "artifact-png",
+      parts: [fixturePresentationPart("fixture-present_artifact-png")],
+    }
+  }
+
+  if (input.includes("html")) {
+    return {
+      name: "artifact-html",
+      parts: [fixturePresentationPart("fixture-present_artifact-html")],
+    }
+  }
+
   if (input.includes("artifact") || input.includes("deliverable")) {
     return {
       name: "artifact",
-      parts: [
-        {
-          type: "data",
-          name: "aos.artifact",
-          data: FIXTURE_ARTIFACT_CATALOG.examples.markdown,
-        } as AssistantPart,
-      ],
+      parts: [fixturePresentationPart("fixture-present_artifact-pdf")],
     }
   }
 

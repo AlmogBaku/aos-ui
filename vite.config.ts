@@ -26,8 +26,11 @@ import {
   getRuntimeEntrypoint,
 } from "./shared/runtime-modes.ts"
 import { readTitleBarColors } from "./shared/theme-color.ts"
-import { FIXTURE_AOS_UI_MCP_PATH } from "./shared/presentation/views.ts"
-import { buildViews } from "./packages/tools-mcp/views/build.ts"
+import {
+  FIXTURE_AOS_UI_MCP_PATH,
+  FIXTURE_MCP_APP_FILE_PATHS,
+} from "./shared/presentation/views.ts"
+import { buildPdfjs, buildViews } from "./packages/tools-mcp/views/build.ts"
 import { snapshotToolsServer } from "./packages/tools-mcp/snapshot.ts"
 import { reactCompiler } from "./react-compiler.config.ts"
 
@@ -145,6 +148,27 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
   }
 }
 
+/**
+ * Adds `Access-Control-Allow-Origin: null` to the three synthetic fixture
+ * files the artifact view fetches from an opaque-origin sandbox frame. Mirrors
+ * what `packages/proxy/static.ts` does in production.
+ */
+function fixtureMcpAppFilesPlugin(): Plugin {
+  const paths = new Set(FIXTURE_MCP_APP_FILE_PATHS)
+  const addHeader = (server: PreviewServer | ViteDevServer) => {
+    server.middlewares.use((request, response, next) => {
+      if (paths.has(request.url?.split("?")[0] ?? ""))
+        response.setHeader("access-control-allow-origin", "null")
+      next()
+    })
+  }
+  return {
+    name: "aos-fixture-mcp-app-files",
+    configureServer: addHeader,
+    configurePreviewServer: addHeader,
+  }
+}
+
 /** The MCP App sandbox page carries the policy the proxy serves it with. */
 function mcpAppSandboxPlugin(): Plugin {
   const secure = (server: ViteDevServer | PreviewServer) => {
@@ -163,7 +187,8 @@ function mcpAppSandboxPlugin(): Plugin {
 
 /** The real `aos-ui` server's answers, as JSON, from views built right now. */
 async function recordToolsServer() {
-  return JSON.stringify(await snapshotToolsServer(await buildViews()))
+  const [views, pdfjs] = await Promise.all([buildViews(), buildPdfjs()])
+  return JSON.stringify(await snapshotToolsServer(views, pdfjs))
 }
 
 /**
@@ -344,6 +369,7 @@ export default defineConfig(({ mode }) => {
       runtimeConfigurationPlugin(environment),
       e2eReadinessPlugin(environment),
       mcpAppSandboxPlugin(),
+      fixtureMcpAppFilesPlugin(),
       fixtureToolsServerPlugin(),
       buildIdPlugin(),
       titleBarColorPlugin(titleBarColors),

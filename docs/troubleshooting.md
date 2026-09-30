@@ -174,13 +174,79 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
 
 ## A published Artifact cannot load
 
-- Confirm the active conversation branch contains an explicit `present_artifact` result, an assistant `MEDIA:/absolute/path` line (Hermes), or a successful trusted provider-native delivery receipt, such as Hermes text-to-speech.
-- `present_artifact` and `MEDIA:` take an absolute path. AOS refuses a relative path, a path that traverses with `..`, and any path naming a credential file such as `.env`, `auth.json`, or `config.yaml`.
-- OpenCode reads only files inside the configured project directory; a path outside it reads as unavailable. OpenClaw reads only the Session's workspace files, at most 256 KiB and only text or common images; OpenClaw's native media appears after a reload.
+### present_artifact file not loading
+
+The proxy logs `app_file.refused` (404) or `app_file.unavailable` (503) for
+every failure; it never logs the path. Reason codes, from
+`packages/proxy/routes/app-files.ts`:
+
+**Refused (404):**
+
+| Code                    | Meaning                                                                          |
+| ----------------------- | -------------------------------------------------------------------------------- |
+| `no_reader`             | The runtime cannot read files, or (for a guest) cannot report a file's real path |
+| `call_unknown`          | No such tool call in that Session                                                |
+| `server_not_allowed`    | The call's MCP server is not in `mcpApps.files.servers`                          |
+| `argument_not_servable` | The argument is missing, nested, or not an absolute normalized path              |
+| `denied`                | The folder rules refuse the written path                                         |
+| `real_path_unknown`     | The runtime could not report the real path                                       |
+| `real_path_denied`      | The real path, after links, falls outside the folder rules                       |
+| `runtime_refused`       | The runtime answered 403                                                         |
+| `missing`               | The runtime answered 404 (file not found)                                        |
+| `gone`                  | The Agent or Session no longer exists                                            |
+
+**Unavailable (503):**
+
+| Code             | Meaning                                                   |
+| ---------------- | --------------------------------------------------------- |
+| `runtime_status` | The runtime answered a status other than 200, 206, or 416 |
+| `failed`         | The read failed for another reason                        |
+
+A 401 response means a bad or expired pass, or a guest without a valid login.
+A 429 response means the file route's own rate limit was hit.
+
+If the card shows "Can't reach this file" and the proxy logged nothing, `open`
+returned no address. Every path that leads there:
+
+- The call's MCP server is not in `mcpApps.files.servers`.
+- The runtime cannot read files (OpenCode).
+- No folder is configured for this Agent.
+- The guest is on OpenClaw (guests get no file addresses on OpenClaw).
+
+**OpenCode** cannot yet serve files; the card always shows "Can't reach this file".
+
+**OpenClaw** cannot reach sandboxed Sessions or Sessions on other machines.
+
+**Hermes** reports the reason when it cannot resolve the real path of a file
+(logged as `hermes.file.real_path_unknown`):
+
+| Code              | Meaning                                                                             |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `listing_invalid` | A link loop anywhere in the folder, or a path that is not a folder                  |
+| `listing_refused` | The folder is outside a locked root or Hermes cannot read it                        |
+| `listing_missing` | The folder does not exist                                                           |
+| `listing_failed`  | A broken link anywhere in the folder (on Python 3.13+ a link loop also answers 500) |
+| `not_listed`      | The file is not in the folder listing; Hermes omits credential files from listings  |
+
+Hermes fails the whole folder listing when it cannot resolve even one entry, so
+one bad link blocks every file in that folder.
+
+Any of these causes the proxy to log `app_file.refused` with code `real_path_unknown`.
+
+For HTML files shown in the `present_artifact` card:
+
+- The view loads no external or relative resources; an HTML file that needs them must inline everything.
+- Scripts are off; any effect that requires a script will not appear in the preview.
+
+For PDFs:
+
+- JPEG 2000 images inside a PDF stay blank in Safari and WebKit while the rest of the page renders. This is a WebKit limitation.
+
+### MEDIA: and trusted-delivery Artifacts
+
+- `MEDIA:` takes an absolute path. AOS refuses a relative path, a path that traverses with `..`, and any path naming a credential file such as `.env`, `auth.json`, or `config.yaml`.
 - Artifacts larger than 25 MiB are not read back.
 - Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
-- HTML preview loads no external assets; an Artifact that needs one must inline it.
-- Inspect the Source or textual fallback when preview rendering is unavailable.
 
 ## A route points to missing work
 

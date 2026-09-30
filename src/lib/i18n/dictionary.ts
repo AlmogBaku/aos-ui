@@ -1,14 +1,8 @@
 export type Dictionary = {
   productName: string
   artifacts: {
-    outputs: string
-    empty: string
     open: string
-    copy: string
-    copied: string
-    copyFailed: string
     download: string
-    close: string
     loading: string
     loadFailed: string
     unavailable: string
@@ -18,17 +12,7 @@ export type Dictionary = {
     downloadFailed: string
     audio: string
     video: string
-    retry: string
-    unsupported: string
     fileTooLarge: string
-    textTooLarge: string
-    preview: string
-    source: string
-    htmlView: string
-    htmlPreviewTitle: string
-    pdfPreviewTitle: string
-    csvTruncated: string
-    viewerLabel: string
   }
   activity: {
     title: string

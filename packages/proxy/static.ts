@@ -1,6 +1,8 @@
 import { readFile, stat } from "node:fs/promises"
 import { isAbsolute, relative, resolve } from "node:path"
 
+import { FIXTURE_MCP_APP_FILE_PATHS } from "../../shared/presentation/views"
+
 export type StaticHandler = (
   request: Request,
   server?: unknown
@@ -120,6 +122,9 @@ async function assetResponse(
   )
 }
 
+/** The exact paths that must carry `Access-Control-Allow-Origin: null`. */
+const FIXTURE_FILE_PATHS = new Set(FIXTURE_MCP_APP_FILE_PATHS)
+
 export function createStaticHandler(
   options: StaticHandlerOptions
 ): StaticHandler {
@@ -157,11 +162,14 @@ export function createStaticHandler(
     }
     const path = safePath(root, url.pathname)
     if (!path) return undefined
-    const requested = await assetResponse(path, request, {
+    const headers: Record<string, string> = {
       "cache-control": url.pathname.startsWith("/assets/")
         ? "public, max-age=31536000, immutable"
         : "no-cache",
-    })
+    }
+    if (FIXTURE_FILE_PATHS.has(url.pathname))
+      headers["access-control-allow-origin"] = "null"
+    const requested = await assetResponse(path, request, headers)
     if (requested) return requested
     if (url.pathname.startsWith("/assets/") || url.pathname.includes("."))
       return undefined

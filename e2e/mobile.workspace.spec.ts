@@ -73,33 +73,6 @@ test("expanded reasoning remains independently scrollable", async ({
     .toBe(threadScrollTop)
 })
 
-test("a Hebrew artifact opens in the focus-managed full-screen viewer", async ({
-  page,
-}) => {
-  await page.goto("/he")
-  await page
-    .getByRole("textbox", { name: "שדה הודעה" })
-    .fill("Publish an artifact")
-  await page.getByRole("button", { name: "שליחת הודעה" }).click()
-  // Click the published card once the run settles, so the thread no longer
-  // scrolls under the press.
-  const opens = page.getByRole("button", { name: "פתיחה" })
-  await expect(opens).toHaveCount(2)
-  await expect(page.getByRole("button", { name: "עצירת התשובה" })).toBeHidden()
-  const open = opens.last()
-  await open.click()
-
-  const viewer = page.getByRole("dialog", {
-    name: "תצוגה מקדימה של התוצר",
-  })
-  await expect(
-    viewer.getByRole("region", { name: "תצוגה מקדימה של התוצר" })
-  ).toHaveAttribute("dir", "rtl")
-  await expect(viewer).not.toBeEmpty()
-  await page.keyboard.press("Escape")
-  await expect(open).toBeFocused()
-})
-
 test("mobile F6 skips CSS-hidden Agents and inspector panes", async ({
   page,
 }) => {

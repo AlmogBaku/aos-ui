@@ -21,18 +21,15 @@ export function FixtureAosUiApp({
   locale,
   dictionary,
   composerFeatures = DEFAULT_COMPOSER_FEATURE_CONFIG,
-  artifactHtmlAssetOrigins,
 }: {
   locale: Locale
   dictionary: Dictionary
   composerFeatures?: ComposerFeatureConfig
-  artifactHtmlAssetOrigins?: readonly string[]
 }) {
   return (
     <FixtureRuntimeProvider
       locale={locale}
       config={{ status: "ready", mode: "fixture", composerFeatures }}
-      artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
       {(runtime) => (
         <AosUiWorkspace
@@ -51,10 +48,7 @@ function FixtureRuntimeProvider({
   config,
   locale,
   children,
-  artifactHtmlAssetOrigins,
-}: RuntimeAdapterProps<"fixture"> & {
-  artifactHtmlAssetOrigins?: readonly string[]
-}) {
+}: RuntimeAdapterProps<"fixture">) {
   const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
@@ -87,7 +81,6 @@ function FixtureRuntimeProvider({
     environmentLabel: locale === "he" ? "סביבת הדגמה" : "Demo workspace",
     artifacts: {
       resolver: bundle.artifacts,
-      htmlAssetOrigins: artifactHtmlAssetOrigins,
     },
     interactions: bundle.interactions,
     mcpApps: bundle.mcpApps,

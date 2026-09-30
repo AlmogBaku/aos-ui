@@ -51,3 +51,82 @@ test("an MCP App renders through the double frame, talks to the host, and enters
     page.getByText("Summarize the launch board", { exact: true })
   ).toBeVisible()
 })
+
+test("the artifact view renders report.pdf, preview.png, test.html, pip, and download", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  await expect(page.getByRole("tablist")).toBeVisible()
+
+  // Helper: send a message and wait for the run to finish.
+  const send = async (text: string) => {
+    await page.getByRole("textbox", { name: "Message input" }).fill(text)
+    await page.getByRole("button", { name: "Send message" }).click()
+    await expect(
+      page.getByRole("button", { name: "Stop response" })
+    ).toBeHidden({ timeout: 10_000 })
+  }
+
+  // The artifact view frame is the inner frame inside the sandbox proxy.
+  // Use locator().last() to target the most-recently-added card when
+  // multiple present_artifact calls are in the conversation.
+  const artifactFrame = () =>
+    page
+      .locator('iframe[title="present_artifact app"]')
+      .last()
+      .contentFrame()
+      .locator("iframe")
+      .contentFrame()
+
+  // --- report.pdf ---
+  await send("Publish an artifact")
+  const pdfFrame = artifactFrame()
+  // The PDF renders its synthetic text.
+  await expect(
+    pdfFrame.getByText("Synthetic fixture file for AOS UI.")
+  ).toBeVisible()
+
+  // --- pip ---
+  await pdfFrame.getByRole("button", { name: "Picture in picture" }).click()
+  // The message card shows the "in side panel" placeholder.
+  await expect(page.getByText("Shown in the side panel")).toBeVisible()
+  // The side panel is open with the artifact view inside it.
+  const panel = page.getByRole("complementary", { name: /present_artifact/ })
+  await expect(panel).toBeVisible()
+
+  // Escape from inside the panel returns the view to the message.
+  await panel.press("Escape")
+  await expect(page.getByText("Shown in the side panel")).toBeHidden()
+
+  // Open pip again and close with the panel's close button.
+  await pdfFrame.getByRole("button", { name: "Picture in picture" }).click()
+  await expect(page.getByText("Shown in the side panel")).toBeVisible()
+  await page
+    .getByRole("complementary", { name: /present_artifact/ })
+    .getByRole("button", { name: "Return to the message" })
+    .click()
+  await expect(page.getByText("Shown in the side panel")).toBeHidden()
+
+  // --- download ---
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    pdfFrame.getByRole("button", { name: "Download" }).click(),
+  ])
+  expect(download.suggestedFilename()).toBe("report.pdf")
+
+  // --- preview.png ---
+  await send("Show a png artifact")
+  const pngFrame = artifactFrame()
+  // The image has loaded (no broken-image placeholder, real img element).
+  await expect(pngFrame.locator("img[src^='data:image/png']")).toBeVisible()
+
+  // --- test.html ---
+  await send("Show an html artifact")
+  const htmlFrame = artifactFrame()
+  // The artifact view embeds the HTML in a sandboxed iframe. Confirm it
+  // rendered: the "scripts are off" paragraph is the initial text and
+  // stays that way because the sandbox prevents the script from running.
+  const htmlInner = htmlFrame.frameLocator('iframe[title="HTML preview"]')
+  await expect(htmlInner.getByText("scripts are off")).toBeVisible()
+  await expect(htmlInner.getByText("scripts are on")).toBeHidden()
+})

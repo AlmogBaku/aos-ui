@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { parseArtifactDescriptor } from "@/artifacts/artifacts"
-import { classifyArtifactPreview } from "@/components/artifacts/artifact-renderers"
+import { ArtifactUnavailableError } from "@/artifacts/browser-artifact-adapter"
 
 import {
   FIXTURE_ARTIFACT_CATALOG,
@@ -39,24 +39,7 @@ describe("fixture artifact adapter", () => {
     expect([...new Uint8Array(await binary.arrayBuffer())]).toEqual([0, 1, 2])
   })
 
-  it("catalogs one deterministic example for every renderer kind", () => {
-    expect(
-      Object.values(FIXTURE_ARTIFACT_CATALOG.examples).map((artifact) =>
-        classifyArtifactPreview(artifact.mimeType, artifact.filename)
-      )
-    ).toEqual([
-      "markdown",
-      "text",
-      "code",
-      "json",
-      "csv",
-      "image",
-      "pdf",
-      "audio",
-      "video",
-      "html",
-      "unsupported",
-    ])
+  it("catalogs valid descriptors with unique ids", () => {
     expect(
       Object.values(FIXTURE_ARTIFACT_CATALOG.examples).every(
         (artifact) => parseArtifactDescriptor(artifact) !== null
@@ -86,6 +69,6 @@ describe("fixture artifact adapter", () => {
         sessionId: "thread-aster-market",
         signal: new AbortController().signal,
       })
-    ).rejects.toThrow("Fixture artifact reference is unavailable")
+    ).rejects.toBeInstanceOf(ArtifactUnavailableError)
   })
 })

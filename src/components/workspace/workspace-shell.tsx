@@ -158,11 +158,10 @@ export type WorkspaceShellProps = {
   agentFocusRequest?: { agentId: string; nonce: number } | null
   onActionError?: (error: unknown) => void
   tabUndo?: { title: string; onUndo: () => WorkspaceActionResult } | null
-  artifactOutputs?: ReactNode
-  artifactViewer?: ReactNode
-  artifactViewerOpen?: boolean
-  artifactViewerLabel?: string
-  onCloseArtifactViewer?: () => void
+  sidePanel?: ReactNode
+  sidePanelOpen?: boolean
+  sidePanelLabel?: string
+  onCloseSidePanel?: () => void
   conversationHeader?: ReactNode
   navigationHidden?: boolean
   children: ReactNode
@@ -172,10 +171,10 @@ export type WorkspaceConversationShellProps = Pick<
   WorkspaceShellProps,
   | "locale"
   | "dictionary"
-  | "artifactViewer"
-  | "artifactViewerOpen"
-  | "artifactViewerLabel"
-  | "onCloseArtifactViewer"
+  | "sidePanel"
+  | "sidePanelOpen"
+  | "sidePanelLabel"
+  | "onCloseSidePanel"
   | "children"
 > & {
   header: ReactNode
@@ -913,7 +912,6 @@ type InspectorPanelProps = Pick<
 > & {
   agent: WorkspaceAgent | null
   navigation: AgentSessionNavigation | null
-  artifactOutputs?: ReactNode
   sessionMenu: SessionRowMenuHandlers
 }
 
@@ -929,7 +927,6 @@ function InspectorPanel({
   sessionMenu,
   agent,
   navigation,
-  artifactOutputs,
 }: InspectorPanelProps) {
   const [query, setQuery] = useState("")
 
@@ -985,9 +982,6 @@ function InspectorPanel({
             onActionError={onActionError}
           />
         </div>
-      ) : null}
-      {artifactOutputs ? (
-        <div className={styles.inspectorOutputs}>{artifactOutputs}</div>
       ) : null}
     </div>
   )
@@ -1165,11 +1159,10 @@ export function WorkspaceShell({
   agentFocusRequest,
   onActionError,
   tabUndo,
-  artifactOutputs,
-  artifactViewer,
-  artifactViewerOpen = false,
-  artifactViewerLabel,
-  onCloseArtifactViewer,
+  sidePanel,
+  sidePanelOpen = false,
+  sidePanelLabel,
+  onCloseSidePanel,
   conversationHeader,
   navigationHidden = false,
   children,
@@ -1205,11 +1198,11 @@ export function WorkspaceShell({
   // A draft owns one interview Session and no Agent details worth inspecting.
   const inspectorAvailable = !navigationHidden && !selectedAgentIsDraft
   const effectiveInspectorOpen = inspectorAvailable
-    ? desktopInspectorOpen || artifactViewerOpen
-    : artifactViewerOpen
+    ? desktopInspectorOpen || sidePanelOpen
+    : sidePanelOpen
   const agentDrawerTriggerRef = useRef<HTMLButtonElement>(null)
   const mobileNavigatorOpen = mobileNavigator.view !== "closed"
-  const artifactDrawerOpen = artifactViewerOpen && !desktopLayout
+  const artifactDrawerOpen = sidePanelOpen && !desktopLayout
   const modalDrawerOpen =
     mobileNavigatorOpen || activityOpen || artifactDrawerOpen
   useEffect(() => {
@@ -1489,7 +1482,6 @@ export function WorkspaceShell({
     sessionActions,
     sessionMenu,
     agent: selectedAgent,
-    artifactOutputs,
   }
   const skipLink = (
     <a
@@ -1508,7 +1500,7 @@ export function WorkspaceShell({
         ref={shellRef}
         className={styles.shell}
         data-inspector-open={effectiveInspectorOpen ? "true" : "false"}
-        data-artifact-viewer-open={artifactViewerOpen ? "true" : "false"}
+        data-artifact-viewer-open={sidePanelOpen ? "true" : "false"}
         data-navigation-hidden={navigationHidden ? "true" : undefined}
         dir={getLocaleDirection(locale)}
         style={
@@ -1640,8 +1632,8 @@ export function WorkspaceShell({
                 sessionMenu={sessionMenu}
                 inspectorOpen={effectiveInspectorOpen}
                 onToggleInspector={
-                  artifactViewerOpen && onCloseArtifactViewer
-                    ? onCloseArtifactViewer
+                  sidePanelOpen && onCloseSidePanel
+                    ? onCloseSidePanel
                     : toggleDesktopInspector
                 }
               />
@@ -1674,27 +1666,27 @@ export function WorkspaceShell({
           </main>
         </div>
 
-        {inspectorAvailable || artifactViewerOpen ? (
+        {inspectorAvailable || sidePanelOpen ? (
           <aside
             ref={artifactPanelRef}
             id="workspace-agent-inspector"
             className={styles.desktopInspector}
             data-keyboard-region="inspector"
             aria-label={
-              artifactViewerOpen
-                ? (artifactViewerLabel ?? dictionary.workspace.agentDetails)
+              sidePanelOpen
+                ? (sidePanelLabel ?? dictionary.workspace.agentDetails)
                 : dictionary.workspace.agentDetails
             }
             aria-hidden={modalDrawerOpen || undefined}
             inert={modalDrawerOpen ? true : undefined}
             hidden={!effectiveInspectorOpen}
           >
-            {artifactViewerOpen ? (
+            {sidePanelOpen ? (
               <div
                 className={styles.artifactResizeHandle}
                 role="separator"
                 aria-label={`${dictionary.workspace.resizeArtifact} ${(
-                  artifactViewerLabel ?? dictionary.workspace.agentDetails
+                  sidePanelLabel ?? dictionary.workspace.agentDetails
                 ).toLocaleLowerCase(locale)}`}
                 aria-orientation="vertical"
                 aria-valuemin={artifactWidthMin}
@@ -1709,8 +1701,8 @@ export function WorkspaceShell({
                 onPointerMove={onArtifactResizePointerMove}
               />
             ) : null}
-            {artifactViewerOpen && artifactViewer ? (
-              artifactViewer
+            {sidePanelOpen && desktopLayout && sidePanel ? (
+              sidePanel
             ) : (
               <InspectorPanel
                 key={selectedAgentId ?? "no-agent"}
@@ -1844,12 +1836,12 @@ export function WorkspaceShell({
         <FocusDrawer
           open={artifactDrawerOpen}
           side="end"
-          title={artifactViewerLabel ?? dictionary.workspace.agentDetails}
+          title={sidePanelLabel ?? dictionary.workspace.agentDetails}
           closeLabel={dictionary.actions.closePanel}
-          onClose={() => onCloseArtifactViewer?.()}
+          onClose={() => onCloseSidePanel?.()}
           chrome={false}
         >
-          {artifactViewer}
+          {sidePanel}
         </FocusDrawer>
 
         {sessionDialog?.kind === "rename" && onRenameSession ? (

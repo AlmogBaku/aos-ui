@@ -44,7 +44,6 @@ const summaryOnlyToolNames = new Set([
   "use_skill",
   "load_skill",
   "tool_describe",
-  "present_artifact",
 ])
 
 export function shouldRenderToolDetails(toolName: string) {

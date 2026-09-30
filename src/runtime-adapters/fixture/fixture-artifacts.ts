@@ -44,46 +44,6 @@ export const FIXTURE_ARTIFACT_CATALOG = {
         data: "# Enterprise AI brief\n\nInvestment is moving from pilots toward governed deployments.\n\n```ts\nconst governedGrowth = (57 - 42) / 42\n```",
       },
     }),
-    text: example({
-      id: "fixture-text",
-      filename: "research-notes.txt",
-      mimeType: "text/plain",
-      source: {
-        type: "inline",
-        encoding: "utf8",
-        data: "Enterprise adoption rose in both observed quarters.",
-      },
-    }),
-    code: example({
-      id: "fixture-code",
-      filename: "growth-rate.ts",
-      mimeType: "application/typescript",
-      source: {
-        type: "inline",
-        encoding: "utf8",
-        data: "export const growthRate = (57 - 42) / 42\n",
-      },
-    }),
-    json: example({
-      id: "fixture-json",
-      filename: "quarterly-spend.json",
-      mimeType: "application/json",
-      source: {
-        type: "inline",
-        encoding: "utf8",
-        data: '{"quarter":"Q1 2025","spend":57}',
-      },
-    }),
-    csv: example({
-      id: "fixture-market-data",
-      filename: "quarterly-spend.csv",
-      mimeType: "text/csv",
-      source: {
-        type: "inline",
-        encoding: "utf8",
-        data: 'Quarter,Segment,Spend\nQ4 2024,"Data, governance",42\nQ1 2025,"Applied\nAI",57',
-      },
-    }),
     image: example({
       id: "fixture-image",
       filename: "market-chart.svg",
@@ -92,17 +52,6 @@ export const FIXTURE_ARTIFACT_CATALOG = {
         type: "inline",
         encoding: "utf8",
         data: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="320" height="180" fill="#f4f1eb"/><path d="M40 140L130 105L220 60L280 38" fill="none" stroke="#315c52" stroke-width="8"/><title>Quarterly spend trend</title></svg>',
-      },
-    }),
-    pdf: example({
-      id: "fixture-pdf",
-      filename: "market-brief.pdf",
-      mimeType: "application/pdf",
-      sizeBytes: 595,
-      source: {
-        type: "inline",
-        encoding: "base64",
-        data: "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA1NCA+PgpzdHJlYW0KQlQgL0YxIDI0IFRmIDcyIDcwMCBUZCAoQU9TIEFydGlmYWN0IFByZXZpZXcpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2ZXRpY2EgPj4KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAowMDAwMDAwMzQyIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKNDEyCiUlRU9GCg==",
       },
     }),
     audio: example({
@@ -125,51 +74,6 @@ export const FIXTURE_ARTIFACT_CATALOG = {
         type: "inline",
         encoding: "base64",
         data: "AAAAIGZ0eXBpc29tAAACAGlzb21hdjAxaXNvMm1wNDEAAAOgbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAsp0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAKAAAABaAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAJCbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAAyAAAAMgBVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAAB7W1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAa1zdGJsAAAArHN0c2QAAAAAAAAAAQAAAJxhdjAxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAKAAWgBIAAAASAAAAAAAAAABF0xhdmM2Mi4yOC4xMDIgbGlic3Z0YXYxAAAAAAAAAAAAGP//AAAAGGF2MUOBAAwACgoAAAADtP2QC+ABAAAACmZpZWwBAAAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAAABFwAAARcAAAABhzdHRzAAAAAAAAAAEAAAAZAAACAAAAABRzdHNzAAAAAAAAAAEAAAABAAAAJXNkdHAAAAAAIBgQGBAYEBgQGBAYEBgQGBAYEBgQGBAYEAAAABxzdHNjAAAAAAAAAAEAAAABAAAAGQAAAAEAAAB4c3RzegAAAAAAAAAAAAAAGQAAACgAAABmAAAAAwAAABQAAAADAAAAKAAAAAMAAAAUAAAAAwAAADwAAAADAAAAFAAAAAMAAAAoAAAAAwAAABQAAAADAAAAUAAAAAMAAAAUAAAAAwAAACgAAAADAAAAFAAAAAMAAAAUc3RjbwAAAAAAAAABAAAD0AAAAGJ1ZHRhAAAAWm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALWlsc3QAAAAlqXRvbwAAAB1kYXRhAAAAAQAAAABMYXZmNjIuMTIuMTAyAAAACGZyZWUAAAI2bWRhdAoKAAAAA7T9kSvkATIaEACQoILLFFCAAACX0yN1by70dOTp2Whl280yEygQACSSSRkqAQAACAAMAI8SsyAyEygIAQSSABEqAAAAQABgAJW97UAyEigEhASSbZEqAAAAQABgAJdyXDISKAKIBJK2kS4AAABAAGAAmBZwMhIwAwAJJbYiZAAAAIAAwACY54AaAegyEjAGABttbSJkAAAAgADAAJjngBoB2DISKAYIC21tkS4AAABAAGAAmBZwMhIwCwAW27YiZAAAAIAAwACY54AaAegyEjAOABts2yJkAAAAgADAAJjngBoBuDISKAwEBtsAESoAAABAAGAAl3JcMhIoCogG27aRLgAAAEAAYACYFnAyEjATAA23tiJkAAAAgADAAJjngBoB6DISMBYAG21tImQAAACAAMAAmOeAGgHYMhIoDggLbQARLgAAAEAAYACYFnAyEjAbABbbtiJkAAAAgADAAJjngBoB6DISMB4AG2wAImQAAACAAMAAmOeAGgGIMhIoGABAAAAZLYAAAEAAYACNECQyEigUAgAAJJEtgAAAQABgAJc7PzISKBKEAACSES2AAABAAGAAmHMwMhIwIwAAAW0iZAAAAIAAwACZHUAaAdgyEjAmABbbJCJkAAAAgADAAJkdQBoByDISKBYECSQkkS2AAABAAGAAmHMwMhIwKwASSW0iZAAAAIAAwACZHUAaAdgyEjAuABbaSSJkAAAAgADAAJkdQBoBmA==",
-      },
-    }),
-    html: example({
-      id: "fixture-market-html",
-      filename: "market-summary.html",
-      mimeType: "text/html",
-      source: {
-        type: "inline",
-        encoding: "utf8",
-        data: `<!doctype html>
-<html lang="en">
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
-      * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; padding: clamp(24px, 8vw, 64px); background: #f4f1eb; color: #17211e; }
-      main { max-width: 680px; margin: 0 auto; }
-      .label { color: #315c52; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
-      h1 { max-width: 11ch; margin: 18px 0; font-size: clamp(38px, 8vw, 72px); line-height: .96; letter-spacing: -.045em; }
-      .lede { max-width: 46ch; color: #52605b; font-size: clamp(17px, 3vw, 21px); line-height: 1.55; }
-      .signal { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; margin-top: 48px; border-top: 1px solid #cdd5d1; padding-top: 24px; }
-      .value { color: #315c52; font-size: 36px; font-weight: 700; letter-spacing: -.04em; }
-      .caption { color: #52605b; font-size: 14px; line-height: 1.45; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <div class="label">Market pulse · Q1 2025</div>
-      <h1>Enterprise AI is moving into production.</h1>
-      <p class="lede">Governed deployments are expanding as investment shifts from isolated pilots toward durable platforms and measurable workflows.</p>
-      <div class="signal"><div class="value">+36%</div><div class="caption">Illustrative quarter-over-quarter growth in the fixture dataset.</div></div>
-    </main>
-  </body>
-</html>`,
-      },
-    }),
-    unsupported: example({
-      id: "fixture-unsupported",
-      filename: "market-data.zip",
-      mimeType: "application/zip",
-      source: {
-        type: "inline",
-        encoding: "base64",
-        data: "UEsDBAoAAAAA",
       },
     }),
   },

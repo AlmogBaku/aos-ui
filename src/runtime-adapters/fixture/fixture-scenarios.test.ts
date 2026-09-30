@@ -13,6 +13,8 @@ describe("deterministic fixture scenarios", () => {
       ["update todos", "todos"],
       ["render a chart", "chart"],
       ["publish an artifact", "artifact"],
+      ["show a png artifact", "artifact-png"],
+      ["show an html artifact", "artifact-html"],
       ["publish an image", "image"],
       ["publish an audio note", "audio"],
       ["publish a video note", "video"],

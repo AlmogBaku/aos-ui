@@ -1,4 +1,3 @@
-import { injectHtmlCsp } from "@/components/artifacts/artifact-frame-policy"
 import { MCP_APP_SANDBOX_PATH } from "@aos/protocol/mcp-apps"
 
 /**
@@ -17,6 +16,24 @@ export const sandboxProxyUrl = (allow: string) =>
   allow
     ? `${MCP_APP_SANDBOX_PATH}?${new URLSearchParams({ allow })}`
     : MCP_APP_SANDBOX_PATH
+
+/**
+ * Prepends a CSP meta so the policy governs every script the document holds;
+ * `decorate` may adjust the parsed document before it is serialized.
+ */
+export function injectHtmlCsp(
+  html: string,
+  policy: string,
+  decorate?: (document: Document) => void
+): string {
+  const document = new DOMParser().parseFromString(html, "text/html")
+  const meta = document.createElement("meta")
+  meta.httpEquiv = "Content-Security-Policy"
+  meta.content = policy
+  document.head.prepend(meta)
+  decorate?.(document)
+  return `<!doctype html>${document.documentElement.outerHTML}`
+}
 
 /**
  * The host sizes an inline view to its reported height, so its root never

@@ -22,10 +22,8 @@ import { z } from "zod"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
 import {
   ArtifactDataUI,
-  ArtifactViewerContent,
   ArtifactWorkspaceProvider,
   createArtifactMessageStabilizer,
-  useArtifactWorkspace,
 } from "@/components/artifacts"
 import {
   Thread,
@@ -243,8 +241,7 @@ function GuestConversationShell({
   composer: ThreadComponents["Composer"]
   connectionStatus?: ConnectionNotice
 }) {
-  const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
-  // An App view moved to the side panel takes the Artifact viewer's place.
+  // The side panel holds the pip view when one is active.
   const pip = useMcpAppPip(locale)
   return (
     <WorkspaceConversationShell
@@ -269,12 +266,10 @@ function GuestConversationShell({
           </div>
         </header>
       }
-      artifactViewer={
-        pip ? <McpAppPipPanel locale={locale} /> : <ArtifactViewerContent />
-      }
-      artifactViewerOpen={pip !== undefined || selectedArtifact !== null}
-      artifactViewerLabel={pip?.title ?? labels.viewerLabel}
-      onCloseArtifactViewer={pip?.leave ?? closeArtifact}
+      sidePanel={pip ? <McpAppPipPanel locale={locale} /> : null}
+      sidePanelOpen={pip !== undefined}
+      sidePanelLabel={pip?.title}
+      onCloseSidePanel={pip?.leave}
     >
       <ArtifactDataUI />
       <WorkspaceStatusNotice
