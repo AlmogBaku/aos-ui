@@ -187,6 +187,7 @@ export type ToolUiLocaleLabels = {
     exitFullscreen: string
     inSidePanel: string
     returnToMessage: string
+    closePreview: string
   }
   diff: ToolDiffLabels
   terminal: ToolTerminalLabels
@@ -369,6 +370,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     exitFullscreen: "Exit full screen",
     inSidePanel: "Shown in the side panel",
     returnToMessage: "Return to the message",
+    closePreview: "Close preview",
   },
   diff: {
     changes: "Changed files",
@@ -584,6 +586,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     exitFullscreen: "יציאה ממסך מלא",
     inSidePanel: "מוצג בחלונית הצד",
     returnToMessage: "החזרה להודעה",
+    closePreview: "סגירת התצוגה המקדימה",
   },
   diff: {
     changes: "קבצים ששונו",

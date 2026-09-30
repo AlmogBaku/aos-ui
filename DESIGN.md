@@ -351,15 +351,21 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   and an expanded view in the card's existing footer row. The diagram renders in
   one place at a time, and the source fallback stays available in every state.
 - **Published artifacts:** audio, video, and images are first-class inline
-  outcomes. Audio and video play in the message as native players inside a
-  `w-full max-w-[30rem]` container, whose own controls carry the download. An
-  image shows in the message as a bounded preview (max height `max-h-64`),
-  never at its original size, with a Download control beneath it, so the
-  keyboard reaches its download too. Video is likewise bounded (`max-h-96`).
-  Every other artifact is a compact card showing the file name, type, and size
-  with a Download control. A failure states what happened in place, and a
-  provider that no longer holds the bytes says so and drops the download it
-  cannot honor.
+  outcomes with no download control of their own. Audio and video play in the
+  message as native players inside a `w-full max-w-[30rem]` container, whose
+  own controls carry the download, and never open the side panel. An image
+  shows in the message as a bounded preview (max height `max-h-64`), never at
+  its original size; activating it opens the file's view in the side panel,
+  whose own toolbar carries the download. Video is likewise bounded
+  (`max-h-96`). Every other artifact is a compact card showing the file name,
+  type, and size: its name opens the side panel and a Download control sits
+  beside it. The side panel's header names the file and its type with a Close
+  button; Esc or Close returns focus to the control that opened it, and leaving
+  the Session closes it. The inspector's collapsible Artifacts list names every
+  file the Session published, newest first — attachments and the files App
+  views show — each opening in the side panel with its own Download. A failure
+  states what happened in place, and a provider that no longer holds the bytes
+  says so and drops the download it cannot honor.
 - **MCP Apps:** the one exception to "never run arbitrary HTML". A tool whose
   own MCP server declares a `ui://` view renders that server-authored HTML as
   an inline card in the message, inside an opaque-origin double iframe with a

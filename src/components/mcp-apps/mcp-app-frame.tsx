@@ -39,6 +39,7 @@ import {
   type AppDisplayMode,
   type AppPlacement,
 } from "./host-handlers"
+import { mcpAppTargetKey } from "./mcp-app-host"
 import {
   SANDBOX_PROXY_SANDBOX,
   prepareAppDocument,
@@ -250,7 +251,7 @@ export default function McpAppFrame({
   ])
 
   const hostContext = (): McpUiHostContext => ({
-    ...(toolName === undefined
+    ...(toolName === undefined || !("toolCallId" in target)
       ? {}
       : {
           toolInfo: {
@@ -466,7 +467,7 @@ export default function McpAppFrame({
 
     // A view's log lines stay in this browser's console, and go nowhere else.
     bridge.addEventListener("loggingmessage", ({ level, logger, data }) => {
-      const name = context.current.toolName ?? target.toolCallId
+      const name = context.current.toolName ?? mcpAppTargetKey(target)
       console.debug(`[${name}]`, level, ...(logger ? [logger] : []), data)
     })
 

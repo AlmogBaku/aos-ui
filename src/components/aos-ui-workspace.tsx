@@ -55,7 +55,9 @@ import {
 import type { WorkspaceShellProps } from "@/components/workspace/workspace-shell"
 import {
   ArtifactDataUI,
+  ArtifactOutputs,
   ArtifactWorkspaceProvider,
+  artifactPanelFailure,
   createArtifactMessageStabilizer,
 } from "@/components/artifacts"
 import { ManageAgents } from "@/components/workspace/manage-agents"
@@ -238,7 +240,15 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
   return (
     <WorkspaceShell
       {...shell}
-      sidePanel={pip ? <McpAppPipPanel locale={shell.locale} /> : null}
+      artifactOutputs={<ArtifactOutputs />}
+      sidePanel={
+        pip ? (
+          <McpAppPipPanel
+            locale={shell.locale}
+            failureNotice={artifactPanelFailure}
+          />
+        ) : null
+      }
       sidePanelOpen={pip !== undefined}
       sidePanelLabel={pip?.title}
       onCloseSidePanel={pip?.leave}

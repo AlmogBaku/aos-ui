@@ -3,6 +3,9 @@ import type { Dictionary } from "../dictionary"
 export const en = {
   productName: "AOS",
   artifacts: {
+    outputs: "Artifacts",
+    empty: "No artifacts yet",
+    open: "Open",
     download: "Download",
     loading: "Loading output…",
     loadFailed: "This output could not be loaded.",

@@ -5,6 +5,7 @@
 
 import type { McpAppFiles } from "@aos/protocol/mcp-apps"
 import { presentationViews } from "@shared/presentation/views"
+import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
 type ContentBlock = { readonly type: string; readonly text?: unknown }
 
@@ -96,6 +97,24 @@ export function saveAppFile(address: string, name: string): boolean {
   link.download = downloadName(name)
   link.click()
   return true
+}
+
+/**
+ * Saves the one file `target`'s view shows, by a fresh pass, as the view's
+ * own Download would; a view with no file, or with several, has none to save.
+ */
+export async function saveShownFile(
+  adapter: McpAppAdapter,
+  target: McpAppTarget,
+  name: string
+) {
+  const { addresses } = await adapter.renewFiles(target)
+  const [address, ...others] = Object.values(addresses)
+  const saved =
+    address !== undefined &&
+    others.length === 0 &&
+    saveAppFile(new URL(address, window.location.origin).href, name)
+  if (!saved) throw new Error("The view's file could not be saved")
 }
 
 /**

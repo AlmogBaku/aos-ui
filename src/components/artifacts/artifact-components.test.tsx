@@ -1,12 +1,31 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {} from "@assistant-ui/react"
 
 import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
-import type { ArtifactAdapter } from "@/runtime-adapters/contracts"
+import { McpAppPipPanel } from "@/components/mcp-apps/mcp-app-card"
+import type { McpAppFrameProps } from "@/components/mcp-apps/mcp-app-frame"
+import {
+  McpAppHostProvider,
+  useMcpAppHost,
+} from "@/components/mcp-apps/mcp-app-host"
+import { MCP_APP_TOOL_ARTIFACT } from "@/components/mcp-apps/tool-part"
+import type {
+  ArtifactAdapter,
+  McpAppAdapter,
+} from "@/runtime-adapters/contracts"
 
 import {
+  ArtifactOutputs,
   ArtifactToolResultCard,
+  artifactPanelFailure,
   ArtifactWorkspaceProvider,
   type ArtifactWorkspaceProviderProps,
   createArtifactMessageStabilizer,
@@ -20,6 +39,10 @@ const artifactMessage = (id: string, data: unknown) => ({
 })
 
 const ArtifactTestSurface = () => null
+
+vi.mock("@/components/mcp-apps/mcp-app-frame", () => ({
+  default: (props: McpAppFrameProps) => <iframe title={props.title} />,
+}))
 
 /**
  * The Artifacts surface of Aster's market Session; a test passes the adapter
@@ -142,7 +165,7 @@ describe("artifact workspace", () => {
     }
   )
 
-  it("offers an inline image's Download and reads its bytes once while the conversation keeps streaming", async () => {
+  it("shows an inline image with no download of its own and reads its bytes once while the conversation keeps streaming", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image-artifact")
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
     const resolve = vi.fn<ArtifactAdapter["resolve"]>(
@@ -174,7 +197,9 @@ describe("artifact workspace", () => {
     expect(
       await screen.findByRole("img", { name: "diagram.png" })
     ).toBeVisible()
-    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Download" })
+    ).not.toBeInTheDocument()
     expect(resolve).toHaveBeenCalledTimes(1)
 
     rerender(surface("First token, then another"))
@@ -271,5 +296,246 @@ describe("artifact workspace", () => {
     expect(
       screen.queryByLabelText(/^(Audio|Video) output/)
     ).not.toBeInTheDocument()
+  })
+})
+
+describe("artifact side panel", () => {
+  const capture = {
+    id: "capture",
+    filename: "capture.bin",
+    source: { type: "provider" as const, reference: "capture" },
+  }
+  const image = {
+    id: "diagram",
+    filename: "diagram.png",
+    mimeType: "image/png",
+    source: { type: "provider" as const, reference: "diagram" },
+  }
+  const audio = {
+    id: "intro",
+    filename: "intro.mp3",
+    mimeType: "audio/mpeg",
+    source: { type: "provider" as const, reference: "intro" },
+  }
+  /** An App call whose result names `value` as what it shows. */
+  const appCall = (id: string, toolName: string, value: object) => ({
+    id,
+    role: "assistant" as const,
+    content: [
+      {
+        type: "tool-call" as const,
+        toolCallId: `call-${id}`,
+        toolName,
+        args: {},
+        artifact: MCP_APP_TOOL_ARTIFACT,
+        result: {
+          content: [],
+          structuredContent: { ok: true, type: "aos.presentation", value },
+        },
+      },
+    ],
+  })
+
+  function apps(open: McpAppAdapter["open"] = async () => ({ html: "<p/>" })) {
+    return {
+      open: vi.fn(open),
+      callTool: vi.fn(),
+      readResource: vi.fn(),
+      renewFiles: vi.fn(),
+    } satisfies McpAppAdapter
+  }
+
+  /** Aster's market Session with its App host and side panel. */
+  function renderSession({
+    views = apps(),
+    messages,
+    children,
+  }: {
+    views?: McpAppAdapter
+    messages: ArtifactWorkspaceProviderProps["messages"]
+    children: React.ReactNode
+  }) {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:artifact")
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
+    render(
+      <McpAppHostProvider
+        adapter={views}
+        agentId="agent-aster"
+        sessionId="thread-aster-market"
+      >
+        {workspace({
+          adapter: { resolve: async () => new Blob(["bytes"]) },
+          messages,
+          children: (
+            <>
+              {children}
+              <McpAppPipPanel
+                locale="en"
+                failureNotice={artifactPanelFailure}
+              />
+            </>
+          ),
+        })}
+      </McpAppHostProvider>
+    )
+    return views
+  }
+
+  const card = (artifact: object) => (
+    <ArtifactToolResultCard result={artifact} occurrenceKey="published:0" />
+  )
+
+  it("lists the Session's files newest first, leaves out an App call that shows no file, and opens a row in the panel", async () => {
+    const user = userEvent.setup()
+    const views = renderSession({
+      messages: [
+        artifactMessage("published", capture),
+        appCall("chart", "render_chart", { series: [] }),
+        appCall("report", "present_artifact", {
+          filename: "report.pdf",
+          mimeType: "application/pdf",
+        }),
+      ],
+      children: <ArtifactOutputs />,
+    })
+
+    const list = screen.getByRole("region", { name: "Artifacts" })
+    expect(
+      within(list)
+        .getAllByRole("button", { name: /^Open: / })
+        .map((row) => row.getAttribute("aria-label"))
+    ).toEqual(["Open: report.pdf", "Open: capture.bin"])
+    expect(
+      within(list).getAllByRole("button", { name: "Download" })
+    ).toHaveLength(2)
+
+    await user.click(
+      within(list).getByRole("button", { name: "Open: report.pdf" })
+    )
+    const panel = screen.getByRole("region", { name: "report.pdf" })
+    expect(within(panel).getByText("application/pdf")).toBeVisible()
+    expect(views.open).toHaveBeenCalledWith(
+      {
+        agentId: "agent-aster",
+        sessionId: "thread-aster-market",
+        toolCallId: "call-report",
+      },
+      expect.any(AbortSignal)
+    )
+  })
+
+  it("says the Session has no files yet", () => {
+    renderSession({ messages: [], children: <ArtifactOutputs /> })
+    expect(screen.getByText("No artifacts yet")).toBeInTheDocument()
+  })
+
+  it.each([
+    { kind: "a file card", artifact: capture },
+    { kind: "an inline image", artifact: image },
+  ])("opens $kind in the panel by its Artifact", async ({ artifact }) => {
+    const user = userEvent.setup()
+    const views = renderSession({
+      messages: [artifactMessage("published", artifact)],
+      children: card(artifact),
+    })
+
+    await user.click(
+      await screen.findByRole("button", { name: `Open: ${artifact.filename}` })
+    )
+    expect(
+      screen.getByRole("region", { name: artifact.filename })
+    ).toBeInTheDocument()
+    expect(views.open).toHaveBeenCalledWith(
+      {
+        agentId: "agent-aster",
+        sessionId: "thread-aster-market",
+        artifactId: artifact.id,
+      },
+      expect.any(AbortSignal)
+    )
+  })
+
+  it("keeps audio inline with nothing to open", async () => {
+    const views = renderSession({
+      messages: [artifactMessage("published", audio)],
+      children: card(audio),
+    })
+    expect(
+      await screen.findByLabelText("Audio output: intro.mp3")
+    ).toBeVisible()
+    expect(screen.queryByRole("button", { name: /^Open: / })).toBeNull()
+    expect(views.open).not.toHaveBeenCalled()
+  })
+
+  it("returns focus to the control that opened the panel on Esc and on Close", async () => {
+    const user = userEvent.setup()
+    renderSession({
+      messages: [artifactMessage("published", capture)],
+      children: card(capture),
+    })
+    const opener = screen.getByRole("button", { name: "Open: capture.bin" })
+
+    await user.click(opener)
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("region", { name: "capture.bin" })).toBeNull()
+    await waitFor(() => expect(opener).toHaveFocus())
+
+    await user.click(opener)
+    await user.click(screen.getByRole("button", { name: "Close preview" }))
+    expect(screen.queryByRole("region", { name: "capture.bin" })).toBeNull()
+    await waitFor(() => expect(opener).toHaveFocus())
+  })
+
+  it("returns focus to an Outputs row the side panel replaced while it showed", async () => {
+    // The desktop inspector gives its place to the side panel.
+    function Inspector() {
+      return useMcpAppHost()?.pip ? null : <ArtifactOutputs />
+    }
+    const user = userEvent.setup()
+    renderSession({
+      messages: [artifactMessage("published", capture)],
+      children: <Inspector />,
+    })
+
+    await user.click(screen.getByText("Artifacts"))
+    await user.click(screen.getByRole("button", { name: "Open: capture.bin" }))
+    expect(screen.queryByRole("region", { name: "Artifacts" })).toBeNull()
+    await user.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Open: capture.bin" })
+      ).toHaveFocus()
+    )
+  })
+
+  it.each([
+    {
+      failure: "a gone file",
+      error: new ArtifactMissingError(),
+      title: "This output is no longer available.",
+      downloads: 0,
+    },
+    {
+      failure: "a file no viewer opens",
+      error: new Error("no viewer"),
+      title: "This runtime cannot open this output.",
+      downloads: 1,
+    },
+  ])("explains $failure in the panel", async ({ error, title, downloads }) => {
+    const user = userEvent.setup()
+    renderSession({
+      views: apps(async () => {
+        throw error
+      }),
+      messages: [artifactMessage("published", capture)],
+      children: card(capture),
+    })
+
+    await user.click(screen.getByRole("button", { name: "Open: capture.bin" }))
+    const panel = screen.getByRole("region", { name: "capture.bin" })
+    expect(await within(panel).findByText(title)).toBeVisible()
+    expect(
+      within(panel).queryAllByRole("button", { name: "Download" })
+    ).toHaveLength(downloads)
   })
 })
