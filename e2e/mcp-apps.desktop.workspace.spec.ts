@@ -138,10 +138,17 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
 
   // --- test.html ---
   await send("Show an html artifact")
-  const htmlFrame = artifactFrame()
-  // The artifact view runs the HTML's scripts in a sandboxed iframe whose
-  // policy refuses the fetch the fixture tries.
-  const htmlInner = htmlFrame.frameLocator('iframe[title="HTML preview"]')
+  // In its message the HTML is a card; the side panel runs its scripts in a
+  // sandboxed iframe whose policy refuses the fetch the fixture tries.
+  await artifactFrame().getByRole("button", { name: "View test.html" }).click()
+  const htmlInner = page
+    .getByRole("complementary", { name: "test.html" })
+    .locator("iframe")
+    .first()
+    .contentFrame()
+    .locator("iframe")
+    .contentFrame()
+    .frameLocator('iframe[title="HTML preview"]')
   await expect(htmlInner.getByText("scripts are on")).toBeVisible()
   await expect(htmlInner.getByText("fetch blocked")).toBeVisible()
   await expect(htmlInner.getByText("fetch allowed")).toBeHidden()
