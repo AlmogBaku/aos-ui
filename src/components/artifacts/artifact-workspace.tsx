@@ -48,7 +48,7 @@ import {
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
-import type { Locale } from "@/lib/i18n/config"
+import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type {
   ArtifactAdapter,
   ArtifactDescriptor,
@@ -364,9 +364,13 @@ const artifactFile = ({ filename, mimeType }: ArtifactDescriptor) => ({
   ...(mimeType === undefined ? {} : { mimeType }),
 })
 
+/** Whose message carries the artifact; its media sits on that sender's side. */
+type ArtifactSender = "assistant" | "user"
+
 type ArtifactCardProps = {
   artifact: ArtifactDescriptor
   occurrenceKey?: string
+  sender?: ArtifactSender
 }
 
 function ArtifactCard(props: ArtifactCardProps) {
@@ -382,6 +386,7 @@ function ArtifactCard(props: ArtifactCardProps) {
       artifact={props.artifact}
       kind={mediaKind}
       occurrenceKey={props.occurrenceKey}
+      sender={props.sender}
     />
   ) : (
     <ArtifactFileCard artifact={props.artifact} />
@@ -535,10 +540,12 @@ function ArtifactInlineMedia({
   artifact,
   kind,
   occurrenceKey,
+  sender = "assistant",
 }: {
   artifact: ArtifactDescriptor
   kind: ArtifactMediaKind
   occurrenceKey?: string
+  sender?: ArtifactSender
 }) {
   const { labels, locale, occurrences } = useArtifactWorkspace()
   const openInPanel = useOpenInPanel()
@@ -576,10 +583,17 @@ function ArtifactInlineMedia({
       className="block h-auto max-h-64 w-auto max-w-full rounded-lg border border-border object-contain"
     />
   )
+  // The interface direction, not the message text's guessed one, sets the
+  // sides: an agent's media sits at the start edge and a user's at the end,
+  // beside its bubble. An auto margin pushes each box to its sender's side.
+  const edge = sender === "user" ? "ms-auto" : "me-auto"
   // A definite width: a native player inside a shrink-to-fit box collapses to
   // its minimal pill.
   return (
-    <div className="w-full max-w-[30rem]">
+    <div
+      className={`w-full max-w-[30rem] ${edge}`}
+      dir={getLocaleDirection(locale)}
+    >
       {url === undefined ? (
         <p
           className="flex items-center gap-2 text-sm text-muted-foreground"
@@ -596,7 +610,7 @@ function ArtifactInlineMedia({
           <button
             type="button"
             aria-label={`${labels.open}: ${published.filename}`}
-            className="block max-w-sm cursor-zoom-in rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className={`block w-fit max-w-sm cursor-zoom-in rounded-lg ${edge} outline-none focus-visible:ring-2 focus-visible:ring-ring`}
             onClick={(event) =>
               openInPanel(
                 { artifactId: published.id },
@@ -608,7 +622,7 @@ function ArtifactInlineMedia({
             {image}
           </button>
         ) : (
-          <div className="max-w-sm">{image}</div>
+          <div className={`w-fit max-w-sm ${edge}`}>{image}</div>
         )
       ) : (
         <MediaPlayer
@@ -883,25 +897,40 @@ function useArtifactPreviewController(artifact: ArtifactDescriptor) {
 export function ArtifactToolResultCard({
   result,
   occurrenceKey,
+  sender,
 }: {
   result?: unknown
   occurrenceKey?: string
+  sender?: ArtifactSender
 }) {
   const artifact = parseArtifactDescriptor(result)
   return artifact ? (
-    <ArtifactCard artifact={artifact} occurrenceKey={occurrenceKey} />
+    <ArtifactCard
+      artifact={artifact}
+      occurrenceKey={occurrenceKey}
+      sender={sender}
+    />
   ) : null
 }
 
 function ArtifactDataPart({ data }: { data: unknown }) {
   const messageId = useAuiState((state) => state.message.id)
+  const sender = useAuiState((state) =>
+    state.message.role === "user" ? "user" : "assistant"
+  )
   const part = useAui().part
   const occurrenceKey =
     part.source === "message" && part.query.type === "index"
       ? `${messageId}:${part.query.index}`
       : undefined
 
-  return <ArtifactToolResultCard result={data} occurrenceKey={occurrenceKey} />
+  return (
+    <ArtifactToolResultCard
+      result={data}
+      occurrenceKey={occurrenceKey}
+      sender={sender}
+    />
+  )
 }
 
 export const ArtifactDataUI = makeAssistantDataUI<unknown>({
