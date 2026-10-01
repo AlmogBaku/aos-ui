@@ -332,34 +332,73 @@ function FileCard({
   )
 }
 
+/** The width the page gives the view in its message, when it gives one. */
+function roomWidth(context: ViewProps<unknown>["context"]) {
+  const dimensions = context?.containerDimensions
+  return dimensions && "width" in dimensions ? dimensions.width : undefined
+}
+
+/** How tall an image shows in its message, in CSS pixels, as `max-h-64`. */
+const THUMBNAIL_HEIGHT = 256
+
 /**
- * An image in its message, contained in a box at most a modest height and as
- * wide as the message, a small one scaled up to fill it; a press on it opens
- * the side panel where that is offered.
+ * An image in its message, as an attachment's image shows: alone, start
+ * aligned, at its own aspect, as tall as `THUMBNAIL_HEIGHT` but no wider than
+ * `room`, a small one scaled up to fit. The view takes the image's width, so
+ * its frame hugs it; a press on it opens the side panel where that is offered.
  */
 function ImageThumbnail({
   url,
   filename,
   labels,
+  room,
+  fitWidth,
   onOpen,
 }: {
   url: string
   filename: string
   labels: ArtifactLabels
+  room: number | undefined
+  fitWidth: ViewApp["fitWidth"]
   onOpen: (() => void) | undefined
 }) {
+  const [natural, setNatural] = useState<{ width: number; height: number }>()
+  const size =
+    natural && room
+      ? (() => {
+          const height = Math.min(
+            THUMBNAIL_HEIGHT,
+            (room * natural.height) / natural.width
+          )
+          return {
+            width: Math.floor((height * natural.width) / natural.height),
+            height: Math.floor(height),
+          }
+        })()
+      : undefined
+  const width = size?.width
+  useEffect(() => {
+    fitWidth(width)
+    return () => fitWidth(undefined)
+  }, [fitWidth, width])
   const image = (
     <img
       src={url}
       alt={filename}
-      className="block h-auto max-h-64 w-full rounded-lg border border-border object-contain"
+      className="block h-auto max-h-64 w-auto max-w-full rounded-lg border border-border object-contain"
+      style={size}
+      onLoad={(event) => {
+        const { naturalWidth, naturalHeight } = event.currentTarget
+        if (naturalWidth && naturalHeight)
+          setNatural({ width: naturalWidth, height: naturalHeight })
+      }}
     />
   )
   return onOpen ? (
     <button
       type="button"
       aria-label={labels.view(filename)}
-      className="block w-full cursor-pointer rounded-lg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      className="block cursor-pointer rounded-lg outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
       onClick={onOpen}
     >
       {image}
@@ -466,27 +505,29 @@ export function ArtifactView({
       />
     ) : null
   if (!pip)
-    return (
+    return file.state.status === "ready" &&
+      file.state.preview.kind === "image" ? (
+      <div ref={root}>
+        <ImageThumbnail
+          url={file.state.preview.url}
+          filename={value.filename}
+          labels={artifact}
+          room={roomWidth(context)}
+          fitWidth={app.fitWidth}
+          onOpen={openPip}
+        />
+      </div>
+    ) : (
       <div ref={root} className="p-3">
-        {file.state.status === "ready" &&
-        file.state.preview.kind === "image" ? (
-          <ImageThumbnail
-            url={file.state.preview.url}
-            filename={value.filename}
-            labels={artifact}
-            onOpen={openPip}
-          />
-        ) : (
-          <FileCard
-            filename={value.filename}
-            type={type}
-            labels={artifact}
-            actions={[download, open].filter((action) => action !== undefined)}
-            onOpen={openPip}
-          >
-            {player}
-          </FileCard>
-        )}
+        <FileCard
+          filename={value.filename}
+          type={type}
+          labels={artifact}
+          actions={[download, open].filter((action) => action !== undefined)}
+          onOpen={openPip}
+        >
+          {player}
+        </FileCard>
       </div>
     )
   // The page above the side panel names the file, so the view does not.

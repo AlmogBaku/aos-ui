@@ -157,7 +157,7 @@ export async function exerciseMessageActions(page: Page, mobile: boolean) {
   // view. The sandbox proxy is the outer frame; the App document its child.
   await expect(
     page
-      .locator(`iframe[title="${copy.chartFrame}"]`)
+      .locator(`iframe[aria-label="${copy.chartFrame}"]`)
       .contentFrame()
       .locator("iframe")
       .contentFrame()

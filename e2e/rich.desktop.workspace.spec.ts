@@ -27,7 +27,7 @@ async function sendPrompt(
  */
 function appView(page: Page, toolName: string) {
   return page
-    .locator(`iframe[title="${toolName} app"]`)
+    .locator(`iframe[aria-label="${toolName} app"]`)
     .last()
     .contentFrame()
     .locator("iframe")

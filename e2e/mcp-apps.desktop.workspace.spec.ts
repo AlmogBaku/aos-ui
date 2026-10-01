@@ -11,7 +11,7 @@ test("an MCP App renders through the double frame, talks to the host, and enters
   await page.getByRole("button", { name: "Send message" }).click()
   // The sandbox proxy is the outer frame; the App document is its only child.
   const app = page
-    .frameLocator('iframe[title="show_launch_board app"]')
+    .frameLocator('iframe[aria-label="show_launch_board app"]')
     .frameLocator("iframe")
   const close = page.getByRole("button", { name: "Exit full screen" })
 
@@ -72,7 +72,7 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   // multiple present_artifact calls are in the conversation.
   const artifactFrame = () =>
     page
-      .locator('iframe[title="present_artifact app"]')
+      .locator('iframe[aria-label="present_artifact app"]')
       .last()
       .contentFrame()
       .locator("iframe")
@@ -117,7 +117,7 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
       page.evaluate(
         () =>
           document.activeElement?.querySelector(
-            'iframe[title="present_artifact app"]'
+            'iframe[aria-label="present_artifact app"]'
           ) != null
       )
     )

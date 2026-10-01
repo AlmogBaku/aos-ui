@@ -186,7 +186,12 @@ export default function McpAppFrame({
   const [initialized, setInitialized] = useState(false)
   const sent = useRef({ input: false, result: false, cancelled: false })
   const [height, setHeight] = useState<number>()
+  // The width the view asks for in its message, when it fits one of its own.
+  const [fitWidth, setFitWidth] = useState<number>()
   const [size, setSize] = useState<{ width: number; height: number }>()
+  // The width the message gives the frame, which a view that fits its own
+  // width may grow back to.
+  const [room, setRoom] = useState<number>()
   const [displayMode, setDisplayMode] = useState<AppDisplayMode>(placement)
   const displayModeRef = useRef(displayMode)
   const offered = offeredDisplayModes(onMove !== undefined)
@@ -284,7 +289,7 @@ export default function McpAppFrame({
           containerDimensions:
             displayMode === "inline"
               ? {
-                  width: size.width,
+                  width: room ?? size.width,
                   maxHeight: Math.round(window.innerHeight * MAX_HEIGHT_SHARE),
                 }
               : size,
@@ -314,11 +319,25 @@ export default function McpAppFrame({
       )
     })
     observer.observe(element)
-    return () => observer.disconnect()
+    const parent = element.parentElement
+    const roomObserver = new ResizeObserver(([entry]) => {
+      if (entry) setRoom(Math.round(entry.contentRect.width))
+    })
+    if (parent) roomObserver.observe(parent)
+    return () => {
+      observer.disconnect()
+      roomObserver.disconnect()
+    }
   }, [])
 
   const fullscreen = displayMode === "fullscreen"
   const inline = displayMode === "inline"
+  // Inline, the frame hugs a width the view asks for below the message's own;
+  // a view that asks for the width it already fills fills the message.
+  const hugged =
+    inline && fitWidth !== undefined && room !== undefined && fitWidth < room
+      ? fitWidth
+      : undefined
   const restoreFocus = useRef(false)
   const exitFullscreen = () => {
     displayModeRef.current = placement
@@ -494,9 +513,14 @@ export default function McpAppFrame({
       bridge.setHostContext(latestHostContext.current())
       setInitialized(true)
     })
-    bridge.addEventListener("sizechange", ({ height: next }) => {
+    bridge.addEventListener("sizechange", ({ height: next, width: across }) => {
       if (typeof next === "number" && Number.isFinite(next) && next >= 0)
         setHeight(Math.ceil(next))
+      setFitWidth(
+        typeof across === "number" && Number.isFinite(across) && across > 0
+          ? Math.ceil(across)
+          : undefined
+      )
     })
 
     bridgeRef.current = bridge
@@ -559,7 +583,7 @@ export default function McpAppFrame({
           ? "fixed inset-0 z-50 m-0 size-auto max-h-none max-w-none border-0 bg-background p-0"
           : inline
             ? [
-                "w-full",
+                hugged === undefined ? "w-full" : "w-fit max-w-full",
                 view.prefersBorder && "rounded-lg border border-border",
               ]
             : "size-full"
@@ -567,13 +591,14 @@ export default function McpAppFrame({
     >
       <iframe
         ref={frame}
-        title={title}
+        // Named for assistive technology without a hover tooltip.
+        aria-label={title}
         sandbox={SANDBOX_PROXY_SANDBOX}
         allow={allow || undefined}
         referrerPolicy="no-referrer"
         src={connected ? sandboxProxyUrl(allow) : undefined}
         className={cn(
-          "block w-full border-0 bg-transparent",
+          "block w-full max-w-full border-0 bg-transparent",
           inline ? ["max-h-[80dvh]", height === undefined && "h-40"] : "h-full"
         )}
         // The sandbox page takes the same scheme, so neither frame paints an
@@ -581,6 +606,7 @@ export default function McpAppFrame({
         style={{
           colorScheme: theme,
           ...(inline && height !== undefined ? { height } : {}),
+          ...(hugged === undefined ? {} : { width: hugged }),
         }}
       />
       {fullscreen ? (

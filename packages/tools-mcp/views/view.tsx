@@ -22,11 +22,14 @@ import {
 import { rateLimited } from "./rate-limit"
 import "./styles.css"
 
-/** The requests a view sends its page. */
+/**
+ * The requests a view sends its page, and `fitWidth`, the width in CSS pixels
+ * the view takes in its message, or `undefined` to fill it.
+ */
 export type ViewApp = Pick<
   App,
   "readServerResource" | "downloadFile" | "openLink" | "requestDisplayMode"
->
+> & { fitWidth: (width: number | undefined) => void }
 
 export type ViewProps<T> = {
   value: T
@@ -109,6 +112,47 @@ function applyHostContext(
   return locale
 }
 
+/**
+ * Reports the document's height as it changes, as the SDK's `autoResize`
+ * measures it, with the width the view fits, if any.
+ */
+function sizeReporter(app: App) {
+  let width: number | undefined
+  let started = false
+  let pending = false
+  let sent: { width?: number; height: number } | undefined
+  const report = () => {
+    if (!started || pending) return
+    pending = true
+    requestAnimationFrame(() => {
+      pending = false
+      const root = document.documentElement
+      const previous = root.style.height
+      root.style.height = "max-content"
+      const height = Math.ceil(root.getBoundingClientRect().height)
+      root.style.height = previous
+      if (sent?.height === height && sent.width === width) return
+      sent = { height, ...(width === undefined ? {} : { width }) }
+      void app.sendSizeChanged(sent).catch(() => undefined)
+    })
+  }
+  return {
+    start() {
+      started = true
+      const observer = new ResizeObserver(report)
+      observer.observe(document.documentElement)
+      observer.observe(document.body)
+      report()
+    },
+    fitWidth(next: number | undefined) {
+      const rounded = next === undefined ? undefined : Math.ceil(next)
+      if (rounded === width) return
+      width = rounded
+      report()
+    },
+  }
+}
+
 type ViewState = {
   locale: ViewLocale
   context?: McpUiHostContext
@@ -159,8 +203,9 @@ function ViewRoot<T>({
 /**
  * Mounts one presentation view: it connects to the host over `postMessage`,
  * renders from the tool input as soon as the host sends it, then from the
- * result's structured value once one arrives, and reports every size change
- * (`autoResize`).
+ * result's structured value once one arrives, and reports every size change:
+ * its height, and its width only once it fits one of its own, since a frame
+ * that hugged an echo of its own width could never grow back.
  * Every handler is set before `connect` so no notification is missed.
  */
 export function startView<T>(
@@ -174,13 +219,15 @@ export function startView<T>(
   const app = new App(
     { name: `aos-ui-${name}`, version: "1.0.0" },
     { availableDisplayModes: displayModes },
-    { autoResize: true }
+    { autoResize: false }
   )
+  const reportSize = sizeReporter(app)
   const viewApp: ViewApp = {
     readServerResource: rateLimited((params) => app.readServerResource(params)),
     downloadFile: (params) => app.downloadFile(params),
     openLink: (params) => app.openLink(params),
     requestDisplayMode: (params) => app.requestDisplayMode(params),
+    fitWidth: reportSize.fitWidth,
   }
   let state: ViewState = {
     locale: applyHostContext(root, undefined),
@@ -216,7 +263,11 @@ export function startView<T>(
   reactRoot.render(
     <ViewRoot store={store} schema={schema} View={View} app={viewApp} />
   )
-  void app
-    .connect(new PostMessageTransport(window.parent, window.parent))
-    .then(refresh, () => undefined)
+  void app.connect(new PostMessageTransport(window.parent, window.parent)).then(
+    () => {
+      refresh()
+      reportSize.start()
+    },
+    () => undefined
+  )
 }

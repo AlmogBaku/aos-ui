@@ -81,6 +81,7 @@ function fakeApp() {
     downloadFile: vi.fn(async () => ({})),
     openLink: vi.fn(async () => ({})),
     requestDisplayMode: vi.fn(async () => ({ mode: "inline" as const })),
+    fitWidth: vi.fn(),
   } satisfies ViewApp
 }
 
@@ -495,18 +496,31 @@ describe("artifact view", () => {
     expect(await screen.findByText("Quarterly notes")).toBeVisible()
   })
 
-  it("shows an image in its message alone, opening the side panel on a press", async () => {
-    const { app } = showFile({ filename: "preview.png" }, "", {
-      displayMode: "inline",
-      ...OFFERED,
-    })
-    const thumbnail = await screen.findByAltText("preview.png")
-    const image = screen.getByRole("button", { name: "View preview.png" })
-    expect(image).toContainElement(thumbnail)
-    expect(screen.getAllByRole("button")).toEqual([image])
-    await userEvent.click(image)
-    expect(app.requestDisplayMode.mock.calls).toEqual([[{ mode: "pip" }]])
-  })
+  it.each([
+    { natural: [400, 200], room: 600, drawn: 512 },
+    { natural: [8, 8], room: 100, drawn: 100 },
+  ])(
+    "shows a $natural image in its message alone at $drawn wide in $room, opening the side panel on a press",
+    async ({ natural: [width, height], room, drawn }) => {
+      const { app } = showFile({ filename: "preview.png" }, "", {
+        displayMode: "inline",
+        containerDimensions: { width: room, maxHeight: 6000 },
+        ...OFFERED,
+      })
+      const thumbnail = await screen.findByAltText("preview.png")
+      Object.defineProperties(thumbnail, {
+        naturalWidth: { value: width },
+        naturalHeight: { value: height },
+      })
+      fireEvent.load(thumbnail)
+      expect(app.fitWidth).toHaveBeenLastCalledWith(drawn)
+      const image = screen.getByRole("button", { name: "View preview.png" })
+      expect(image).toContainElement(thumbnail)
+      expect(screen.getAllByRole("button")).toEqual([image])
+      await userEvent.click(image)
+      expect(app.requestDisplayMode.mock.calls).toEqual([[{ mode: "pip" }]])
+    }
+  )
 
   it("plays audio straight from the file's address, never reading it", async () => {
     const { address, rerender } = showFile({ filename: "brief.mp3" }, "", {

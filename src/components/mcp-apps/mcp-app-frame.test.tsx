@@ -176,7 +176,7 @@ describe("MCP App display modes", () => {
     expect(
       screen.queryByRole("button", { name: "Exit full screen" })
     ).toBeNull()
-    expect(screen.getByTitle("show_board app").parentElement).toHaveFocus()
+    expect(screen.getByLabelText("show_board app").parentElement).toHaveFocus()
     await waitFor(() => expect(latestMode(bridge)).toBe("inline"))
   })
 

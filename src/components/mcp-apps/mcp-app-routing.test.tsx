@@ -25,11 +25,13 @@ import { McpAppHostProvider } from "./mcp-app-host"
 import type { McpAppFrameProps } from "./mcp-app-frame"
 import { MCP_APP_TOOL_ARTIFACT, mcpAppToolArtifact } from "./tool-part"
 
+/** The App frame, which the side panel shares its name with. */
+const FRAME = ["show_board app", { selector: "iframe" }] as const
 const frames = vi.hoisted(() => [] as McpAppFrameProps[])
 vi.mock("./mcp-app-frame", () => ({
   default: (props: McpAppFrameProps) => {
     frames.push(props)
-    return <iframe title={props.title} />
+    return <iframe aria-label={props.title} />
   },
 }))
 
@@ -97,7 +99,7 @@ describe("MCP App routing", () => {
       toolPart({ toolName: "show_board", artifact: MCP_APP_TOOL_ARTIFACT }),
       apps
     )
-    expect(await screen.findByTitle("show_board app")).toBeInTheDocument()
+    expect(await screen.findByLabelText(...FRAME)).toBeInTheDocument()
     expect(apps.open).toHaveBeenCalledWith(
       {
         agentId: "researcher",
@@ -120,7 +122,7 @@ describe("MCP App routing", () => {
       }),
       apps
     )
-    expect(await screen.findByTitle("show_board app")).toBeInTheDocument()
+    expect(await screen.findByLabelText(...FRAME)).toBeInTheDocument()
     expect(apps.open).toHaveBeenCalledOnce()
     expect(screen.queryByRole("button", { name: /show_board/ })).toBeNull()
   })
@@ -146,7 +148,7 @@ describe("MCP App routing", () => {
       status: { type: "running" },
     })
     const { rerender } = renderHosted(running, apps)
-    expect(await screen.findByTitle("show_board app")).toBeInTheDocument()
+    expect(await screen.findByLabelText(...FRAME)).toBeInTheDocument()
     expect(lastFrame()?.input).toBeUndefined()
     expect(lastFrame()?.result).toBeUndefined()
 
@@ -218,7 +220,7 @@ describe("MCP App routing", () => {
       }),
       apps
     )
-    expect(await screen.findByTitle("show_board app")).toBeInTheDocument()
+    expect(await screen.findByLabelText(...FRAME)).toBeInTheDocument()
     expect(lastFrame()?.input).toEqual(input)
   })
 
@@ -249,7 +251,7 @@ describe("MCP App routing", () => {
     const apps = adapter()
     renderHosted(toolPart(overrides), hosted ? apps : undefined)
     expect(apps.open).not.toHaveBeenCalled()
-    expect(screen.queryByTitle("show_board app")).toBeNull()
+    expect(screen.queryByLabelText(...FRAME)).toBeNull()
     expect(screen.getByRole("button", { name: /show_board/ })).toBeVisible()
   })
 })
@@ -287,7 +289,7 @@ describe("MCP App side panel", () => {
 
   async function showInPanel(apps: McpAppAdapter, beside?: ReactNode) {
     const view = render(<Session apps={apps} beside={beside} />)
-    await screen.findByTitle("show_board app")
+    await screen.findByLabelText(...FRAME)
     act(() => lastFrame()?.onMove?.("pip"))
     return view
   }
@@ -301,7 +303,7 @@ describe("MCP App side panel", () => {
   /** The frame the message shows, outside the side panel. */
   const messageFrame = () =>
     screen
-      .getAllByTitle("show_board app")
+      .getAllByLabelText(...FRAME)
       .find((frame) => !screen.queryByRole(...PANEL)?.contains(frame))
 
   it("shows a view in the side panel while its message keeps its own, and returns focus to the message", async () => {
@@ -309,7 +311,7 @@ describe("MCP App side panel", () => {
     await showInPanel(adapter())
 
     const panel = screen.getByRole(...PANEL)
-    expect(within(panel).getByTitle("show_board app")).toBeInTheDocument()
+    expect(within(panel).getByLabelText(...FRAME)).toBeInTheDocument()
     expect(messageFrame()).toBeInTheDocument()
     expect(frames.findLast((frame) => frame.placement === "pip")).toBeDefined()
     expect(panelClose()).toHaveFocus()
@@ -318,7 +320,7 @@ describe("MCP App side panel", () => {
       frames.findLast((frame) => frame.placement === "pip")?.onMove?.("inline")
     )
     expect(screen.queryByRole(...PANEL)).toBeNull()
-    expect(screen.getAllByTitle("show_board app")).toHaveLength(1)
+    expect(screen.getAllByLabelText(...FRAME)).toHaveLength(1)
 
     act(() =>
       frames.findLast((frame) => frame.placement === undefined)?.onMove?.("pip")
@@ -327,21 +329,19 @@ describe("MCP App side panel", () => {
     expect(screen.queryByRole(...PANEL)).toBeNull()
     const focused = document.activeElement
     expect(focused).not.toBe(document.body)
-    expect(focused?.contains(screen.getByTitle("show_board app"))).toBe(true)
+    expect(focused?.contains(screen.getByLabelText(...FRAME))).toBe(true)
   })
 
   it("keeps the view while newer messages push its message out of the rendered window", async () => {
     const apps = adapter()
     const { rerender } = await showInPanel(apps)
-    const frame = within(screen.getByRole(...PANEL)).getByTitle(
-      "show_board app"
-    )
+    const frame = within(screen.getByRole(...PANEL)).getByLabelText(...FRAME)
 
     rerender(<Session apps={apps} message={false} />)
-    expect(
-      within(screen.getByRole(...PANEL)).getByTitle("show_board app")
-    ).toBe(frame)
-    expect(screen.getAllByTitle("show_board app")).toEqual([frame])
+    expect(within(screen.getByRole(...PANEL)).getByLabelText(...FRAME)).toBe(
+      frame
+    )
+    expect(screen.getAllByLabelText(...FRAME)).toEqual([frame])
   })
 
   it("returns the view to its message once its Session is left", async () => {
@@ -356,7 +356,7 @@ describe("MCP App side panel", () => {
     rerender(<Session apps={apps} />)
     await act(() => clock.advance(0))
     expect(screen.queryByRole(...PANEL)).toBeNull()
-    expect(screen.getByTitle("show_board app")).toBeInTheDocument()
+    expect(screen.getByLabelText(...FRAME)).toBeInTheDocument()
     expect(lastFrame()?.placement).toBeUndefined()
   })
 
