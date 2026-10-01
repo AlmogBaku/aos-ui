@@ -249,7 +249,8 @@ reads the bytes through `GET /api/fs/read-data-url`. A path that is relative,
 traverses, or names a credential file such as `.env` or `auth.json` is refused.
 
 Set `runtime.mediaArtifacts: false` to turn this off. A `MEDIA:` line then
-stays in the message text as written, and a text-to-speech receipt publishes no
+stays in the message text as written, so every reader of the Session, guests
+included, sees the file's native path, and a text-to-speech receipt publishes no
 audio Artifact. Images attached to a user message stay Artifacts either way,
 because they belong to AOS's own attachment flow rather than to Hermes's
 delivery convention.

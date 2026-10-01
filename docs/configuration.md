@@ -110,7 +110,8 @@ Hermes socket remains open.
 `runtime.mediaArtifacts` (every runtime, default `true`) turns native assistant
 media into Artifacts: a Hermes `MEDIA:` line or text-to-speech receipt, and an
 OpenClaw media block. Set it to `false` to leave that media as the runtime sent
-it: a Hermes `MEDIA:` line stays visible in the message text, and an OpenClaw
+it: a Hermes `MEDIA:` line stays visible in the message text, native file path
+included, to every reader of the Session, guests too, and an OpenClaw
 assistant media block, which has no text form, is not shown. Images the
 operator or a guest attaches to their own message stay Artifacts either way.
 OpenCode publishes no native media, so the field has no effect there.
