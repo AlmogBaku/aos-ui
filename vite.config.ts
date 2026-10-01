@@ -30,7 +30,11 @@ import {
   FIXTURE_AOS_UI_MCP_PATH,
   FIXTURE_MCP_APP_FILE_PATHS,
 } from "./shared/presentation/views.ts"
-import { buildPdfjs, buildViews } from "./packages/tools-mcp/views/build.ts"
+import {
+  buildGrammars,
+  buildPdfjs,
+  buildViews,
+} from "./packages/tools-mcp/views/build.ts"
 import { snapshotToolsServer } from "./packages/tools-mcp/snapshot.ts"
 import { reactCompiler } from "./react-compiler.config.ts"
 
@@ -187,8 +191,12 @@ function mcpAppSandboxPlugin(): Plugin {
 
 /** The real `aos-ui` server's answers, as JSON, from views built right now. */
 async function recordToolsServer() {
-  const [views, pdfjs] = await Promise.all([buildViews(), buildPdfjs()])
-  return JSON.stringify(await snapshotToolsServer(views, pdfjs))
+  const [views, pdfjs, grammars] = await Promise.all([
+    buildViews(),
+    buildPdfjs(),
+    buildGrammars(),
+  ])
+  return JSON.stringify(await snapshotToolsServer({ views, pdfjs, grammars }))
 }
 
 /**

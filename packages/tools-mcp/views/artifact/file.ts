@@ -1,9 +1,10 @@
-import type { CodeLanguage } from "./code"
+import { syntaxLanguageFromFilename } from "../../../../shared/syntax-language"
+import { codeLanguage } from "./code"
 
 /** How a text file lays out: as prose, a table, or highlighted source. */
 export type TextFormat =
   | { format: "plain" | "markdown" | "csv" | "json" }
-  | { format: "code"; language: CodeLanguage }
+  | { format: "code"; language: string }
 
 export type FilePreview =
   | { kind: "pdf"; blob: Blob }
@@ -33,27 +34,12 @@ export const PREVIEW_LIMITS: PreviewLimits = {
   text: 2 * MIB,
 }
 
-const TEXT_EXTENSIONS = "log sql toml tsv txt xml"
+const TEXT_EXTENSIONS = "log tsv txt"
 
-/** The language each source type is highlighted in; TSX's grammar reads all four scripts. */
-const CODE_LANGUAGES: Record<string, CodeLanguage> = {
-  "application/javascript": "tsx",
-  "application/typescript": "tsx",
-  "application/x-javascript": "tsx",
-  "application/x-typescript": "tsx",
-  "text/javascript": "tsx",
-  "text/jsx": "tsx",
-  "text/typescript": "tsx",
-  "text/tsx": "tsx",
-  "text/css": "css",
-  "text/x-python": "python",
-  "text/x-rust": "rust",
-  "text/x-shellscript": "shellscript",
-  "application/yaml": "yaml",
-  "application/x-yaml": "yaml",
-}
-
-/** The type a file's extension names, for a file whose type was not declared. */
+/**
+ * The type a file's extension names, for a file whose type was not declared;
+ * source the view highlights is `text/x-<language>`, as its name names it.
+ */
 const EXTENSION_TYPES: Record<string, string> = {
   pdf: "application/pdf",
   htm: "text/html",
@@ -69,16 +55,6 @@ const EXTENSION_TYPES: Record<string, string> = {
   md: "text/markdown",
   csv: "text/csv",
   json: "application/json",
-  css: "text/css",
-  js: "text/javascript",
-  jsx: "text/jsx",
-  ts: "text/typescript",
-  tsx: "text/tsx",
-  py: "text/x-python",
-  rs: "text/x-rust",
-  sh: "text/x-shellscript",
-  yaml: "application/yaml",
-  yml: "application/yaml",
   ...Object.fromEntries(
     TEXT_EXTENSIONS.split(" ").map((extension) => [extension, "text/plain"])
   ),
@@ -94,7 +70,9 @@ function mediaType(value: string | null | undefined) {
 
 function extensionType(filename: string) {
   const extension = /\.([^./]+)$/u.exec(filename)?.[1]?.toLowerCase()
-  return extension === undefined ? undefined : EXTENSION_TYPES[extension]
+  const type = extension === undefined ? undefined : EXTENSION_TYPES[extension]
+  const language = codeLanguage(syntaxLanguageFromFilename(filename))
+  return type ?? (language === undefined ? undefined : `text/x-${language}`)
 }
 
 function kindOf(type: string | undefined): PreviewKind | undefined {
@@ -109,7 +87,9 @@ function textFormat(type: string): TextFormat {
   if (type === "text/markdown") return { format: "markdown" }
   if (type === "text/csv") return { format: "csv" }
   if (type === "application/json") return { format: "json" }
-  const language = CODE_LANGUAGES[type]
+  // A source type names its language, as `text/x-python` and
+  // `application/typescript` do.
+  const language = codeLanguage(type.split("/")[1]?.replace(/^x-/u, ""))
   return language ? { format: "code", language } : { format: "plain" }
 }
 

@@ -4,7 +4,7 @@ import ShikiHighlighter, { type PreloadLanguage } from "react-shiki/web"
 
 import { cn } from "@/lib/utils"
 
-import { normalizeSyntaxLanguage } from "./syntax-language"
+import { normalizeSyntaxLanguage } from "@shared/syntax-language"
 
 const EXTRA_LANGUAGE_LOADERS: Readonly<Record<string, PreloadLanguage>> = {
   bash: () => import("@shikijs/langs/bash"),

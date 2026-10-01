@@ -6,14 +6,11 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js"
 
 import {
+  GRAMMAR_RESOURCE_URI,
   PDFJS_RESOURCE_URI,
   PDFJS_WORKER_FILE,
 } from "../../shared/presentation/views"
-import {
-  createToolsServer,
-  type PdfjsFiles,
-  type PresentationViewDocuments,
-} from "./server"
+import { createToolsServer, type ToolsServerFiles } from "./server"
 
 /** What an MCP client reads from the server: its tools and every view. */
 export type ToolsServerSnapshot = {
@@ -32,15 +29,18 @@ const FIXTURE_PDFJS_URIS = [
   `${PDFJS_RESOURCE_URI}wasm/jbig2.wasm`,
 ]
 
+/** The grammar the fixture's TypeScript file and Markdown `ts` fence read. */
+const FIXTURE_GRAMMAR_URIS = [`${GRAMMAR_RESOURCE_URI}typescript.json`]
+
 /**
  * Asks a real server for its `tools/list`, every view's `resources/read`, and
- * the pdf.js resources the artifact view needs for the fixture files.
+ * the pdf.js resources and grammars the artifact view needs for the fixture
+ * files.
  */
 export async function snapshotToolsServer(
-  views: PresentationViewDocuments,
-  pdfjs: PdfjsFiles
+  files: ToolsServerFiles
 ): Promise<ToolsServerSnapshot> {
-  const server = createToolsServer({ views, pdfjs })
+  const server = createToolsServer(files)
   const client = new Client({ name: "aos-ui-fixture", version: "1.0.0" })
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()
@@ -51,7 +51,7 @@ export async function snapshotToolsServer(
     const resources: Record<string, ReadResourceResult> = {}
     for (const { uri } of (await client.listResources()).resources)
       resources[uri] = await client.readResource({ uri })
-    for (const uri of FIXTURE_PDFJS_URIS)
+    for (const uri of [...FIXTURE_PDFJS_URIS, ...FIXTURE_GRAMMAR_URIS])
       resources[uri] = await client.readResource({ uri })
     return { tools, resources }
   } finally {

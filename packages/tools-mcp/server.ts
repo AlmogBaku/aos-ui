@@ -21,6 +21,7 @@ import {
   type PresentationToolName,
 } from "../../shared/presentation/tools"
 import {
+  GRAMMAR_RESOURCE_URI,
   PDFJS_RESOURCE_URI,
   PDFJS_WORKER_FILE,
   PRESENTATION_VIEW_MIME_TYPE,
@@ -32,13 +33,17 @@ import {
 /** Each presentation view's built, self-contained HTML document. */
 export type PresentationViewDocuments = Record<PresentationViewName, string>
 
-/** The pdf.js files the artifact view reads, keyed by their path. */
-export type PdfjsFiles = ReadonlyMap<string, Uint8Array>
+/** Files a view reads from the server, keyed by their path in one folder. */
+export type ViewFiles = ReadonlyMap<string, Uint8Array>
 
-/** What the server serves: the built views, and the pdf.js files beside them. */
+/**
+ * What the server serves: the built views, and the pdf.js files and code
+ * grammars the artifact view reads beside them.
+ */
 export type ToolsServerFiles = {
   views: PresentationViewDocuments
-  pdfjs?: PdfjsFiles
+  pdfjs?: ViewFiles
+  grammars?: ViewFiles
 }
 
 const SAFE_OUTPUT =
@@ -113,33 +118,40 @@ function registerView(server: McpServer, view: PresentationView, html: string) {
 }
 
 /**
- * Serves each pdf.js file at `ui://aos-ui/pdfjs/<path>`: the worker as script
- * text, every other file as bytes. A view asks for them by name, so they stay
- * out of the resource list.
+ * Serves each of `files` at `<uri><path>`: as text of the type `textType`
+ * names for it, else as bytes. A view asks for them by name, so they stay out
+ * of the resource list.
  */
-function registerPdfjs(server: McpServer, files: PdfjsFiles) {
+function registerFiles(
+  server: McpServer,
+  name: string,
+  uri: string,
+  files: ViewFiles,
+  textType: (path: string) => string | undefined
+) {
   server.registerResource(
-    "aos-ui pdf.js file",
-    new ResourceTemplate(`${PDFJS_RESOURCE_URI}{+path}`, { list: undefined }),
+    `aos-ui ${name}`,
+    new ResourceTemplate(`${uri}{+path}`, { list: undefined }),
     {},
-    (uri, variables) => {
-      const name = String(variables.path)
-      const bytes = files.get(name)
+    (address, variables) => {
+      const path = String(variables.path)
+      const bytes = files.get(path)
       if (!bytes)
         throw new McpError(
           ErrorCode.InvalidParams,
-          `No pdf.js file at ${uri.href}`
+          `No ${name} at ${address.href}`
         )
+      const mimeType = textType(path)
       return {
         contents: [
-          name === PDFJS_WORKER_FILE
+          mimeType
             ? {
-                uri: uri.href,
-                mimeType: "text/javascript",
+                uri: address.href,
+                mimeType,
                 text: new TextDecoder().decode(bytes),
               }
             : {
-                uri: uri.href,
+                uri: address.href,
                 mimeType: "application/octet-stream",
                 blob: Buffer.from(bytes).toString("base64"),
               },
@@ -160,12 +172,23 @@ function registerPdfjs(server: McpServer, files: PdfjsFiles) {
 export function createToolsServer({
   views,
   pdfjs = new Map(),
+  grammars = new Map(),
 }: ToolsServerFiles): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
   for (const view of Object.values(presentationViews))
     registerView(server, view, views[view.name])
-  registerPdfjs(server, pdfjs)
+  // pdf.js's worker is script text; every other pdf.js file is bytes.
+  registerFiles(server, "pdf.js file", PDFJS_RESOURCE_URI, pdfjs, (path) =>
+    path === PDFJS_WORKER_FILE ? "text/javascript" : undefined
+  )
+  registerFiles(
+    server,
+    "grammar",
+    GRAMMAR_RESOURCE_URI,
+    grammars,
+    () => "application/json"
+  )
 
   for (const [name, definition] of Object.entries(
     presentationToolDefinitions

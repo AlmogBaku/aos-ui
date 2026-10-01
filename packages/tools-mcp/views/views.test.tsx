@@ -1,10 +1,17 @@
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import type { PDFDocumentProxy } from "pdfjs-dist"
+import { bundledLanguagesInfo } from "shiki/langs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { PDFDocumentProxy } from "pdfjs-dist"
-
+import { Code } from "./artifact/code"
 import { PREVIEW_LIMITS } from "./artifact/file"
 import { PdfPages } from "./artifact/pdf-preview"
 import { ArtifactView } from "./artifact-view"
@@ -14,6 +21,7 @@ import { MapView } from "./map-view"
 import { StatsView } from "./stats-view"
 import { presentationValue, resultValue, type ViewApp } from "./view"
 import { render_chartSchema } from "../../../shared/presentation/tools"
+import { GRAMMAR_RESOURCE_URI } from "../../../shared/presentation/views"
 
 afterEach(() => {
   cleanup()
@@ -47,10 +55,26 @@ const map = {
   ],
 }
 
-/** A page that grants every request a view sends it. */
+/** Shiki's own grammar for `name`, as the server serves it at `uri`. */
+async function grammar(uri: string, name: string) {
+  const info = bundledLanguagesInfo.find(
+    ({ id, aliases }) => id === name || aliases?.includes(name)
+  )
+  const grammars = info ? (await info.import()).default : []
+  const text = JSON.stringify(
+    grammars.find((grammar) => grammar.name === name) ?? grammars.at(-1)
+  )
+  return { contents: [{ uri, mimeType: "application/json", text }] }
+}
+
+/** A page that grants every request a view sends it, grammars included. */
 function fakeApp() {
   return {
-    readServerResource: vi.fn(async () => ({ contents: [] })),
+    readServerResource: vi.fn(async ({ uri }: { uri: string }) =>
+      uri.startsWith(GRAMMAR_RESOURCE_URI)
+        ? grammar(uri, uri.slice(GRAMMAR_RESOURCE_URI.length, -".json".length))
+        : { contents: [] }
+    ),
     downloadFile: vi.fn(async () => ({})),
     openLink: vi.fn(async () => ({})),
     requestDisplayMode: vi.fn(async () => ({ mode: "inline" as const })),
@@ -287,6 +311,56 @@ describe("artifact view", () => {
     expect(source).toHaveAttribute("aria-selected", "true")
     expect(screen.getByRole("tabpanel")).toHaveTextContent(html)
     expect(screen.queryByTitle("HTML preview")).toBeNull()
+  })
+
+  // Each case names a grammar no other case loads, since a loaded grammar
+  // stays loaded for the view's life.
+  it.each([
+    [
+      "a file by its name, with the grammar it embeds",
+      { filename: "feed.xml" },
+      "<feed/>",
+      ["xml", "java"],
+    ],
+    [
+      "a file by its declared type",
+      { filename: "deploy", mimeType: "text/x-shellscript" },
+      "echo ready",
+      ["bash"],
+    ],
+    [
+      "a Markdown fence",
+      { filename: "notes.md" },
+      "```go\npackage main\n```",
+      ["go"],
+    ],
+  ])(
+    "highlights %s, reading only the grammars it needs",
+    async (_case, file, body, names) => {
+      const { app } = showFile(file, body)
+      const region = await screen.findByRole("region", { name: file.filename })
+      await waitFor(() => expect(region.querySelector("span")).not.toBeNull())
+      expect(app.readServerResource.mock.calls.map(([{ uri }]) => uri)).toEqual(
+        names.map((name) => `${GRAMMAR_RESOURCE_URI}${name}.json`)
+      )
+    }
+  )
+
+  it("shows code past its limit as plain text, reading no grammar", () => {
+    const { readServerResource } = fakeApp()
+    render(
+      <Code
+        code="fn main() {}"
+        language="rust"
+        label="main.rs"
+        read={readServerResource}
+        limit={4}
+      />
+    )
+    const region = screen.getByRole("region", { name: "main.rs" })
+    expect(region.textContent).toBe("fn main() {}")
+    expect(region.querySelector("span")).toBeNull()
+    expect(readServerResource).not.toHaveBeenCalled()
   })
 
   it("copies the file's text as it came", async () => {

@@ -38,11 +38,17 @@ function writeViews(directory: string) {
     writeFileSync(join(directory, `${name}.html`), `<title>${name}</title>`)
 }
 
+function writePdfjs(directory: string) {
+  mkdirSync(join(directory, "pdfjs/wasm"), { recursive: true })
+  writeFileSync(join(directory, "pdfjs/pdf.worker.js"), "self.onmessage = null")
+  writeFileSync(join(directory, "pdfjs/wasm/jbig2.wasm"), Uint8Array.of(0, 97))
+}
+
 beforeAll(async () => {
   writeViews(views)
-  mkdirSync(join(views, "pdfjs/wasm"), { recursive: true })
-  writeFileSync(join(views, "pdfjs/pdf.worker.js"), "self.onmessage = null")
-  writeFileSync(join(views, "pdfjs/wasm/jbig2.wasm"), Uint8Array.of(0, 97))
+  writePdfjs(views)
+  mkdirSync(join(views, "grammars"))
+  writeFileSync(join(views, "grammars/typescript.json"), "{}")
   child = start(views)
   const lines = createInterface({ input: child.stdout! })
   const [line] = (await Promise.race([
@@ -97,6 +103,13 @@ describe("tools-mcp HTTP entry", () => {
   it.each([
     ["the built views", () => undefined],
     ["pdf.js's files", writeViews],
+    [
+      "the grammars",
+      (directory: string) => {
+        writeViews(directory)
+        writePdfjs(directory)
+      },
+    ],
   ])("refuses to start without %s", async (_missing, prepare) => {
     const directory = mkdtempSync(join(tmpdir(), "aos-ui-no-views-"))
     prepare(directory)

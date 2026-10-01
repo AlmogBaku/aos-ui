@@ -21,11 +21,14 @@ const pdfjs = new Map([
   ["pdf.worker.js", new TextEncoder().encode("self.onmessage = null")],
   ["wasm/jbig2.wasm", Uint8Array.of(0, 97, 115, 109)],
 ])
+const grammars = new Map([
+  ["go.json", new TextEncoder().encode('{"name":"go"}')],
+])
 
 beforeAll(async () => {
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()
-  await createToolsServer({ views, pdfjs }).connect(serverTransport)
+  await createToolsServer({ views, pdfjs, grammars }).connect(serverTransport)
   await client.connect(clientTransport)
 })
 
@@ -143,7 +146,7 @@ describe("MCP App views", () => {
   )
 })
 
-describe("pdf.js files", () => {
+describe("view files", () => {
   // The artifact view's sandbox fetches nothing, so it reads pdf.js's worker,
   // data, and decoders by name; "lists one App resource per view" keeps them
   // out of the resource list the fixture snapshot reads.
@@ -174,6 +177,23 @@ describe("pdf.js files", () => {
     ).rejects.toThrow(
       /No pdf\.js file at ui:\/\/aos-ui\/pdfjs\/wasm\/quickjs-eval\.wasm/u
     )
+  })
+
+  it("serves each grammar as JSON text, and no grammar it was not built with", async () => {
+    const go = await client.readResource({
+      uri: "ui://aos-ui/grammars/go.json",
+    })
+
+    expect(go.contents).toEqual([
+      {
+        uri: "ui://aos-ui/grammars/go.json",
+        mimeType: "application/json",
+        text: '{"name":"go"}',
+      },
+    ])
+    await expect(
+      client.readResource({ uri: "ui://aos-ui/grammars/cobol.json" })
+    ).rejects.toThrow(/No grammar at ui:\/\/aos-ui\/grammars\/cobol\.json/u)
   })
 })
 

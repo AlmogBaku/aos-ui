@@ -5,7 +5,7 @@ import { lazy, Suspense } from "react"
 
 import { cn } from "@/lib/utils"
 
-import { normalizeSyntaxLanguage } from "./syntax-language"
+import { normalizeSyntaxLanguage } from "@shared/syntax-language"
 
 const ShikiCode = lazy(() =>
   import("./shiki-code").then((module) => ({ default: module.ShikiCode }))

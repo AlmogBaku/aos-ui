@@ -53,6 +53,12 @@ export const PDFJS_RESOURCE_URI = "ui://aos-ui/pdfjs/"
 export const PDFJS_WORKER_FILE = "pdf.worker.js"
 
 /**
+ * Where the artifact view reads the grammar it highlights code in, one Shiki
+ * grammar per `<name>.json`, so the view carries none of them itself.
+ */
+export const GRAMMAR_RESOURCE_URI = "ui://aos-ui/grammars/"
+
+/**
  * Where the fixture preview reads the `aos-ui` server's own answers: its
  * `tools/list` tools and each view's `resources/read` result, recorded from
  * the real server when the app is built or served.

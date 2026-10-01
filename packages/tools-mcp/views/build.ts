@@ -3,8 +3,10 @@ import react from "@vitejs/plugin-react"
 import { readdir, readFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import path from "node:path"
+import { bundledLanguagesInfo } from "shiki/langs"
 import { build, type Rolldown } from "vite"
 
+import { SYNTAX_LANGUAGES } from "../../../shared/syntax-language"
 import {
   PDFJS_WORKER_FILE,
   presentationViewNames,
@@ -182,5 +184,27 @@ export async function buildPdfjs(): Promise<Map<string, Uint8Array>> {
   const files = new Map([[PDFJS_WORKER_FILE, await buildPdfWorker()]])
   for (const name of names)
     files.set(name, await readFile(path.join(PDFJS_DIRECTORY, name)))
+  return files
+}
+
+/**
+ * Every Shiki grammar the artifact view highlights code in, as JSON by name:
+ * each language's own grammar, again under the language's name where the two
+ * differ, and every grammar it embeds, which loads first.
+ */
+export async function buildGrammars(): Promise<Map<string, Uint8Array>> {
+  const files = new Map<string, Uint8Array>()
+  const add = (name: string, grammar: unknown) =>
+    files.set(`${name}.json`, new TextEncoder().encode(JSON.stringify(grammar)))
+  for (const language of SYNTAX_LANGUAGES) {
+    if (language === "text") continue
+    const info = bundledLanguagesInfo.find(
+      ({ id, aliases }) => id === language || aliases?.includes(language)
+    )
+    if (!info) throw new Error(`Shiki has no grammar for ${language}`)
+    const grammars = (await info.import()).default
+    for (const grammar of grammars) add(grammar.name, grammar)
+    add(language, grammars.at(-1))
+  }
   return files
 }

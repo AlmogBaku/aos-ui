@@ -8,12 +8,17 @@ const LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
   rb: "ruby",
   sh: "bash",
   shell: "bash",
+  shellscript: "bash",
   text: "text",
   ts: "typescript",
   yml: "yaml",
 }
 
-const SUPPORTED_LANGUAGES = new Set([
+/**
+ * The languages code is highlighted in, by the names fences and file
+ * extensions resolve to; `text` stays plain.
+ */
+export const SYNTAX_LANGUAGES: ReadonlySet<string> = new Set([
   "bash",
   "c",
   "cpp",
@@ -85,7 +90,7 @@ const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
 export function normalizeSyntaxLanguage(language: string | undefined) {
   const normalized = language?.trim().toLowerCase() || "text"
   const aliased = LANGUAGE_ALIASES[normalized] ?? normalized
-  return SUPPORTED_LANGUAGES.has(aliased) ? aliased : "text"
+  return SYNTAX_LANGUAGES.has(aliased) ? aliased : "text"
 }
 
 export function syntaxLanguageFromFilename(filename: string) {

@@ -115,17 +115,22 @@ function TextPreview({
   preview,
   filename,
   labels,
-  openLink,
+  app,
 }: {
   preview: Extract<FilePreview, { kind: "text" }>
   filename: string
   labels: ArtifactLabels
-  openLink: ViewApp["openLink"]
+  app: ViewApp
 }) {
   switch (preview.format) {
     case "markdown":
       return (
-        <Markdown source={preview.text} label={filename} openLink={openLink} />
+        <Markdown
+          source={preview.text}
+          label={filename}
+          openLink={app.openLink}
+          read={app.readServerResource}
+        />
       )
     case "csv":
       return (
@@ -141,6 +146,7 @@ function TextPreview({
           code={prettyJson(preview.text)}
           language="json"
           label={filename}
+          read={app.readServerResource}
         />
       )
     case "code":
@@ -149,6 +155,7 @@ function TextPreview({
           code={preview.text}
           language={preview.language}
           label={filename}
+          read={app.readServerResource}
         />
       )
     case "plain":
@@ -210,7 +217,7 @@ function Preview({
           preview={preview}
           filename={filename}
           labels={labels}
-          openLink={app.openLink}
+          app={app}
         />
       )
     case "none":

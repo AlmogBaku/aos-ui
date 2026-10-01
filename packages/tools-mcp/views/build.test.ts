@@ -2,7 +2,8 @@
 
 import { describe, expect, it } from "vitest"
 
-import { buildPdfjs, buildViews } from "./build"
+import { SYNTAX_LANGUAGES } from "../../../shared/syntax-language"
+import { buildGrammars, buildPdfjs, buildViews } from "./build"
 
 /** The proxy refuses an App document, or any resource it reads, above this size. */
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
@@ -52,4 +53,31 @@ describe("buildPdfjs", () => {
         MAX_DOCUMENT_BYTES
       )
   }, 120_000)
+})
+
+describe("buildGrammars", () => {
+  it("writes each language's grammar and every grammar it embeds, each under the resource limit", async () => {
+    const files = await buildGrammars()
+    const grammars = new Map(
+      [...files].map(([name, bytes]) => [
+        name,
+        JSON.parse(new TextDecoder().decode(bytes)) as {
+          embeddedLangs?: string[]
+        },
+      ])
+    )
+
+    for (const language of SYNTAX_LANGUAGES)
+      expect(grammars.has(`${language}.json`), language).toBe(
+        language !== "text"
+      )
+    for (const [name, grammar] of grammars)
+      for (const embedded of grammar.embeddedLangs ?? [])
+        expect(
+          grammars.has(`${embedded}.json`),
+          `${name} embeds ${embedded}`
+        ).toBe(true)
+    for (const [name, bytes] of files)
+      expect(bytes.length, name).toBeLessThan(MAX_DOCUMENT_BYTES)
+  })
 })

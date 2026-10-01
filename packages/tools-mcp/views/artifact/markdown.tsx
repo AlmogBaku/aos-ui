@@ -40,7 +40,10 @@ function text(
  * show only their alt text, since the view loads nothing by address. A web
  * link opens through the page, so it never moves this frame.
  */
-function components(openLink: ViewApp["openLink"]): Components {
+function components(
+  openLink: ViewApp["openLink"],
+  read: ViewApp["readServerResource"]
+): Components {
   return {
     h1: text("h1", `${HEADING} text-xl`),
     h2: text("h2", `${HEADING} text-lg`),
@@ -85,19 +88,14 @@ function components(openLink: ViewApp["openLink"]): Components {
             {children}
           </code>
         )
-      const code = source.replace(/\n$/u, "")
-      const language = codeLanguage(name)
-      return language ? (
+      return (
         <div className="my-3">
-          <Code code={code} language={language} />
+          <Code
+            code={source.replace(/\n$/u, "")}
+            language={codeLanguage(name)}
+            read={read}
+          />
         </div>
-      ) : (
-        <pre
-          dir="ltr"
-          className="my-3 overflow-auto rounded-md bg-muted p-3 font-mono text-xs"
-        >
-          {code}
-        </pre>
       )
     },
     a: ({ href, children }) =>
@@ -123,12 +121,14 @@ export function Markdown({
   source,
   label,
   openLink,
+  read,
 }: {
   source: string
   label: string
   openLink: ViewApp["openLink"]
+  read: ViewApp["readServerResource"]
 }) {
-  const parts = useMemo(() => components(openLink), [openLink])
+  const parts = useMemo(() => components(openLink, read), [openLink, read])
   return (
     <div
       tabIndex={0}

@@ -10,9 +10,9 @@ import {
 } from "../../shared/presentation/views"
 import {
   createToolsServer,
-  type PdfjsFiles,
   type PresentationViewDocuments,
   type ToolsServerFiles,
+  type ViewFiles,
 } from "./server"
 
 const USAGE =
@@ -39,19 +39,26 @@ async function loadViews(
   return views
 }
 
-/** Reads the pdf.js files the build copied beside the views, once. */
-async function loadPdfjs(directory: string): Promise<PdfjsFiles> {
-  const root = path.join(directory, "pdfjs")
+/**
+ * Reads the files the build wrote into `folder` beside the views, once; a
+ * folder without its `required` file stops the server at start.
+ */
+async function loadFolder(
+  directory: string,
+  folder: string,
+  required: string
+): Promise<ViewFiles> {
+  const root = path.join(directory, folder)
   const files = new Map<string, Uint8Array>()
   try {
     for await (const name of new Bun.Glob("**/*").scan({ cwd: root }))
       files.set(name, await readFile(path.join(root, name)))
   } catch {
-    // A missing directory is reported below, as a missing worker.
+    // A missing directory is reported below, as a missing file.
   }
-  if (!files.has(PDFJS_WORKER_FILE))
+  if (!files.has(required))
     throw new Error(
-      `pdf.js is missing at ${root}; run \`bun run tools-mcp:build\` first.`
+      `${required} is missing at ${root}; run \`bun run tools-mcp:build\` first.`
     )
   return files
 }
@@ -106,9 +113,10 @@ if (import.meta.main) {
   const directory = path.resolve(values.views)
   const files: ToolsServerFiles = await Promise.all([
     loadViews(directory),
-    loadPdfjs(directory),
+    loadFolder(directory, "pdfjs", PDFJS_WORKER_FILE),
+    loadFolder(directory, "grammars", "typescript.json"),
   ]).then(
-    ([views, pdfjs]) => ({ views, pdfjs }),
+    ([views, pdfjs, grammars]) => ({ views, pdfjs, grammars }),
     (error: Error) => {
       console.error(error.message)
       process.exit(1)
