@@ -141,16 +141,28 @@ const LimitsSchema = z.strictObject({
 
 const RuntimeIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u)
 
+/** Fields every runtime kind shares. */
+const RuntimeFields = {
+  id: RuntimeIdSchema,
+  /**
+   * Whether the media a runtime's Agent delivers natively (a Hermes `MEDIA:`
+   * line or TTS receipt, an OpenClaw media block) becomes an Artifact record.
+   * Off, none does, and a `MEDIA:` line stays in the text as written. Images
+   * the operator uploads are AOS's own attachments and stay either way.
+   */
+  mediaArtifacts: z.boolean().default(true),
+}
+
 const RuntimeSchema = z.discriminatedUnion("kind", [
   z.strictObject({
-    id: RuntimeIdSchema,
+    ...RuntimeFields,
     kind: z.literal("hermes"),
     baseUrl: HttpUrlSchema,
     tokenFile: AbsoluteSecretFileSchema,
     sessionIdleMs: z.number().int().min(1_000).max(86_400_000),
   }),
   z.strictObject({
-    id: RuntimeIdSchema,
+    ...RuntimeFields,
     kind: z.literal("opencode"),
     baseUrl: HttpUrlSchema,
     directory: AbsoluteDirectorySchema,
@@ -169,7 +181,7 @@ const RuntimeSchema = z.discriminatedUnion("kind", [
     passwordFile: AbsoluteSecretFileSchema,
   }),
   z.strictObject({
-    id: RuntimeIdSchema,
+    ...RuntimeFields,
     kind: z.literal("openclaw"),
     baseUrl: WebSocketUrlSchema,
     deviceIdentityFile: AbsoluteSecretFileSchema,

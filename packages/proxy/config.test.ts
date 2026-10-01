@@ -54,11 +54,19 @@ function validPush() {
 }
 
 describe("proxy configuration and secret boundary", () => {
-  it("accepts the minimal server-token-only V1 configuration", () => {
-    expect(parseProxyConfig(validConfig())).toEqual(validConfig())
-    expect(parseProxyConfig({ ...validConfig(), log: {} })).toEqual(
-      validConfig()
-    )
+  it("accepts the minimal server-token-only V1 configuration, turning native media into Artifacts unless told not to", () => {
+    const config = validConfig()
+    const parsed = {
+      ...config,
+      runtime: { ...config.runtime, mediaArtifacts: true },
+    }
+    expect(parseProxyConfig(config)).toEqual(parsed)
+    expect(parseProxyConfig({ ...config, log: {} })).toEqual(parsed)
+    const off = {
+      ...config,
+      runtime: { ...config.runtime, mediaArtifacts: false },
+    }
+    expect(parseProxyConfig(off)).toEqual(off)
   })
 
   it("accepts the exact private OpenCode runtime configuration", () => {
@@ -77,6 +85,7 @@ describe("proxy configuration and secret boundary", () => {
     expect(parseProxyConfig(input).runtime).toEqual({
       ...input.runtime,
       baseUrl: "http://127.0.0.1:4096",
+      mediaArtifacts: true,
     })
   })
 
@@ -95,6 +104,7 @@ describe("proxy configuration and secret boundary", () => {
     expect(parseProxyConfig(input).runtime).toEqual({
       ...input.runtime,
       baseUrl: "wss://gateway.example.test",
+      mediaArtifacts: true,
     })
   })
 

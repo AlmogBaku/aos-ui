@@ -45,6 +45,7 @@ import {
 } from "./tool-data"
 import { hermesRowMessageId } from "./history"
 import type { HermesPublishedArtifacts } from "./published-artifacts"
+import type { HermesMediaOptions } from "./media-artifacts"
 import { boundedNativeBytes, publicReason, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
 import { attachTurn, scheduleCatchUp } from "./run-attach"
@@ -184,6 +185,7 @@ export class HermesTurnEngine {
   readonly #lostInteractionGraceMs: number
   readonly #mcpToolNames?: McpToolNames
   readonly #publishedArtifacts?: HermesPublishedArtifacts
+  readonly #media: HermesMediaOptions
 
   constructor(
     native: HermesTurnNative,
@@ -194,6 +196,8 @@ export class HermesTurnEngine {
       mcpToolNames?: McpToolNames
       /** Grants each MEDIA-line artifact before its assistant row persists. */
       publishedArtifacts?: HermesPublishedArtifacts
+      /** Whether the media a turn delivers becomes Artifacts; on by default. */
+      media?: HermesMediaOptions
       /** Without it, a watch retries every failure and logs nothing. */
       watch?: Partial<HermesWatchOptions>
     } = {}
@@ -201,6 +205,7 @@ export class HermesTurnEngine {
     this.#native = native
     this.#mcpToolNames = options.mcpToolNames
     this.#publishedArtifacts = options.publishedArtifacts
+    this.#media = options.media ?? {}
     this.#log = options.log ?? { warn: () => undefined }
     this.#watch = {
       publicError: () => undefined,
@@ -284,7 +289,7 @@ export class HermesTurnEngine {
       // and only the barrier makes it this run's: a turn Hermes starts by
       // itself meanwhile is not.
       await this.#settling.get(key)?.done
-      active = createActiveTurn(scope, input.turnId)
+      active = createActiveTurn(scope, input.turnId, this.#media)
       if (prompt) active.promptMessageId = prompt.messageId
       await attachTurn(this.#host, active, { kind: "barrier" })
     } finally {
@@ -368,7 +373,7 @@ export class HermesTurnEngine {
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     this.#admissions.add(key)
 
-    const active = createActiveTurn(scope, request.turnId)
+    const active = createActiveTurn(scope, request.turnId, this.#media)
     let fromStart: boolean | undefined
     try {
       fromStart = await attachTurn(
@@ -824,7 +829,7 @@ export class HermesTurnEngine {
         // in the same message, text after it is the next response even when
         // no call of this one streamed, and only message.complete settles.
         this.#closeGeneration(active, { media: true })
-        Object.assign(active, generationState(), { toolsDone: true })
+        Object.assign(active, generationState(this.#media), { toolsDone: true })
         return
       }
       // Hermes uses thinking.delta for transient spinner/status copy. It is not
@@ -893,7 +898,8 @@ export class HermesTurnEngine {
       toolCallId,
       tool.name,
       payload.result,
-      payload.is_error === true
+      payload.is_error === true,
+      this.#media
     )
     if (tool.name === "terminal" && !outcome.isError)
       this.#announceTerminal(active, toolCallId, payload)
@@ -1189,7 +1195,7 @@ export class HermesTurnEngine {
       // which still trusts the media its calls returned.
       this.#closeGeneration(active, { media: true })
       const { mediaFilter } = active
-      Object.assign(active, generationState(), { mediaFilter })
+      Object.assign(active, generationState(this.#media), { mediaFilter })
     }
     active.responses += 1
     active.messageId = `${active.messageBase ?? `${active.turnId}:assistant`}-${active.responses}`
@@ -1265,7 +1271,7 @@ export class HermesTurnEngine {
     active.messageId = undefined
     active.toolsDone = false
     active.generation += 1
-    Object.assign(active, generationState())
+    Object.assign(active, generationState(this.#media))
   }
 
   /**

@@ -264,7 +264,7 @@ export type ProxyEnvOverride = {
   path: string[]
   /** Appended to `AOS_UI_PROXY_` to form the variable an operator exports. */
   suffix: string
-  type: "string" | "int"
+  type: "string" | "int" | "boolean"
   /**
    * The runtime branch this row belongs to, or `guest` for a row that may only
    * fill a listener the file already opened.
@@ -287,6 +287,11 @@ export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
   { path: ["runtime", "id"], suffix: "RUNTIME_ID", type: "string" },
   { path: ["runtime", "kind"], suffix: "RUNTIME_KIND", type: "string" },
   { path: ["runtime", "baseUrl"], suffix: "RUNTIME_BASE_URL", type: "string" },
+  {
+    path: ["runtime", "mediaArtifacts"],
+    suffix: "RUNTIME_MEDIA_ARTIFACTS",
+    type: "boolean",
+  },
   {
     path: ["runtime", "tokenFile"],
     suffix: "RUNTIME_TOKEN_FILE",
@@ -485,8 +490,16 @@ function resolveRuntimeKind(
   return RUNTIME_KINDS.find((kind) => kind === configured)
 }
 
-function overrideValue(variable: string, raw: string, type: "string" | "int") {
+function overrideValue(
+  variable: string,
+  raw: string,
+  type: ProxyEnvOverride["type"]
+) {
   if (type === "string") return raw
+  if (type === "boolean") {
+    if (raw === "true" || raw === "false") return raw === "true"
+    throw new ProxyConfigurationError(`${variable} must be true or false`)
+  }
   // The value may be anything an operator exported, so only the name is quoted.
   if (!/^\d+$/u.test(raw))
     throw new ProxyConfigurationError(

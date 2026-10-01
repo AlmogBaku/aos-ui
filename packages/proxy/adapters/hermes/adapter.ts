@@ -41,7 +41,7 @@ import {
   restoredHermesFailedTurn,
   unansweredPrompt,
 } from "./inflight"
-import { publishedArtifact } from "./media-artifacts"
+import { publishedArtifact, type HermesMediaOptions } from "./media-artifacts"
 import { HermesPublishedArtifacts } from "./published-artifacts"
 import {
   HermesTurnEngine,
@@ -406,6 +406,7 @@ export class HermesServerAdapter implements ServerRuntime {
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly #publishedArtifacts = new HermesPublishedArtifacts()
+  readonly #media: HermesMediaOptions
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
   readonly #invitedSessionCreates = new Map<
@@ -456,8 +457,11 @@ export class HermesServerAdapter implements ServerRuntime {
       mcp?: { client: McpAppClient; logger: Logger }
       /** Rows per raw history read. */
       rawHistoryPage?: number
+      /** Whether the media an Agent delivers becomes Artifacts; on by default. */
+      media?: HermesMediaOptions
     } = {}
   ) {
+    this.#media = options.media ?? {}
     this.link = transport.link ?? READY_LINK
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
     this.#rawHistoryPage = options.rawHistoryPage ?? RAW_HISTORY_PAGE
@@ -664,6 +668,7 @@ export class HermesServerAdapter implements ServerRuntime {
       ...(options.log ? { log: options.log } : {}),
       ...(this.#mcpToolNames ? { mcpToolNames: this.#mcpToolNames } : {}),
       publishedArtifacts: this.#publishedArtifacts,
+      media: this.#media,
       // A watch stops where the adapter reports a Session gone or the token
       // refused, and redials once the gateway is up again.
       watch: {
@@ -1624,7 +1629,7 @@ export class HermesServerAdapter implements ServerRuntime {
         profile,
         hermesHistoryToolNames(page)
       )
-      messages = projectHermesHistory(rows, resolve)
+      messages = projectHermesHistory(rows, resolve, this.#media)
       // A short page means Hermes has no older rows left; an empty page says the
       // same even if a caller passed a degenerate limit.
       if (messages.length > 0 || page.length === 0 || page.length < limit) break
@@ -1643,7 +1648,7 @@ export class HermesServerAdapter implements ServerRuntime {
         ...pagination,
         nextOffset: pagination.nextOffset - turnStart,
       }
-      messages = projectHermesHistory(rows, resolve)
+      messages = projectHermesHistory(rows, resolve, this.#media)
     }
     // Hermes keeps a turn that failed out of its transcript, so the newest page
     // ending with an unanswered prompt, or with a tool call nothing answered,
@@ -1706,11 +1711,15 @@ export class HermesServerAdapter implements ServerRuntime {
     const inflight = this.#resumedInflight(agentId, storedId)
     return inflight === undefined
       ? undefined
-      : restoredHermesFailedTurn(inflight, {
-          id: `aos-inflight:${sessionId(agentId, storedId)}`,
-          userText: prompt.text,
-          createdAt: opening.createdAt,
-        })
+      : restoredHermesFailedTurn(
+          inflight,
+          {
+            id: `aos-inflight:${sessionId(agentId, storedId)}`,
+            userText: prompt.text,
+            createdAt: opening.createdAt,
+          },
+          this.#media
+        )
   }
 
   /** The retained turn from this Session's last `session.resume`, validated. */

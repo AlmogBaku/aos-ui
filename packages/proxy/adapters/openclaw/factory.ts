@@ -33,6 +33,7 @@ export type OpenClawRuntimeConfig = Readonly<{
   baseUrl: string
   deviceIdentityFile: string
   deviceTokenFile: string
+  mediaArtifacts?: boolean
 }>
 
 type OpenClawRuntimeClient = OpenClawGatewayClient & {
@@ -156,6 +157,8 @@ export type OpenClawRuntimeParts = Pick<RuntimeServices, "logger"> &
     baseUrl: string
     credentials: OpenClawClientOptions["credentials"]
     clientFactory: (options: OpenClawClientOptions) => OpenClawRuntimeClient
+    /** `runtime.mediaArtifacts`; on unless the deployment turns it off. */
+    mediaArtifacts?: boolean
   }>
 
 /**
@@ -167,6 +170,7 @@ export function composeOpenClawRuntime({
   credentials,
   logger,
   clientFactory,
+  mediaArtifacts,
 }: OpenClawRuntimeParts) {
   const state: { subscriptions?: OpenClawSessionSubscriptions } = {}
   const resubscribe = (reason: "gap" | "reconnect") => {
@@ -230,6 +234,7 @@ export function composeOpenClawRuntime({
       // reads with the log masker.
       deviceToken: async () => (await credentials()).deviceToken,
       mcpToolNames,
+      ...(mediaArtifacts === undefined ? {} : { mediaArtifacts }),
       subscribeSession: async (agentId, sessionKey, onInvalidate) => {
         const lease = await subscriptions!.acquire(
           { agentId, sessionKey },
@@ -270,6 +275,7 @@ export async function createOpenClawRuntime(
       baseUrl: config.baseUrl,
       credentials,
       logger,
+      mediaArtifacts: config.mediaArtifacts,
       clientFactory:
         dependencies.clientFactory ??
         ((options) => new OpenClawClient(options)),

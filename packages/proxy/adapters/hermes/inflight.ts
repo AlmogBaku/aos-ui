@@ -19,7 +19,10 @@ import type {
   SessionPlanActivityMessage,
 } from "../../../protocol"
 
-import { projectHermesMediaText } from "./media-artifacts"
+import {
+  projectHermesMediaText,
+  type HermesMediaOptions,
+} from "./media-artifacts"
 import { isRecord, nativeId } from "./native"
 import { boundedText } from "./run-frames"
 import { nativeFailure, publicTurnFailure } from "./run-failures"
@@ -145,7 +148,8 @@ export function unansweredPrompt(
  */
 export function restoredHermesFailedTurn(
   inflight: HermesInflightTurn,
-  turn: { id: string; userText: string; createdAt: string }
+  turn: { id: string; userText: string; createdAt: string },
+  media: HermesMediaOptions = {}
 ): SessionMessage | undefined {
   if (!inflightTurnFailed(inflight)) return undefined
   if (!answersPrompt(inflight.user, turn.userText)) return undefined
@@ -164,7 +168,7 @@ export function restoredHermesFailedTurn(
   // artifact live published for it.
   // Truncated, never refused: an oversized retained turn must not fail the
   // whole history load on the protocol's character bound.
-  const projected = projectHermesMediaText(inflight.assistant ?? "", [])
+  const projected = projectHermesMediaText(inflight.assistant ?? "", [], media)
   const text = projected.text.slice(0, MAX_TEXT_PART_CHARACTERS)
   return {
     id: turn.id,

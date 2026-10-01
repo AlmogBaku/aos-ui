@@ -126,6 +126,11 @@ const SANDBOX = "default-src 'none'; frame-ancestors 'none'; sandbox"
 const SINGLE_RANGE = /^bytes=(?:\d{1,16}-\d{0,16}|-\d{1,16})$/u
 /** The only runtime headers a file answer passes on. */
 const PASSED_HEADERS = ["content-length", "content-range", "accept-ranges"]
+/**
+ * Audio and video, which play but never run as code, keep their reported
+ * subtype when it is a plain token.
+ */
+const MEDIA_TYPE = /^(?:audio|video)\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/u
 /** The types a file keeps as the runtime reported them: none of them runs. */
 const KEPT_TYPES: ReadonlySet<string> = new Set([
   "application/pdf",
@@ -141,7 +146,7 @@ const CHARSET = /;\s*charset="?([\w.:-]{1,40})"?\s*(?:;|$)/iu
 /** The type a file goes out as: kept, plain text, or bytes a browser only saves. */
 function servedType(reported: string | null) {
   const type = (reported ?? "").split(";", 1)[0].trim().toLowerCase()
-  if (KEPT_TYPES.has(type)) return type
+  if (KEPT_TYPES.has(type) || MEDIA_TYPE.test(type)) return type
   if (!type.startsWith("text/")) return "application/octet-stream"
   const charset = CHARSET.exec(reported ?? "")?.[1]
   return charset ? `text/plain; charset=${charset}` : "text/plain"

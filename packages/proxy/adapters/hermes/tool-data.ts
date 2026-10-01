@@ -34,7 +34,10 @@ import {
   REDACTED,
   redactCredentials,
 } from "../../../../shared/credentials"
-import { projectHermesMediaArtifacts } from "./media-artifacts"
+import {
+  projectHermesMediaArtifacts,
+  type HermesMediaOptions,
+} from "./media-artifacts"
 
 /** Hermes' native tool names AOS renames. */
 export const CANONICAL_TOOL_NAMES = new Map<string, string>([
@@ -676,20 +679,23 @@ export type HermesToolOutcome = {
 /**
  * The public outcome of one native Hermes tool call: error classification, the
  * inspectable result, and the artifact descriptors the outcome publishes. A
- * failed tool publishes nothing.
+ * failed tool publishes nothing, and neither does any tool when the deployment
+ * turns `mediaArtifacts` off.
  */
 export function projectHermesToolOutcome(
   toolCallId: string,
   name: string,
   wrapped: unknown,
-  nativeIsError = false
+  nativeIsError = false,
+  { mediaArtifacts = true }: HermesMediaOptions = {}
 ): HermesToolOutcome {
   const result = unwrappedToolText(wrapped)
   const canonicalName = canonicalToolName(name)
   const isError = hermesToolResultIsError(result, nativeIsError)
-  const media = isError
-    ? []
-    : projectHermesMediaArtifacts(toolCallId, canonicalName, result)
+  const media =
+    isError || !mediaArtifacts
+      ? []
+      : projectHermesMediaArtifacts(toolCallId, canonicalName, result)
   return {
     isError,
     result: publicToolResult(canonicalName, result, isError),

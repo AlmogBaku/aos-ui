@@ -173,10 +173,15 @@ function toolCallParts(
   ]
 }
 
+/**
+ * A message's public parts. A media block becomes an Artifact only where
+ * `media` allows it; otherwise it has no text to fall back to and is left out.
+ */
 function messageParts(
   value: unknown,
   outcomes: ReadonlyMap<string, ToolOutcome>,
-  resolve: McpToolNameResolver
+  resolve: McpToolNameResolver,
+  media: boolean
 ): SessionMessage["content"] {
   if (typeof value === "string") return [{ type: "text", text: value }]
   if (!Array.isArray(value)) return []
@@ -192,8 +197,8 @@ function messageParts(
       parts.push(...toolCallParts(part, outcomes, resolve))
       continue
     }
-    const media = openClawMediaArtifact(part)
-    if (media) parts.push(artifactPart(media))
+    const artifact = media ? openClawMediaArtifact(part) : undefined
+    if (artifact) parts.push(artifactPart(artifact))
   }
   return parts
 }
@@ -222,7 +227,8 @@ function unresolvedToolNames(rows: readonly unknown[]) {
 
 function projectMessages(
   rows: readonly unknown[],
-  resolve: McpToolNameResolver
+  resolve: McpToolNameResolver,
+  mediaArtifacts: boolean
 ): SessionMessage[] {
   const outcomes = toolOutcomes(rows)
   const messages: Array<{
@@ -238,7 +244,13 @@ function projectMessages(
     const message: SessionMessage = {
       id,
       role: raw.role,
-      content: messageParts(raw.content, outcomes, resolve),
+      // The operator's own uploads stay whatever `mediaArtifacts` says.
+      content: messageParts(
+        raw.content,
+        outcomes,
+        resolve,
+        raw.role === "user" || mediaArtifacts
+      ),
       createdAt: timestamp(raw, index),
     }
     messages.push({ message, sequence: nativeSequence(raw, index), index })
@@ -367,6 +379,8 @@ export function createOpenClawHistory(input: {
   authority: OpenClawHistoryAuthority
   subscribeSession?: OpenClawHistorySubscription
   mcpToolNames?: OpenClawMcpToolNames
+  /** Whether an Agent's media blocks become Artifacts; on by default. */
+  mediaArtifacts?: boolean
 }): OpenClawHistoryOperations {
   const requireScope = async (agentId: string, sessionKey: string) => {
     const session = await input.authority.getSession(agentId, sessionKey)
@@ -469,7 +483,8 @@ export function createOpenClawHistory(input: {
         await input.mcpToolNames?.load(agentId, sessionKey, unresolved)
       const messages = projectMessages(
         rows,
-        input.mcpToolNames?.resolver(agentId, sessionKey) ?? (() => undefined)
+        input.mcpToolNames?.resolver(agentId, sessionKey) ?? (() => undefined),
+        input.mediaArtifacts ?? true
       )
       return {
         sessionId: sessionKey,

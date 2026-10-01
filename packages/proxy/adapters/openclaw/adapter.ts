@@ -143,6 +143,8 @@ type OpenClawServerAdapterOptions = Readonly<{
   fetch?: typeof fetch
   /** Shared with the turn engine so live and stored tool names agree. */
   mcpToolNames?: OpenClawMcpToolNames
+  /** `runtime.mediaArtifacts`; on unless the deployment turns it off. */
+  mediaArtifacts?: boolean
 }>
 
 /**
@@ -178,6 +180,9 @@ export class OpenClawServerAdapter implements ServerRuntime {
       subscribeSession: options.subscribeSession,
       mcpToolNames:
         options.mcpToolNames ?? createOpenClawMcpToolNames(options.client),
+      ...(options.mediaArtifacts === undefined
+        ? {}
+        : { mediaArtifacts: options.mediaArtifacts }),
     })
     this.mcpApps = createOpenClawMcpApps({
       client: options.client,

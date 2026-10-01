@@ -214,6 +214,7 @@ const MINIMAL_CONFIG = {
     baseUrl: "http://127.0.0.1:9119",
     tokenFile: "/run/secrets/hermes-token",
     sessionIdleMs: 300_000,
+    mediaArtifacts: true,
   },
   limits: {
     activeExecutions: 256,
@@ -551,6 +552,7 @@ const EVERY_OVERRIDE: Record<string, string> = {
   RUNTIME_BASE_URL: "http://127.0.0.1:9119",
   RUNTIME_TOKEN_FILE: "/run/secrets/hermes-token",
   RUNTIME_SESSION_IDLE_MS: "300000",
+  RUNTIME_MEDIA_ARTIFACTS: "false",
   LIMITS_ACTIVE_EXECUTIONS: "256",
   LIMITS_GUEST_ACTIVE_EXECUTIONS: "32",
   LIMITS_OPERATOR_EVENT_PEERS: "256",

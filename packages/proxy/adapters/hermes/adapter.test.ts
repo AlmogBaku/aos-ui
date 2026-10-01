@@ -254,7 +254,7 @@ describe("Hermes server adapter", () => {
     )
   })
 
-  it("reads what an assistant MEDIA line published", async () => {
+  it("reads what an assistant MEDIA line published, and leaves the line as text when media artifacts are off", async () => {
     const chartPath = "/home/alice/reports/chart.png"
     const messages = [
       {
@@ -289,6 +289,15 @@ describe("Hermes server adapter", () => {
     expect(http.mock.calls.at(-1)?.[0]).toContain(
       `path=${encodeURIComponent(chartPath)}&profile=researcher`
     )
+
+    const off = new HermesServerAdapter(
+      { ...rpcRouter(), http },
+      { media: { mediaArtifacts: false } }
+    )
+    const plain = await off.history("researcher", "stored", 200, 0)
+    expect(plain.messages.flatMap(({ content }) => content)).toEqual([
+      { type: "text", text: messages[0]!.content },
+    ])
   })
 
   it("reports a media artifact the provider can no longer read as not found", async () => {

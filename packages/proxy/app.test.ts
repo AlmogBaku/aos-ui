@@ -769,6 +769,8 @@ describe("MCP App files", () => {
     ["feed.xml", "application/xml", "application/octet-stream", "feed.xml"],
     ["report.pdf", "application/pdf", "application/pdf", "report.pdf"],
     ["photo.png", "IMAGE/PNG", "image/png", "photo.png"],
+    ["memo.mp3", "audio/mpeg", "audio/mpeg", "memo.mp3"],
+    ["clip.mp4", "video/mp4; codecs=avc1", "video/mp4", "clip.mp4"],
     [
       'notes "v2"; (final).txt',
       "text/plain",

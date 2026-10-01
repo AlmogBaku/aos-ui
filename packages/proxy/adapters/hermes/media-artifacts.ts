@@ -12,6 +12,9 @@ import {
 } from "./native"
 import { parseJsonOrValue } from "../todos"
 
+/** Whether the deployment turns the media Hermes delivers into Artifacts. */
+export type HermesMediaOptions = { mediaArtifacts?: boolean }
+
 export type HermesMediaArtifact = {
   reference: string
   descriptor: {
@@ -275,10 +278,19 @@ export class HermesMediaTextFilter {
   readonly #trusted = new Set<string>()
   readonly #published = new Set<string>()
   #artifacts: HermesMediaArtifact[] = []
-  readonly #lines = new MediaLineFilter((reference) => this.#claim(reference))
+  readonly #lines?: MediaLineFilter
 
-  constructor(trustedReferences: Iterable<string> = []) {
+  /**
+   * With `mediaArtifacts` off the deployment publishes no media, so the text
+   * passes through as Hermes wrote it, MEDIA lines included.
+   */
+  constructor(
+    trustedReferences: Iterable<string> = [],
+    { mediaArtifacts = true }: HermesMediaOptions = {}
+  ) {
     for (const reference of trustedReferences) this.#trusted.add(reference)
+    if (mediaArtifacts)
+      this.#lines = new MediaLineFilter((reference) => this.#claim(reference))
   }
 
   trust(reference: string) {
@@ -286,11 +298,11 @@ export class HermesMediaTextFilter {
   }
 
   write(value: string) {
-    return this.#lines.write(value)
+    return this.#lines ? this.#lines.write(value) : value
   }
 
   finish() {
-    return this.#lines.finish()
+    return this.#lines?.finish() ?? ""
   }
 
   /** The artifacts the lines filtered since the last call delivered. */
@@ -315,8 +327,10 @@ export class HermesMediaTextFilter {
 
 export function projectHermesMediaText(
   text: string,
-  trustedReferences: Iterable<string>
+  trustedReferences: Iterable<string>,
+  options: HermesMediaOptions = {}
 ) {
+  if (options.mediaArtifacts === false) return { text, artifacts: [] }
   const filter = new HermesMediaTextFilter(trustedReferences)
   const projected = `${filter.write(text)}${filter.finish()}`
   return {

@@ -14,6 +14,7 @@ import {
 import {
   projectHermesAttachedImages,
   projectHermesMediaText,
+  type HermesMediaOptions,
 } from "./media-artifacts"
 import { classifyHermesRow } from "./scaffolding"
 import {
@@ -230,7 +231,8 @@ function leadOf(
 /** Converts provider-native durable rows into the strict public history shape. */
 export function projectHermesHistory(
   rows: readonly unknown[],
-  resolve?: McpToolNameResolver
+  resolve?: McpToolNameResolver,
+  media: HermesMediaOptions = {}
 ): SessionMessage[] {
   const messages: SessionMessage[] = []
   const calls = new Map<string, { messageIndex: number; partIndex: number }>()
@@ -293,7 +295,8 @@ export function projectHermesHistory(
         toolCallId,
         toolName,
         value.content ?? value.result,
-        value.is_error === true
+        value.is_error === true,
+        media
       )
       const diffs = outcome.isError
         ? undefined
@@ -362,7 +365,11 @@ export function projectHermesHistory(
       role === "user" ? projectHermesUserContent(text, rowMessageId) : undefined
     const assistantContent =
       role === "assistant" && !interrupted
-        ? projectHermesMediaText(text, mediaReferences.get(turn.index) ?? [])
+        ? projectHermesMediaText(
+            text,
+            mediaReferences.get(turn.index) ?? [],
+            media
+          )
         : undefined
     const visibleText = interrupted
       ? ""

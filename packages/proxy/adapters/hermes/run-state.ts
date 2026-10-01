@@ -13,7 +13,10 @@ import type { SessionScope } from "../../core/runtime"
 import type { storageReceipt } from "../../core/storage-receipt"
 import type { Todo } from "../todos"
 import type { HermesLog } from "./gateway"
-import { HermesMediaTextFilter } from "./media-artifacts"
+import {
+  HermesMediaTextFilter,
+  type HermesMediaOptions,
+} from "./media-artifacts"
 import { EventQueue, startedTurnQueue } from "./event-queue"
 import {
   TURN_FAILURES,
@@ -204,18 +207,19 @@ function turnSettlement() {
 }
 
 /** The streaming state of one assistant generation; a sealed one starts over. */
-export function generationState() {
+export function generationState(media: HermesMediaOptions) {
   return {
     textStarted: false,
     streamedText: "" as string | undefined,
-    mediaFilter: new HermesMediaTextFilter(),
+    mediaFilter: new HermesMediaTextFilter([], media),
     streamedReasoning: "",
   }
 }
 
 export function createActiveTurn(
   scope: HermesTurnScope,
-  turnId: string
+  turnId: string,
+  media: HermesMediaOptions
 ): ActiveTurn {
   return {
     scope,
@@ -228,7 +232,7 @@ export function createActiveTurn(
     responses: 0,
     toolsDone: false,
     generation: 0,
-    ...generationState(),
+    ...generationState(media),
     tools: new Map(),
     turn: "open",
     errorObserved: false,

@@ -107,6 +107,14 @@ runtime or credential.
 the last subscriber disconnects before closing only that Session. The shared
 Hermes socket remains open.
 
+`runtime.mediaArtifacts` (every runtime, default `true`) turns native assistant
+media into Artifacts: a Hermes `MEDIA:` line or text-to-speech receipt, and an
+OpenClaw media block. Set it to `false` to leave that media as the runtime sent
+it: a Hermes `MEDIA:` line stays visible in the message text, and an OpenClaw
+assistant media block, which has no text form, is not shown. Images the
+operator or a guest attaches to their own message stay Artifacts either way.
+OpenCode publishes no native media, so the field has no effect there.
+
 When `guest` is configured, its `invitations` block accepts:
 
 | Field              | Default  | Meaning                                                       |
@@ -161,6 +169,7 @@ default; a minimal local file contains only those three fields.
 | `log.level`                          | `info`      |
 | `shutdownGraceMs`                    | `5000`      |
 | `runtime.sessionIdleMs` (Hermes)     | `300000`    |
+| `runtime.mediaArtifacts`             | `true`      |
 | `guest.invitations.clockSkewSeconds` | `0`         |
 | `voice.*.mode`                       | `fallback`  |
 | `voice.*.timeoutMs`                  | `60000`     |
@@ -170,7 +179,7 @@ default; a minimal local file contains only those three fields.
 
 Every scalar field in the schema can be set or overridden by an environment
 variable prefixed `AOS_UI_PROXY_`. Values are trimmed; an empty string after
-trimming means the variable is not set. Integer fields must be whole numbers.
+trimming means the variable is not set. Integer fields must be whole numbers; boolean fields take `true` or `false`.
 `AOS_UI_PROXY_RUNTIME_KIND` is read first and determines which runtime-specific
 rows apply; using a runtime-specific variable with the wrong kind is an error.
 A variable whose `Applies` is "only when file has `guest` block" fails if the
@@ -187,53 +196,54 @@ variables, set both `AOS_UI_PROXY_LISTEN_HOST=0.0.0.0` and
 `AOS_UI_PROXY_LISTEN_EXPOSURE=private-container`; setting the host alone fails
 schema validation.
 
-| Variable                                            | Field                                | Type   | Applies                          |
-| --------------------------------------------------- | ------------------------------------ | ------ | -------------------------------- |
-| `AOS_UI_PROXY_DEPLOYMENT_ID`                        | `deploymentId`                       | string | always                           |
-| `AOS_UI_PROXY_PUBLIC_ORIGIN`                        | `publicOrigin`                       | string | always                           |
-| `AOS_UI_PROXY_LISTEN_HOST`                          | `listen.host`                        | string | always                           |
-| `AOS_UI_PROXY_LISTEN_PORT`                          | `listen.port`                        | int    | always                           |
-| `AOS_UI_PROXY_LISTEN_EXPOSURE`                      | `listen.exposure`                    | string | always                           |
-| `AOS_UI_PROXY_RUNTIME_ID`                           | `runtime.id`                         | string | always                           |
-| `AOS_UI_PROXY_RUNTIME_KIND`                         | `runtime.kind`                       | string | always                           |
-| `AOS_UI_PROXY_RUNTIME_BASE_URL`                     | `runtime.baseUrl`                    | string | always                           |
-| `AOS_UI_PROXY_RUNTIME_TOKEN_FILE`                   | `runtime.tokenFile`                  | string | hermes only                      |
-| `AOS_UI_PROXY_RUNTIME_SESSION_IDLE_MS`              | `runtime.sessionIdleMs`              | int    | hermes only                      |
-| `AOS_UI_PROXY_RUNTIME_DIRECTORY`                    | `runtime.directory`                  | string | opencode only                    |
-| `AOS_UI_PROXY_RUNTIME_USERNAME`                     | `runtime.username`                   | string | opencode only                    |
-| `AOS_UI_PROXY_RUNTIME_PASSWORD_FILE`                | `runtime.passwordFile`               | string | opencode only                    |
-| `AOS_UI_PROXY_RUNTIME_DEVICE_IDENTITY_FILE`         | `runtime.deviceIdentityFile`         | string | openclaw only                    |
-| `AOS_UI_PROXY_RUNTIME_DEVICE_TOKEN_FILE`            | `runtime.deviceTokenFile`            | string | openclaw only                    |
-| `AOS_UI_PROXY_LIMITS_ACTIVE_EXECUTIONS`             | `limits.activeExecutions`            | int    | always                           |
-| `AOS_UI_PROXY_LIMITS_GUEST_ACTIVE_EXECUTIONS`       | `limits.guestActiveExecutions`       | int    | always                           |
-| `AOS_UI_PROXY_LIMITS_OPERATOR_EVENT_PEERS`          | `limits.operatorEventPeers`          | int    | always                           |
-| `AOS_UI_PROXY_LIMITS_SUBSCRIBER_EVENTS`             | `limits.subscriberEvents`            | int    | always                           |
-| `AOS_UI_PROXY_LIMITS_SUBSCRIBER_BYTES`              | `limits.subscriberBytes`             | int    | always                           |
-| `AOS_UI_PROXY_GUEST_LISTEN_HOST`                    | `guest.listen.host`                  | string | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_LISTEN_PORT`                    | `guest.listen.port`                  | int    | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_LISTEN_EXPOSURE`                | `guest.listen.exposure`              | string | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_PUBLIC_ORIGIN`                  | `guest.publicOrigin`                 | string | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_INVITATIONS_CLOCK_SKEW_SECONDS` | `guest.invitations.clockSkewSeconds` | int    | only when file has `guest` block |
-| `AOS_UI_PROXY_PUSH_STATE_DIR`                       | `push.stateDir`                      | string | may create `push` block          |
-| `AOS_UI_PROXY_PUSH_VAPID_SUBJECT`                   | `push.vapid.subject`                 | string | may create `push` block          |
-| `AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE`          | `push.vapid.privateKeyFile`          | string | may create `push` block          |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_PROVIDER`         | `voice.transcription.provider`       | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_BASE_URL`         | `voice.transcription.baseUrl`        | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_API_KEY_FILE`     | `voice.transcription.apiKeyFile`     | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_MODEL`            | `voice.transcription.model`          | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_MODE`             | `voice.transcription.mode`           | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_TIMEOUT_MS`       | `voice.transcription.timeoutMs`      | int    | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_LANGUAGE`         | `voice.transcription.language`       | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_PROVIDER`                | `voice.speech.provider`              | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_BASE_URL`                | `voice.speech.baseUrl`               | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_API_KEY_FILE`            | `voice.speech.apiKeyFile`            | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_MODEL`                   | `voice.speech.model`                 | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_MODE`                    | `voice.speech.mode`                  | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_TIMEOUT_MS`              | `voice.speech.timeoutMs`             | int    | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_VOICE`                   | `voice.speech.voice`                 | string | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_FORMAT`                  | `voice.speech.format`                | string | may create `voice` block         |
-| `AOS_UI_PROXY_LOG_LEVEL`                            | `log.level`                          | string | always                           |
-| `AOS_UI_PROXY_SHUTDOWN_GRACE_MS`                    | `shutdownGraceMs`                    | int    | always                           |
+| Variable                                            | Field                                | Type    | Applies                          |
+| --------------------------------------------------- | ------------------------------------ | ------- | -------------------------------- |
+| `AOS_UI_PROXY_DEPLOYMENT_ID`                        | `deploymentId`                       | string  | always                           |
+| `AOS_UI_PROXY_PUBLIC_ORIGIN`                        | `publicOrigin`                       | string  | always                           |
+| `AOS_UI_PROXY_LISTEN_HOST`                          | `listen.host`                        | string  | always                           |
+| `AOS_UI_PROXY_LISTEN_PORT`                          | `listen.port`                        | int     | always                           |
+| `AOS_UI_PROXY_LISTEN_EXPOSURE`                      | `listen.exposure`                    | string  | always                           |
+| `AOS_UI_PROXY_RUNTIME_ID`                           | `runtime.id`                         | string  | always                           |
+| `AOS_UI_PROXY_RUNTIME_KIND`                         | `runtime.kind`                       | string  | always                           |
+| `AOS_UI_PROXY_RUNTIME_BASE_URL`                     | `runtime.baseUrl`                    | string  | always                           |
+| `AOS_UI_PROXY_RUNTIME_MEDIA_ARTIFACTS`              | `runtime.mediaArtifacts`             | boolean | always                           |
+| `AOS_UI_PROXY_RUNTIME_TOKEN_FILE`                   | `runtime.tokenFile`                  | string  | hermes only                      |
+| `AOS_UI_PROXY_RUNTIME_SESSION_IDLE_MS`              | `runtime.sessionIdleMs`              | int     | hermes only                      |
+| `AOS_UI_PROXY_RUNTIME_DIRECTORY`                    | `runtime.directory`                  | string  | opencode only                    |
+| `AOS_UI_PROXY_RUNTIME_USERNAME`                     | `runtime.username`                   | string  | opencode only                    |
+| `AOS_UI_PROXY_RUNTIME_PASSWORD_FILE`                | `runtime.passwordFile`               | string  | opencode only                    |
+| `AOS_UI_PROXY_RUNTIME_DEVICE_IDENTITY_FILE`         | `runtime.deviceIdentityFile`         | string  | openclaw only                    |
+| `AOS_UI_PROXY_RUNTIME_DEVICE_TOKEN_FILE`            | `runtime.deviceTokenFile`            | string  | openclaw only                    |
+| `AOS_UI_PROXY_LIMITS_ACTIVE_EXECUTIONS`             | `limits.activeExecutions`            | int     | always                           |
+| `AOS_UI_PROXY_LIMITS_GUEST_ACTIVE_EXECUTIONS`       | `limits.guestActiveExecutions`       | int     | always                           |
+| `AOS_UI_PROXY_LIMITS_OPERATOR_EVENT_PEERS`          | `limits.operatorEventPeers`          | int     | always                           |
+| `AOS_UI_PROXY_LIMITS_SUBSCRIBER_EVENTS`             | `limits.subscriberEvents`            | int     | always                           |
+| `AOS_UI_PROXY_LIMITS_SUBSCRIBER_BYTES`              | `limits.subscriberBytes`             | int     | always                           |
+| `AOS_UI_PROXY_GUEST_LISTEN_HOST`                    | `guest.listen.host`                  | string  | only when file has `guest` block |
+| `AOS_UI_PROXY_GUEST_LISTEN_PORT`                    | `guest.listen.port`                  | int     | only when file has `guest` block |
+| `AOS_UI_PROXY_GUEST_LISTEN_EXPOSURE`                | `guest.listen.exposure`              | string  | only when file has `guest` block |
+| `AOS_UI_PROXY_GUEST_PUBLIC_ORIGIN`                  | `guest.publicOrigin`                 | string  | only when file has `guest` block |
+| `AOS_UI_PROXY_GUEST_INVITATIONS_CLOCK_SKEW_SECONDS` | `guest.invitations.clockSkewSeconds` | int     | only when file has `guest` block |
+| `AOS_UI_PROXY_PUSH_STATE_DIR`                       | `push.stateDir`                      | string  | may create `push` block          |
+| `AOS_UI_PROXY_PUSH_VAPID_SUBJECT`                   | `push.vapid.subject`                 | string  | may create `push` block          |
+| `AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE`          | `push.vapid.privateKeyFile`          | string  | may create `push` block          |
+| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_PROVIDER`         | `voice.transcription.provider`       | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_BASE_URL`         | `voice.transcription.baseUrl`        | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_API_KEY_FILE`     | `voice.transcription.apiKeyFile`     | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_MODEL`            | `voice.transcription.model`          | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_MODE`             | `voice.transcription.mode`           | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_TIMEOUT_MS`       | `voice.transcription.timeoutMs`      | int     | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_LANGUAGE`         | `voice.transcription.language`       | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_SPEECH_PROVIDER`                | `voice.speech.provider`              | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_SPEECH_BASE_URL`                | `voice.speech.baseUrl`               | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_SPEECH_API_KEY_FILE`            | `voice.speech.apiKeyFile`            | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_SPEECH_MODEL`                   | `voice.speech.model`                 | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_SPEECH_MODE`                    | `voice.speech.mode`                  | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_SPEECH_TIMEOUT_MS`              | `voice.speech.timeoutMs`             | int     | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_SPEECH_VOICE`                   | `voice.speech.voice`                 | string  | may create `voice` block         |
+| `AOS_UI_PROXY_VOICE_SPEECH_FORMAT`                  | `voice.speech.format`                | string  | may create `voice` block         |
+| `AOS_UI_PROXY_LOG_LEVEL`                            | `log.level`                          | string  | always                           |
+| `AOS_UI_PROXY_SHUTDOWN_GRACE_MS`                    | `shutdownGraceMs`                    | int     | always                           |
 
 ### Errors {#config-errors}
 

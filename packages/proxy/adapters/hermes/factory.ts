@@ -23,7 +23,12 @@ export type HermesRuntimeParts = Pick<
   RuntimeServices,
   "logger" | "mcpServerOverrides"
 > &
-  Readonly<{ transport: HermesRpcTransport; sessionIdleMs: number }>
+  Readonly<{
+    transport: HermesRpcTransport
+    sessionIdleMs: number
+    /** `runtime.mediaArtifacts`; on unless the deployment turns it off. */
+    mediaArtifacts?: boolean
+  }>
 
 /**
  * The Hermes runtime over a resolved transport: what the factory serves and
@@ -33,6 +38,7 @@ export function composeHermesRuntime({
   transport,
   logger,
   sessionIdleMs,
+  mediaArtifacts,
   mcpServerOverrides,
 }: HermesRuntimeParts) {
   // Eager dial: the gateway owns its redial ladder from here, so a Hermes that
@@ -52,6 +58,7 @@ export function composeHermesRuntime({
   const runtime = withMcpApps(
     new HermesServerAdapter(transport, {
       sessionIdleMs,
+      media: { mediaArtifacts },
       log: logger,
       mcp: { client: mcpAppClient, logger },
     })
@@ -95,6 +102,7 @@ export async function createHermesRuntime(
       transport,
       logger,
       sessionIdleMs: config.sessionIdleMs,
+      mediaArtifacts: config.mediaArtifacts,
       mcpServerOverrides: dependencies.mcpServerOverrides,
     }),
     limits,

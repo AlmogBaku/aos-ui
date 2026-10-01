@@ -248,6 +248,12 @@ The proxy removes each `MEDIA:` line from the prose, validates the path, and
 reads the bytes through `GET /api/fs/read-data-url`. A path that is relative,
 traverses, or names a credential file such as `.env` or `auth.json` is refused.
 
+Set `runtime.mediaArtifacts: false` to turn this off. A `MEDIA:` line then
+stays in the message text as written, and a text-to-speech receipt publishes no
+audio Artifact. Images attached to a user message stay Artifacts either way,
+because they belong to AOS's own attachment flow rather than to Hermes's
+delivery convention.
+
 ### MCP App file reads
 
 To read a file named by a `present_artifact` call's App view, the proxy
