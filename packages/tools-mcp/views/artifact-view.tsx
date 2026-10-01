@@ -1,8 +1,15 @@
 import {
   Download,
   ExternalLink,
+  File,
+  FileCode,
+  FileImage,
+  FileMusic,
+  FileText,
+  FileVideoCamera,
   PictureInPicture2,
   RotateCw,
+  type LucideIcon,
 } from "lucide-react"
 import {
   lazy,
@@ -11,13 +18,16 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type MouseEvent,
+  type ReactNode,
 } from "react"
 import { z } from "zod"
 
 import type { PresentArtifactResult } from "../../../shared/presentation/tools"
 import {
   PREVIEW_LIMITS,
+  kindOf,
+  knownType,
+  type FileKind,
   type FilePreview,
   type PreviewLimits,
 } from "./artifact/file"
@@ -26,15 +36,15 @@ import { CopyButton } from "./artifact/copy-button"
 import { CsvTable } from "./artifact/csv-table"
 import { HtmlPreview } from "./artifact/html-preview"
 import { Markdown } from "./artifact/markdown"
+import { MediaPlayer } from "./artifact/media-player"
 import { useRoom, type Room } from "./artifact/room"
 import { useFile } from "./artifact/use-file"
 import { ZoomPane } from "./artifact/zoom"
 import type { ViewLabels } from "./locale"
-import { cn } from "./ui/cn"
 import { IconButton } from "./ui/icon-button"
+import { MenuButton, type MenuAction } from "./ui/menu-button"
 import { Status } from "./ui/status"
-import { ToolbarSlot } from "./ui/toolbar"
-import { ViewTitle } from "./ui/view-title"
+import { Compact, ToolbarSlot, useCompact } from "./ui/toolbar"
 import type { ViewApp, ViewProps } from "./view"
 
 const PdfPreview = lazy(() =>
@@ -192,14 +202,12 @@ function Preview({
   labels,
   app,
   room,
-  pip,
 }: {
   preview: FilePreview
   filename: string
   labels: ArtifactLabels
   app: ViewApp
   room: Room
-  pip: boolean
 }) {
   switch (preview.kind) {
     case "pdf":
@@ -238,7 +246,7 @@ function Preview({
           filename={filename}
           labels={labels}
           app={app}
-          size={pip ? { height: room.height } : { maxHeight: room.height }}
+          size={{ height: room.height }}
         />
       )
     case "none":
@@ -246,32 +254,127 @@ function Preview({
   }
 }
 
-/** The height the view keeps to in its message when the host names none. */
-const INLINE_HEIGHT = 480
-
-/**
- * The height the host lets the view take in its message, which a page, an
- * image, or an HTML file fills, as the page's own preview gave one most of
- * the window.
- */
-function inlineLimit(context: ViewProps<unknown>["context"]) {
-  const dimensions = context?.containerDimensions
-  return dimensions && "maxHeight" in dimensions && dimensions.maxHeight
-    ? dimensions.maxHeight
-    : INLINE_HEIGHT
+/** Each kind's icon on the file's card. */
+const KIND_ICONS: Record<FileKind, LucideIcon> = {
+  pdf: FileText,
+  image: FileImage,
+  html: FileCode,
+  text: FileText,
+  audio: FileMusic,
+  video: FileVideoCamera,
 }
 
-/** What a press on a control or link does itself, rather than expand the view. */
-const CONTROLS = "a, button, input, select, textarea, summary, [role='tab']"
+/**
+ * The file in its message, as a card that names it and its type, with Download
+ * and Open in new tab; a press on it opens the side panel where that is
+ * offered. A player, as `children`, plays in place below.
+ */
+function FileCard({
+  filename,
+  type,
+  labels,
+  actions,
+  onOpen,
+  children,
+}: {
+  filename: string
+  type: string | undefined
+  labels: ArtifactLabels
+  actions: readonly MenuAction[]
+  onOpen: (() => void) | undefined
+  children?: ReactNode
+}) {
+  const kind = kindOf(type)
+  const Icon = kind ? KIND_ICONS[kind] : File
+  const content = (
+    <span className="flex min-w-0 items-center gap-2">
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+        <Icon className="size-4" aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium" dir="auto">
+          {filename}
+        </span>
+        {type ? (
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+            {type}
+          </span>
+        ) : null}
+      </span>
+    </span>
+  )
+  const contentClass = "flex min-w-0 rounded-lg text-start"
+  return (
+    <article
+      className={`grid ${children ? "w-full" : "w-fit"} max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-border bg-card p-2 text-card-foreground`}
+    >
+      {onOpen ? (
+        <button
+          type="button"
+          aria-label={labels.view(filename)}
+          className={`${contentClass} cursor-pointer outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [@media(pointer:coarse)]:min-h-11`}
+          onClick={onOpen}
+        >
+          {content}
+        </button>
+      ) : (
+        <div className={contentClass}>{content}</div>
+      )}
+      <div className="flex items-center gap-1">
+        {actions.map(({ label, icon, onSelect }) => (
+          <IconButton key={label} label={label} onClick={onSelect}>
+            {icon}
+          </IconButton>
+        ))}
+      </div>
+      {children ? <div className="col-span-2">{children}</div> : null}
+    </article>
+  )
+}
 
-/** Whether text in the view is selected, so a press may be ending a selection. */
-function selecting() {
-  return window.getSelection()?.isCollapsed === false
+/**
+ * An image in its message, contained in a box at most a modest height and as
+ * wide as the message, a small one scaled up to fill it; a press on it opens
+ * the side panel where that is offered.
+ */
+function ImageThumbnail({
+  url,
+  filename,
+  labels,
+  onOpen,
+}: {
+  url: string
+  filename: string
+  labels: ArtifactLabels
+  onOpen: (() => void) | undefined
+}) {
+  const image = (
+    <img
+      src={url}
+      alt={filename}
+      className="block h-auto max-h-64 w-full rounded-lg border border-border object-contain"
+    />
+  )
+  return onOpen ? (
+    <button
+      type="button"
+      aria-label={labels.view(filename)}
+      className="block w-full cursor-pointer rounded-lg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      onClick={onOpen}
+    >
+      {image}
+    </button>
+  ) : (
+    image
+  )
 }
 
 /**
  * The file `present_artifact` shows, read from the address the page grants in
- * `aos/files`. Download and Open in new tab hand the page that same address.
+ * `aos/files`. In its message an image shows alone, and any other file as a
+ * card without its contents; the side panel previews it whole, with every
+ * control. Download and Open in new
+ * tab hand the page that same address.
  */
 export function ArtifactView({
   value,
@@ -282,29 +385,57 @@ export function ArtifactView({
 }: ViewProps<PresentArtifactResult> & { previewLimits?: PreviewLimits }) {
   const artifact = labels.artifact
   const address = filesSchema.safeParse(context?.["aos/files"]).data?.path
-  const file = useFile(address, value.filename, value.mimeType, previewLimits)
   const pip = context?.displayMode === "pip"
+  const type = knownType(value)
+  const kind = kindOf(type)
+  // Media plays from its address, never read; in its message only an image
+  // is read, since only an image shows there.
+  const media = kind === "audio" || kind === "video" ? kind : undefined
+  const file = useFile(
+    media === undefined && (pip || kind === "image") ? address : undefined,
+    value.filename,
+    value.mimeType,
+    previewLimits
+  )
   const root = useRef<HTMLDivElement>(null)
+  const compact = useCompact(root)
   const box = useRef<HTMLDivElement>(null)
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
-  // In the side panel the view fills it; in its message it keeps to the
-  // height the host allows.
-  const room = useRoom(
-    root,
-    box,
-    pip ? undefined : inlineLimit(context),
-    file.state.status === "ready"
-  )
+  const room = useRoom(root, box, pip && file.state.status === "ready")
   const offersPip = context?.availableDisplayModes?.includes("pip") === true
-  // A press that starts or ends inside a selection is reading, not asking.
-  const selected = useRef(false)
-  const expand = (event: MouseEvent) => {
-    const pressedSelection = selected.current || selecting()
-    selected.current = false
-    if (!offersPip || pip || pressedSelection) return
-    if ((event.target as Element).closest(CONTROLS)) return
-    void app.requestDisplayMode({ mode: "pip" }).catch(ignore)
-  }
+  const openPip = offersPip
+    ? () => void app.requestDisplayMode({ mode: "pip" }).catch(ignore)
+    : undefined
+  const download: MenuAction | undefined =
+    address === undefined
+      ? undefined
+      : {
+          label: artifact.download,
+          icon: <Download />,
+          onSelect: () =>
+            void app
+              .downloadFile({
+                contents: [
+                  {
+                    type: "resource_link",
+                    uri: address,
+                    name: value.filename,
+                    ...(value.mimeType === undefined
+                      ? {}
+                      : { mimeType: value.mimeType }),
+                  },
+                ],
+              })
+              .catch(ignore),
+        }
+  const open: MenuAction | undefined =
+    address === undefined
+      ? undefined
+      : {
+          label: artifact.open,
+          icon: <ExternalLink />,
+          onSelect: () => void app.openLink({ url: address }).catch(ignore),
+        }
   // In the side panel, Esc returns the view to its message, unless something
   // in the view used the key first.
   useEffect(() => {
@@ -317,96 +448,107 @@ export function ArtifactView({
     window.addEventListener("keydown", leave)
     return () => window.removeEventListener("keydown", leave)
   }, [app, pip])
-  return (
-    <div ref={root} className={cn("flex flex-col gap-3 p-3", pip && "h-dvh")}>
-      {/* The side panel names the file above the view, so the view does not. */}
-      <div className="flex flex-wrap items-center gap-2">
-        {pip ? null : (
-          <div className="min-w-0 flex-1 basis-48 wrap-anywhere">
-            <ViewTitle title={value.filename} />
-          </div>
-        )}
-        <div ref={setToolbar} className="flex items-center empty:hidden" />
-        {address === undefined ? null : (
-          <div className="ms-auto flex items-center gap-1">
-            {/* HTML carries its Copy over its source. */}
-            {file.state.status === "ready" &&
-            file.state.preview.kind === "text" ? (
-              <CopyButton text={file.state.preview.text} labels={artifact} />
-            ) : null}
-            <IconButton label={artifact.refresh} onClick={file.refresh}>
-              <RotateCw />
-            </IconButton>
-            <IconButton
-              label={artifact.download}
-              onClick={() =>
-                void app
-                  .downloadFile({
-                    contents: [
-                      {
-                        type: "resource_link",
-                        uri: address,
-                        name: value.filename,
-                        ...(value.mimeType === undefined
-                          ? {}
-                          : { mimeType: value.mimeType }),
-                      },
-                    ],
-                  })
-                  .catch(ignore)
-              }
-            >
-              <Download />
-            </IconButton>
-            <IconButton
-              label={artifact.open}
-              onClick={() => void app.openLink({ url: address }).catch(ignore)}
-            >
-              <ExternalLink />
-            </IconButton>
-            {offersPip ? (
-              <IconButton
-                label={artifact.pip}
-                pressed={pip}
-                onClick={() =>
-                  void app
-                    .requestDisplayMode({ mode: pip ? "inline" : "pip" })
-                    .catch(ignore)
-                }
-              >
-                <PictureInPicture2 />
-              </IconButton>
-            ) : null}
-          </div>
+
+  if (context !== undefined && address === undefined)
+    return (
+      <div ref={root} className="p-3">
+        <Status>{artifact.unreachable}</Status>
+      </div>
+    )
+  const player =
+    media && address ? (
+      <MediaPlayer
+        kind={media}
+        src={address}
+        label={`${artifact[media]}: ${value.filename}`}
+        speedLabel={artifact.playbackSpeed}
+        fill={pip}
+      />
+    ) : null
+  if (!pip)
+    return (
+      <div ref={root} className="p-3">
+        {file.state.status === "ready" &&
+        file.state.preview.kind === "image" ? (
+          <ImageThumbnail
+            url={file.state.preview.url}
+            filename={value.filename}
+            labels={artifact}
+            onOpen={openPip}
+          />
+        ) : (
+          <FileCard
+            filename={value.filename}
+            type={type}
+            labels={artifact}
+            actions={[download, open].filter((action) => action !== undefined)}
+            onOpen={openPip}
+          >
+            {player}
+          </FileCard>
         )}
       </div>
-      {context !== undefined && address === undefined ? (
-        <Status>{artifact.unreachable}</Status>
-      ) : file.state.status === "ready" ? (
-        // A press on the preview opens the side panel; the Picture in picture
-        // button does the same from the keyboard.
-        <div
-          ref={box}
-          onPointerDown={() => {
-            selected.current = selecting()
-          }}
-          onClick={expand}
-        >
-          <ToolbarSlot value={toolbar}>
-            <Preview
-              preview={file.state.preview}
-              filename={value.filename}
-              labels={artifact}
-              app={app}
-              room={room}
-              pip={pip}
-            />
-          </ToolbarSlot>
+    )
+  // The page above the side panel names the file, so the view does not.
+  // Media reloads from its own controls, so it has no Refresh.
+  const actions = [
+    media
+      ? undefined
+      : { label: artifact.refresh, icon: <RotateCw />, onSelect: file.refresh },
+    download,
+    open,
+  ].filter((action) => action !== undefined)
+  return (
+    <div ref={root} className="flex h-dvh flex-col gap-3 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div ref={setToolbar} className="flex items-center empty:hidden" />
+        <div className="ms-auto flex items-center gap-1">
+          {/* HTML carries its Copy over its source. */}
+          {file.state.status === "ready" &&
+          file.state.preview.kind === "text" ? (
+            <CopyButton text={file.state.preview.text} labels={artifact} />
+          ) : null}
+          {compact ? (
+            <MenuButton label={artifact.more} actions={actions} />
+          ) : (
+            actions.map(({ label, icon, onSelect }) => (
+              <IconButton key={label} label={label} onClick={onSelect}>
+                {icon}
+              </IconButton>
+            ))
+          )}
+          {offersPip ? (
+            <IconButton
+              label={artifact.pip}
+              pressed
+              onClick={() =>
+                void app.requestDisplayMode({ mode: "inline" }).catch(ignore)
+              }
+            >
+              <PictureInPicture2 />
+            </IconButton>
+          ) : null}
         </div>
-      ) : (
-        // Each state still loading or refused names its own label.
-        <Status>{artifact[file.state.status]}</Status>
-      )}
+      </div>
+      {player ??
+        (file.state.status === "ready" ? (
+          <div ref={box}>
+            <ToolbarSlot value={toolbar}>
+              <Compact value={compact}>
+                <Preview
+                  preview={file.state.preview}
+                  filename={value.filename}
+                  labels={artifact}
+                  app={app}
+                  room={room}
+                />
+              </Compact>
+            </ToolbarSlot>
+          </div>
+        ) : (
+          // Each state still loading or refused names its own label.
+          <Status>{artifact[file.state.status]}</Status>
+        ))}
     </div>
   )
 }

@@ -18,6 +18,7 @@ export const he = {
     downloadFailed: "לא ניתן להוריד את התוצר.",
     audio: "קובץ שמע",
     video: "סרטון",
+    playbackSpeed: "מהירות ניגון",
     fileTooLarge: "הקובץ גדול מדי לתצוגה מקדימה.",
   },
   activity: {

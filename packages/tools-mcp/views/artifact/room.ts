@@ -12,14 +12,12 @@ function same(a: Room, b: Room) {
 
 /**
  * The room below the view's header that a preview may fill without the view
- * scrolling: down to the bottom of `root`, or to `limit` pixels below its top
- * when the host caps the view's height. Neither bound depends on the preview,
- * so filling it never moves it.
+ * scrolling: down to the bottom of `root`, which does not depend on the
+ * preview, so filling it never moves it.
  */
 export function useRoom(
   root: RefObject<HTMLElement | null>,
   box: RefObject<HTMLElement | null>,
-  limit: number | undefined,
   ready: boolean
 ) {
   const [room, setRoom] = useState<Room>({ width: 0, height: MIN_HEIGHT })
@@ -28,9 +26,7 @@ export function useRoom(
     const inner = box.current
     if (!ready || !outer || !inner) return
     const measure = () => {
-      const top = outer.getBoundingClientRect().top
-      const bottom =
-        limit === undefined ? outer.getBoundingClientRect().bottom : top + limit
+      const bottom = outer.getBoundingClientRect().bottom
       const padding = Number.parseFloat(getComputedStyle(outer).paddingBottom)
       const next = {
         width: Math.floor(inner.clientWidth),
@@ -48,6 +44,6 @@ export function useRoom(
     // The header above the preview may wrap as the view narrows.
     for (const element of [outer, ...outer.children]) observer.observe(element)
     return () => observer.disconnect()
-  }, [root, box, limit, ready])
+  }, [root, box, ready])
   return room
 }

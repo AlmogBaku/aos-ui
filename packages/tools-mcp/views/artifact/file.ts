@@ -17,7 +17,10 @@ export type FileState =
   | { status: "loading" | "unreachable" | "tooLarge" }
   | { status: "ready"; preview: FilePreview }
 
-type PreviewKind = Exclude<FilePreview["kind"], "none">
+export type PreviewKind = Exclude<FilePreview["kind"], "none">
+
+/** What a file is shown as: a preview read from it, or media played from it. */
+export type FileKind = PreviewKind | "audio" | "video"
 
 export type PreviewLimits = Record<PreviewKind, number>
 
@@ -55,6 +58,19 @@ const EXTENSION_TYPES: Record<string, string> = {
   md: "text/markdown",
   csv: "text/csv",
   json: "application/json",
+  aac: "audio/aac",
+  flac: "audio/flac",
+  m4a: "audio/mp4",
+  mp3: "audio/mpeg",
+  oga: "audio/ogg",
+  ogg: "audio/ogg",
+  opus: "audio/ogg",
+  wav: "audio/wav",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
+  mp4: "video/mp4",
+  ogv: "video/ogg",
+  webm: "video/webm",
   ...Object.fromEntries(
     TEXT_EXTENSIONS.split(" ").map((extension) => [extension, "text/plain"])
   ),
@@ -75,15 +91,17 @@ function extensionType(filename: string) {
   return type ?? (language === undefined ? undefined : `text/x-${language}`)
 }
 
-function kindOf(type: string | undefined): PreviewKind | undefined {
+export function kindOf(type: string | undefined): FileKind | undefined {
   if (type === "application/pdf") return "pdf"
   if (type === "text/html" || type === "application/xhtml+xml") return "html"
   if (type?.startsWith("image/")) return "image"
+  if (type?.startsWith("audio/")) return "audio"
+  if (type?.startsWith("video/")) return "video"
   if (type !== undefined && TEXT_TYPE.test(type)) return "text"
   return undefined
 }
 
-function textFormat(type: string): TextFormat {
+export function textFormat(type: string): TextFormat {
   if (type === "text/markdown") return { format: "markdown" }
   if (type === "text/csv") return { format: "csv" }
   if (type === "application/json") return { format: "json" }
@@ -102,6 +120,23 @@ function vague(type: string) {
     type !== "text/plain" &&
     kindOf(type) === "text" &&
     textFormat(type).format === "plain"
+  )
+}
+
+/**
+ * The type a file is known by before any of it is read: the one the Agent
+ * declared, then the file name's; a vague declared text type yields to the
+ * file name's.
+ */
+export function knownType(file: {
+  filename: string
+  mimeType?: string | undefined
+}) {
+  const declared = mediaType(file.mimeType)
+  return (
+    (declared !== undefined && !vague(declared) ? declared : undefined) ??
+    extensionType(file.filename) ??
+    declared
   )
 }
 
@@ -179,14 +214,16 @@ export async function loadFile(
       discard(response.body)
       return { status: "unreachable" }
     }
-    const declared = mediaType(file.mimeType)
     const type =
-      (declared !== undefined && !vague(declared) ? declared : undefined) ??
-      extensionType(file.filename) ??
-      declared ??
-      mediaType(response.headers.get("content-type"))
+      knownType(file) ?? mediaType(response.headers.get("content-type"))
     const kind = kindOf(type)
-    if (type === undefined || kind === undefined) {
+    // Media plays from its address, so it is never read here.
+    if (
+      type === undefined ||
+      kind === undefined ||
+      kind === "audio" ||
+      kind === "video"
+    ) {
       discard(response.body)
       return { status: "ready", preview: { kind: "none" } }
     }

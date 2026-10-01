@@ -47,18 +47,20 @@ const sources = (base: readonly string[], domains: readonly string[]) =>
 /**
  * The MCP Apps default policy (spec 2026-01-26), widened only by the domains
  * the view's resource declared and by the call's own file addresses, each by
- * its exact path, and never allowing plugins or form posts. Views may compile
+ * its exact path, to read and to play, and never allowing plugins or form posts. Views may compile
  * WebAssembly, as a document renderer's decoders do.
  */
 export function buildMcpAppCsp(
   csp: McpUiCsp | undefined,
   files?: McpAppFiles
 ): string {
+  // The view reads its files, and plays one that is media, at their addresses.
+  const fileLocations = Object.values(files?.addresses ?? {}).flatMap(
+    (address) => fileLocation(address) ?? []
+  )
   const connect = [
     ...acceptedDomains("connectDomains", csp?.connectDomains),
-    ...Object.values(files?.addresses ?? {}).flatMap(
-      (address) => fileLocation(address) ?? []
-    ),
+    ...fileLocations,
   ]
   const resource = acceptedDomains("resourceDomains", csp?.resourceDomains)
   const frame = acceptedDomains("frameDomains", csp?.frameDomains)
@@ -69,7 +71,7 @@ export function buildMcpAppCsp(
     `style-src ${sources(["'self'", "'unsafe-inline'"], resource)}`,
     `img-src ${sources(["'self'", "data:"], resource)}`,
     `font-src ${sources(["'self'", "data:"], resource)}`,
-    `media-src ${sources(["'self'", "data:"], resource)}`,
+    `media-src ${sources(["'self'", "data:"], [...resource, ...fileLocations])}`,
     `connect-src ${sources([], connect)}`,
     "worker-src 'self' blob:",
     `frame-src ${sources([], frame)}`,

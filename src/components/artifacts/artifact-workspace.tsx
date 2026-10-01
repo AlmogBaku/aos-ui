@@ -26,6 +26,7 @@ import {
   type McpAppPip,
 } from "@/components/mcp-apps/mcp-app-host"
 import { Button } from "@/components/ui/button"
+import { MediaPlayer } from "@/components/artifacts/media-player"
 import {
   SystemNotice,
   type SystemNoticeTone,
@@ -609,21 +610,12 @@ function ArtifactInlineMedia({
         ) : (
           <div className="max-w-sm">{image}</div>
         )
-      ) : kind === "audio" ? (
-        <audio
-          aria-label={`${labels.audio}: ${published.filename}`}
-          className="block w-full"
-          controls
-          preload="metadata"
-          src={url}
-        />
       ) : (
-        <video
-          aria-label={`${labels.video}: ${published.filename}`}
-          className="block h-auto max-h-96 w-full rounded-lg bg-black object-contain"
-          controls
-          preload="metadata"
+        <MediaPlayer
+          kind={kind}
           src={url}
+          label={`${labels[kind]}: ${published.filename}`}
+          speedLabel={labels.playbackSpeed}
         />
       )}
     </div>

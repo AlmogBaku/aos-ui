@@ -298,23 +298,31 @@ describe("MCP App side panel", () => {
       name: "Return to the message",
     })
 
-  it("shows a view in the side panel, holds its place in the message, and returns it", async () => {
+  /** The frame the message shows, outside the side panel. */
+  const messageFrame = () =>
+    screen
+      .getAllByTitle("show_board app")
+      .find((frame) => !screen.queryByRole(...PANEL)?.contains(frame))
+
+  it("shows a view in the side panel while its message keeps its own, and returns focus to the message", async () => {
     const user = userEvent.setup()
     await showInPanel(adapter())
 
     const panel = screen.getByRole(...PANEL)
     expect(within(panel).getByTitle("show_board app")).toBeInTheDocument()
-    expect(lastFrame()?.placement).toBe("pip")
-    expect(screen.getAllByTitle("show_board app")).toHaveLength(1)
-    expect(screen.getByText("Shown in the side panel")).toBeVisible()
+    expect(messageFrame()).toBeInTheDocument()
+    expect(frames.findLast((frame) => frame.placement === "pip")).toBeDefined()
     expect(panelClose()).toHaveFocus()
 
-    act(() => lastFrame()?.onMove?.("inline"))
+    act(() =>
+      frames.findLast((frame) => frame.placement === "pip")?.onMove?.("inline")
+    )
     expect(screen.queryByRole(...PANEL)).toBeNull()
-    expect(screen.queryByText("Shown in the side panel")).toBeNull()
-    expect(lastFrame()?.placement).toBeUndefined()
+    expect(screen.getAllByTitle("show_board app")).toHaveLength(1)
 
-    act(() => lastFrame()?.onMove?.("pip"))
+    act(() =>
+      frames.findLast((frame) => frame.placement === undefined)?.onMove?.("pip")
+    )
     await user.click(panelClose())
     expect(screen.queryByRole(...PANEL)).toBeNull()
     const focused = document.activeElement
@@ -333,9 +341,6 @@ describe("MCP App side panel", () => {
     expect(
       within(screen.getByRole(...PANEL)).getByTitle("show_board app")
     ).toBe(frame)
-
-    rerender(<Session apps={apps} />)
-    expect(await screen.findByText("Shown in the side panel")).toBeVisible()
     expect(screen.getAllByTitle("show_board app")).toEqual([frame])
   })
 

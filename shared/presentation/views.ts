@@ -71,15 +71,17 @@ export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files"
 /**
  * The synthetic fixture files served at `FIXTURE_MCP_APP_FILES_PATH/<name>`
  * for exercising the artifact view in fixture mode: a PDF with a CCITT Group 4
- * image, a PNG, and an HTML file whose visible effect confirms that its
- * scripts run and its fetch is refused, which the preview's artifact tool
- * calls show; and the Markdown,
+ * image, a PNG, an HTML file whose visible effect confirms that its
+ * scripts run and its fetch is refused, a tone, and colour bars, which the
+ * preview's artifact tool calls show; and the Markdown,
  * CSV, JSON, code, and HTML files its published attachments carry.
  */
 export const FIXTURE_MCP_APP_FILES = {
   pdf: "report.pdf",
   png: "preview.png",
   html: "test.html",
+  audio: "briefing-tone.mp3",
+  video: "color-bars.mp4",
   markdown: "enterprise-ai-brief.md",
   csv: "quarterly-spend.csv",
   json: "quarterly-spend.json",

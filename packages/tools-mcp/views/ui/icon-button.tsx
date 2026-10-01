@@ -1,5 +1,9 @@
 import type { ReactNode } from "react"
 
+/** How a compact icon-only button looks, also given to a menu's trigger. */
+export const ICON_BUTTON_CLASS =
+  "inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-none *:size-4 hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent aria-pressed:bg-muted aria-pressed:text-foreground motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
+
 /** A compact button that shows only its icon; its label names it to everyone. */
 export function IconButton({
   label,
@@ -19,7 +23,7 @@ export function IconButton({
   return (
     <button
       type="button"
-      className="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-none *:size-4 hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent aria-pressed:bg-muted aria-pressed:text-foreground motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
+      className={ICON_BUTTON_CLASS}
       aria-label={label}
       title={label}
       aria-pressed={pressed}

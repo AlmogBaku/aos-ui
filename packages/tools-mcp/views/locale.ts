@@ -32,6 +32,11 @@ export type ViewLabels = {
     download: string
     open: string
     pip: string
+    more: string
+    audio: string
+    video: string
+    playbackSpeed: string
+    view: (filename: string) => string
     loading: string
     unreachable: string
     noPreview: string
@@ -48,6 +53,7 @@ export type ViewLabels = {
     previousPage: string
     nextPage: string
     page: (page: number, pages: number) => string
+    pageShort: (page: number, pages: number) => string
     zoomIn: string
     zoomOut: string
     zoomFit: string
@@ -82,6 +88,11 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       download: "Download",
       open: "Open in new tab",
       pip: "Picture in picture",
+      more: "More actions",
+      audio: "Audio",
+      video: "Video",
+      playbackSpeed: "Playback speed",
+      view: (filename) => `View ${filename}`,
       loading: "Loading file…",
       unreachable: "Can't reach this file.",
       noPreview: "No preview is available for this file.",
@@ -98,6 +109,7 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       previousPage: "Previous page",
       nextPage: "Next page",
       page: (page, pages) => `Page ${page} of ${pages}`,
+      pageShort: (page, pages) => `${page}/${pages}`,
       zoomIn: "Zoom in",
       zoomOut: "Zoom out",
       zoomFit: "Fit to view",
@@ -130,6 +142,11 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       download: "הורדה",
       open: "פתיחה בכרטיסייה חדשה",
       pip: "תמונה בתוך תמונה",
+      more: "פעולות נוספות",
+      audio: "שמע",
+      video: "וידאו",
+      playbackSpeed: "מהירות ניגון",
+      view: (filename) => `הצגת ${filename}`,
       loading: "הקובץ נטען…",
       unreachable: "לא ניתן לגשת לקובץ הזה.",
       noPreview: "אין תצוגה מקדימה לקובץ הזה.",
@@ -146,6 +163,7 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       previousPage: "העמוד הקודם",
       nextPage: "העמוד הבא",
       page: (page, pages) => `עמוד ${page} מתוך ${pages}`,
+      pageShort: (page, pages) => `${page}/${pages}`,
       zoomIn: "הגדלה",
       zoomOut: "הקטנה",
       zoomFit: "התאמה לתצוגה",

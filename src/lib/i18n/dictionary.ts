@@ -14,6 +14,7 @@ export type Dictionary = {
     downloadFailed: string
     audio: string
     video: string
+    playbackSpeed: string
     fileTooLarge: string
   }
   activity: {

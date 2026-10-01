@@ -122,7 +122,7 @@ function HostedMcpApp({
   host: McpAppHost
 }) {
   const { labels, locale, direction } = useToolUiLocale()
-  const { adapter, agentId, sessionId, showInPip, leavePip, updatePip } = host
+  const { adapter, agentId, sessionId, showInPip, updatePip } = host
   const { toolCallId } = part
   const target = useMemo(
     () => ({ agentId, sessionId, toolCallId }),
@@ -176,8 +176,8 @@ function HostedMcpApp({
   const unavailable = useCallback(() => setState({ status: "failed" }), [])
   const toolName = part.toolName === toolCallId ? undefined : part.toolName
 
-  // While the view shows in the side panel, its message holds its place and
-  // passes on what the call reports.
+  // While the view shows in the side panel, which mounts it afresh, its message
+  // keeps its own and passes on what the call reports.
   const pipped =
     host.pip !== undefined && sameMcpAppTarget(host.pip.target, target)
   useEffect(() => {
@@ -213,19 +213,7 @@ function HostedMcpApp({
       dir={direction}
       lang={locale}
     >
-      {pipped ? (
-        <p className="flex flex-wrap items-center gap-x-2 py-2 text-sm text-muted-foreground">
-          {labels.mcpApp.inSidePanel}
-          <Button
-            type="button"
-            variant="link"
-            onClick={leavePip}
-            className="h-auto p-0 [@media(pointer:coarse)]:min-h-11"
-          >
-            {labels.mcpApp.returnToMessage}
-          </Button>
-        </p>
-      ) : state.status === "failed" ? (
+      {state.status === "failed" ? (
         <AppUnavailable />
       ) : state.status === "loading" ? (
         <AppLoading />

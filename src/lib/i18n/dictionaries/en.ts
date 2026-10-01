@@ -18,6 +18,7 @@ export const en = {
     downloadFailed: "This output could not be downloaded.",
     audio: "Audio output",
     video: "Video output",
+    playbackSpeed: "Playback speed",
     fileTooLarge: "This file is too large to preview.",
   },
   activity: {

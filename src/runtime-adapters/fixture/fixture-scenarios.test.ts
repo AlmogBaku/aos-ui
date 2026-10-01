@@ -15,6 +15,8 @@ describe("deterministic fixture scenarios", () => {
       ["publish an artifact", "artifact"],
       ["show a png artifact", "artifact-png"],
       ["show an html artifact", "artifact-html"],
+      ["play the artifact audio", "artifact-audio"],
+      ["play the artifact video", "artifact-video"],
       ["publish an image", "image"],
       ["publish an audio note", "audio"],
       ["publish a video note", "video"],

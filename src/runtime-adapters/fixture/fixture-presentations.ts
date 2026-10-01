@@ -26,6 +26,8 @@ export type FixturePresentationCallId =
   | "fixture-present_artifact-pdf"
   | "fixture-present_artifact-png"
   | "fixture-present_artifact-html"
+  | "fixture-present_artifact-audio"
+  | "fixture-present_artifact-video"
 
 /** Builds one present_artifact call entry: args + the full structured result. */
 function artifactCall(
@@ -142,6 +144,8 @@ export const fixturePresentationCalls: Record<
   "fixture-present_artifact-pdf": artifactCall("pdf", "application/pdf"),
   "fixture-present_artifact-png": artifactCall("png", "image/png"),
   "fixture-present_artifact-html": artifactCall("html", "text/html"),
+  "fixture-present_artifact-audio": artifactCall("audio", "audio/mpeg"),
+  "fixture-present_artifact-video": artifactCall("video", "video/mp4"),
 }
 
 /** What the real server answers a presentation call with, in short. */

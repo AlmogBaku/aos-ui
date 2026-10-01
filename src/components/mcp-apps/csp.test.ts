@@ -116,8 +116,11 @@ describe("MCP App CSP", () => {
         broken: "not a url",
       },
     })
-    expect(directive(policy, "connect-src")).toBe(
-      "connect-src https://aos.example/api/aos/v1/agents/a/sessions/s%3B1/tool-calls/t%201/app/files/path"
+    const path =
+      "https://aos.example/api/aos/v1/agents/a/sessions/s%3B1/tool-calls/t%201/app/files/path"
+    expect(directive(policy, "connect-src")).toBe(`connect-src ${path}`)
+    expect(directive(policy, "media-src")).toBe(
+      `media-src 'self' data: ${path}`
     )
     expect(policy).not.toContain("secret")
     expect(buildMcpAppCsp(undefined, { addresses: {} })).toBe(

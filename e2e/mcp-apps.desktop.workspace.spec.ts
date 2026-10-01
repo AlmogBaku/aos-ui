@@ -81,31 +81,10 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   // --- report.pdf ---
   await send("Publish an artifact")
   const pdfFrame = artifactFrame()
-  // The PDF renders its synthetic text.
-  await expect(
-    pdfFrame.getByText("Synthetic fixture file for AOS UI.")
-  ).toBeVisible()
-
-  // --- pip ---
-  await pdfFrame.getByRole("button", { name: "Picture in picture" }).click()
-  // The message card shows the "in side panel" placeholder.
-  await expect(page.getByText("Shown in the side panel")).toBeVisible()
-  // The side panel, named for the file, holds the artifact view.
-  const panel = page.getByRole("complementary", { name: "report.pdf" })
-  await expect(panel).toBeVisible()
-
-  // Escape from inside the panel returns the view to the message.
-  await panel.press("Escape")
-  await expect(page.getByText("Shown in the side panel")).toBeHidden()
-
-  // Open pip again and close with the panel's close button.
-  await pdfFrame.getByRole("button", { name: "Picture in picture" }).click()
-  await expect(page.getByText("Shown in the side panel")).toBeVisible()
-  await page
-    .getByRole("complementary", { name: "report.pdf" })
-    .getByRole("button", { name: "Return to the message" })
-    .click()
-  await expect(page.getByText("Shown in the side panel")).toBeHidden()
+  // In its message the PDF is a card, without its pages.
+  const card = pdfFrame.getByRole("button", { name: "View report.pdf" })
+  await expect(card).toBeVisible()
+  await expect(pdfFrame.getByText("Synthetic fixture file for AOS UI.")).toHaveCount(0)
 
   // --- download ---
   const [download] = await Promise.all([
@@ -114,11 +93,48 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   ])
   expect(download.suggestedFilename()).toBe("report.pdf")
 
+  // --- pip ---
+  await card.click()
+  // The side panel, named for the file, renders the PDF's pages, while the
+  // message keeps its card.
+  const panel = page.getByRole("complementary", { name: "report.pdf" })
+  const panelFrame = panel
+    .locator("iframe")
+    .first()
+    .contentFrame()
+    .locator("iframe")
+    .contentFrame()
+  await expect(
+    panelFrame.getByText("Synthetic fixture file for AOS UI.")
+  ).toBeVisible()
+  await expect(card).toBeVisible()
+
+  // Escape in the panel's view returns focus to the message's card.
+  await panelFrame.getByRole("region", { name: "PDF preview" }).press("Escape")
+  await expect(panel).toBeHidden()
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.activeElement?.querySelector(
+            'iframe[title="present_artifact app"]'
+          ) != null
+      )
+    )
+    .toBe(true)
+
+  // Open pip again and close with the panel's close button.
+  await card.click()
+  await panel.getByRole("button", { name: "Return to the message" }).click()
+  await expect(panel).toBeHidden()
+
   // --- preview.png ---
   await send("Show a png artifact")
   const pngFrame = artifactFrame()
-  // A broken image would show "No preview" in its place.
-  await expect(pngFrame.getByRole("img", { name: "preview.png" })).toBeVisible()
+  // In its message the image shows alone, and opens the side panel.
+  // A broken image would show its file card in its place.
+  await expect(pngFrame.getByAltText("preview.png")).toBeVisible()
+  await expect(pngFrame.getByRole("button", { name: "Download" })).toHaveCount(0)
 
   // --- test.html ---
   await send("Show an html artifact")

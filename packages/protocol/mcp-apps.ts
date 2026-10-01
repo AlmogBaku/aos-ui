@@ -153,7 +153,9 @@ export const MCP_APP_SANDBOX_CSP = [
   "style-src 'self' 'unsafe-inline' https:",
   "img-src 'self' data: https:",
   "font-src 'self' data: https:",
-  "media-src 'self' data: https:",
+  // A view plays the call's own media straight from its file address, which
+  // a loopback proxy serves over http.
+  ["media-src 'self' data: https:", ...LOOPBACK_SOURCES("http")].join(" "),
   [
     "connect-src https: wss:",
     ...LOOPBACK_SOURCES("http"),

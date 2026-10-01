@@ -31,12 +31,16 @@ const FIXTURE_PDFJS_URIS = [
 
 /**
  * The grammars the fixture's files read: TypeScript for its source file and
- * Markdown `ts` fence, and HTML, with the CSS and JavaScript it embeds, for
- * its pages' source.
+ * Markdown `ts` fence, JSON for its data file, and HTML, with the CSS and
+ * JavaScript it embeds, for its pages' source.
  */
-const FIXTURE_GRAMMAR_URIS = ["typescript", "html", "css", "javascript"].map(
-  (name) => `${GRAMMAR_RESOURCE_URI}${name}.json`
-)
+const FIXTURE_GRAMMAR_URIS = [
+  "typescript",
+  "json",
+  "html",
+  "css",
+  "javascript",
+].map((name) => `${GRAMMAR_RESOURCE_URI}${name}.json`)
 
 /**
  * Asks a real server for its `tools/list`, every view's `resources/read`, and

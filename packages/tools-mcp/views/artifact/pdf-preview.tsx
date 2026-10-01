@@ -8,7 +8,13 @@ import {
   type PDFDocumentProxy,
   type PDFPageProxy,
 } from "pdfjs-dist"
-import { useEffect, useRef, useState, type CSSProperties } from "react"
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react"
 
 import {
   PDFJS_RESOURCE_URI,
@@ -18,6 +24,7 @@ import type { ViewLabels } from "../locale"
 import { cn } from "../ui/cn"
 import { IconButton } from "../ui/icon-button"
 import { Status } from "../ui/status"
+import { Compact } from "../ui/toolbar"
 import type { ViewApp } from "../view"
 import { PdfSidebar } from "./pdf-sidebar"
 import styles from "./pdf-preview.module.css"
@@ -264,6 +271,7 @@ export function PdfPages({
   const pages = pdf.numPages
   const [page, setPage] = useState(1)
   const [sidebar, setSidebar] = useState(false)
+  const compact = useContext(Compact)
   const overlay = room.width < SIDEBAR_BESIDE_WIDTH
 
   const turn = (to: Turn) => {
@@ -308,7 +316,17 @@ export function PdfPages({
                 className="m-0 text-xs text-muted-foreground tabular-nums"
                 aria-live="polite"
               >
-                {labels.page(page, pages)}
+                {compact ? (
+                  // Narrow, the page shows as "2/6" and still reads in full.
+                  <>
+                    <span aria-hidden="true">
+                      {labels.pageShort(page, pages)}
+                    </span>
+                    <span className="sr-only">{labels.page(page, pages)}</span>
+                  </>
+                ) : (
+                  labels.page(page, pages)
+                )}
               </p>
               <IconButton
                 label={labels.nextPage}

@@ -25,6 +25,8 @@ export const fixtureScenarioNames = [
   "artifact",
   "artifact-png",
   "artifact-html",
+  "artifact-audio",
+  "artifact-video",
   "image",
   "audio",
   "video",
@@ -680,6 +682,20 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
         (data) =>
           ({ type: "data", name: "aos.artifact", data }) as AssistantPart
       ),
+    }
+  }
+
+  if (input.includes("artifact audio")) {
+    return {
+      name: "artifact-audio",
+      parts: [fixturePresentationPart("fixture-present_artifact-audio")],
+    }
+  }
+
+  if (input.includes("artifact video")) {
+    return {
+      name: "artifact-video",
+      parts: [fixturePresentationPart("fixture-present_artifact-video")],
     }
   }
 

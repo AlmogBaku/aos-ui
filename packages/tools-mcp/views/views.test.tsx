@@ -14,7 +14,7 @@ import { bundledLanguagesInfo } from "shiki/langs"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { Code } from "./artifact/code"
-import { PREVIEW_LIMITS } from "./artifact/file"
+import { PREVIEW_LIMITS, knownType, textFormat } from "./artifact/file"
 import { keyAction } from "./artifact/zoom"
 import { PdfPages } from "./artifact/pdf-preview"
 import { ArtifactView } from "./artifact-view"
@@ -210,7 +210,14 @@ describe("artifact view", () => {
     return { "aos/files": { path } }
   }
 
-  /** Shows one file the page grants, served with `body`. */
+  /** What the page reports while the view shows in the side panel. */
+  const PIP: McpUiHostContext = { displayMode: "pip" }
+  const OFFERED: McpUiHostContext = { availableDisplayModes: ["inline", "pip"] }
+
+  /**
+   * Shows one file the page grants, served with `body`, in the side panel
+   * unless `context` says otherwise.
+   */
   function showFile(
     file: { filename: string; mimeType?: string },
     body: string,
@@ -223,14 +230,40 @@ describe("artifact view", () => {
     const view = props(file)
     const address = `https://aos.test/files/${file.filename}?pass=one`
     const shown = (next: McpUiHostContext) => (
-      <ArtifactView {...view} context={{ ...files(address), ...next }} />
+      <ArtifactView
+        {...view}
+        context={{ ...files(address), ...PIP, ...next }}
+      />
     )
     const { rerender } = render(shown(context))
     return {
       app: view.app,
+      address,
       rerender: (next: McpUiHostContext) => rerender(shown(next)),
     }
   }
+
+  it.each([
+    ["growth.ts", "typescript"],
+    ["Card.tsx", "tsx"],
+    ["build.js", "javascript"],
+    ["build.mjs", "javascript"],
+    ["config.yaml", "yaml"],
+    ["config.yml", "yaml"],
+    ["pyproject.toml", "toml"],
+    ["main.py", "python"],
+    ["main.go", "go"],
+    ["main.rs", "rust"],
+    ["deploy.sh", "bash"],
+    ["schema.sql", "sql"],
+    ["site.css", "css"],
+    ["Dockerfile", "dockerfile"],
+  ])("highlights %s as %s", (filename, language) => {
+    expect(textFormat(knownType({ filename })!)).toEqual({
+      format: "code",
+      language,
+    })
+  })
 
   it.each([
     ["Markdown by its extension", { filename: "brief.md" }, "# Launch brief"],
@@ -434,37 +467,88 @@ describe("artifact view", () => {
     }
   })
 
-  it("asks for the side panel on a press only when offered and not there", async () => {
-    const offered: McpUiHostContext = {
-      availableDisplayModes: ["inline", "pip"],
-    }
-    const { app, rerender } = showFile(
-      { filename: "notes.txt" },
-      "Quarterly notes"
+  it("shows a file in its message as a card, unread, that opens the side panel only where offered", async () => {
+    const user = userEvent.setup()
+    const inline: McpUiHostContext = { displayMode: "inline" }
+    const { app, address, rerender } = showFile(
+      notes,
+      "Quarterly notes",
+      inline
     )
-    await userEvent.click(await screen.findByText("Quarterly notes"))
-    expect(app.requestDisplayMode).not.toHaveBeenCalled()
+    expect(await screen.findByText("notes.txt")).toBeVisible()
+    expect(screen.queryByRole("button", { name: "View notes.txt" })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Download" }))
+    expect(app.downloadFile).toHaveBeenCalledWith({
+      contents: [{ type: "resource_link", uri: address, name: "notes.txt" }],
+    })
+    await user.click(screen.getByRole("button", { name: "Open in new tab" }))
+    expect(app.openLink).toHaveBeenCalledWith({ url: address })
 
-    rerender({ ...offered, displayMode: "pip" })
-    await userEvent.click(screen.getByText("Quarterly notes"))
-    expect(app.requestDisplayMode).not.toHaveBeenCalled()
+    rerender({ ...inline, ...OFFERED })
+    await user.click(screen.getByRole("button", { name: "View notes.txt" }))
+    expect(app.requestDisplayMode.mock.calls).toEqual([[{ mode: "pip" }]])
+    expect(screen.queryByText("Quarterly notes")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
+    expect(fetch).not.toHaveBeenCalled()
 
-    rerender({ ...offered, displayMode: "inline" })
-    await userEvent.click(screen.getByText("Quarterly notes"))
+    rerender({ ...PIP, ...OFFERED })
+    expect(await screen.findByText("Quarterly notes")).toBeVisible()
+  })
+
+  it("shows an image in its message alone, opening the side panel on a press", async () => {
+    const { app } = showFile({ filename: "preview.png" }, "", {
+      displayMode: "inline",
+      ...OFFERED,
+    })
+    const thumbnail = await screen.findByAltText("preview.png")
+    const image = screen.getByRole("button", { name: "View preview.png" })
+    expect(image).toContainElement(thumbnail)
+    expect(screen.getAllByRole("button")).toEqual([image])
+    await userEvent.click(image)
     expect(app.requestDisplayMode.mock.calls).toEqual([[{ mode: "pip" }]])
   })
 
-  it("keeps a press on a link or inside a selection from asking for the side panel", async () => {
-    const { app } = showFile(
-      { filename: "brief.md" },
-      "Quarterly notes and [Roadmap](https://example.com/roadmap)",
-      { availableDisplayModes: ["inline", "pip"], displayMode: "inline" }
+  it("plays audio straight from the file's address, never reading it", async () => {
+    const { address, rerender } = showFile({ filename: "brief.mp3" }, "", {
+      displayMode: "inline",
+    })
+    expect(screen.getByLabelText("Audio: brief.mp3")).toHaveAttribute(
+      "src",
+      address
     )
-    await userEvent.click(await screen.findByRole("link", { name: "Roadmap" }))
-    const text = screen.getByText(/Quarterly notes/u)
-    window.getSelection()!.selectAllChildren(text)
-    await userEvent.click(text)
-    expect(app.requestDisplayMode).not.toHaveBeenCalled()
+    rerender(PIP)
+    expect(screen.getByLabelText("Audio: brief.mp3")).toHaveAttribute(
+      "src",
+      address
+    )
+    await act(() => Promise.resolve())
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it("moves Refresh, Download, and Open into a menu in a narrow side panel", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(390)
+    try {
+      const user = userEvent.setup()
+      const { app, address } = showFile(notes, "Quarterly notes")
+      expect(await screen.findByText("Quarterly notes")).toBeVisible()
+      expect(screen.queryByRole("button", { name: "Download" })).toBeNull()
+      const choose = async (name: string) => {
+        await user.click(screen.getByRole("button", { name: "More actions" }))
+        await user.click(await screen.findByRole("menuitem", { name }))
+        await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+      }
+
+      await choose("Download")
+      expect(app.downloadFile).toHaveBeenCalledWith({
+        contents: [{ type: "resource_link", uri: address, name: "notes.txt" }],
+      })
+      await choose("Open in new tab")
+      expect(app.openLink).toHaveBeenCalledWith({ url: address })
+      await choose("Refresh")
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 
   it.each([
@@ -494,7 +578,7 @@ describe("artifact view", () => {
       render(
         <ArtifactView
           {...view}
-          context={files(address)}
+          context={{ ...files(address), ...PIP }}
           previewLimits={{ ...PREVIEW_LIMITS, text: 8 }}
         />
       )
@@ -528,13 +612,13 @@ describe("artifact view", () => {
     )
     const view = props(notes)
     const { rerender } = render(
-      <ArtifactView {...view} context={files(first)} />
+      <ArtifactView {...view} context={{ ...files(first), ...PIP }} />
     )
     expect(await screen.findByText("Can't reach this file.")).toBeVisible()
 
-    rerender(<ArtifactView {...view} context={files(second)} />)
+    rerender(<ArtifactView {...view} context={{ ...files(second), ...PIP }} />)
     expect(await screen.findByText("Quarterly notes")).toBeVisible()
-    rerender(<ArtifactView {...view} context={files(third)} />)
+    rerender(<ArtifactView {...view} context={{ ...files(third), ...PIP }} />)
     await userEvent.click(
       screen.getByRole("button", { name: "Open in new tab" })
     )
@@ -557,7 +641,10 @@ describe("artifact view", () => {
     render(
       <ArtifactView
         {...props({ filename: "plan.html" })}
-        context={files("https://aos.test/files/plan.html?pass=one")}
+        context={{
+          ...files("https://aos.test/files/plan.html?pass=one"),
+          ...PIP,
+        }}
         previewLimits={{ ...PREVIEW_LIMITS, text: 8 }}
       />
     )
@@ -608,7 +695,7 @@ describe("artifact view", () => {
     const { rerender } = render(
       <ArtifactView {...view} context={files(address)} />
     )
-    expect(await screen.findByText("Quarterly notes")).toBeVisible()
+    expect(await screen.findByText("notes.txt")).toBeVisible()
     await userEvent.keyboard("{Escape}")
     expect(view.app.requestDisplayMode).not.toHaveBeenCalled()
 
@@ -755,6 +842,37 @@ describe("PDF sidebar", () => {
     await user.keyboard("{ArrowDown}")
     expect(screen.getByText("Page 3 of 5")).toBeVisible()
   })
+
+  /** One finger across the page, from `from` to `to` px along it. */
+  function swipe(from: number, to: number) {
+    const page = screen.getByRole("region", { name: "PDF preview" })
+    fireEvent.touchStart(page, { touches: [{ clientX: from, clientY: 100 }] })
+    fireEvent.touchEnd(page, {
+      touches: [],
+      changedTouches: [{ clientX: to, clientY: 110 }],
+    })
+  }
+
+  it.each([
+    ["leftward in LTR", "ltr", "", "Page 3 of 5"],
+    ["leftward in RTL", "rtl", "", "Page 1 of 5"],
+    ["while zoomed", "ltr", "+", "Page 2 of 5"],
+  ])(
+    "turns the page on a swipe %s as the reading direction leads",
+    async (_case, dir, keys, expected) => {
+      document.documentElement.dir = dir
+      try {
+        const user = userEvent.setup()
+        showPages([])
+        await user.click(screen.getByRole("button", { name: "Next page" }))
+        if (keys) await user.keyboard(keys)
+        swipe(300, 200)
+        expect(screen.getByText(expected)).toBeVisible()
+      } finally {
+        document.documentElement.dir = ""
+      }
+    }
+  )
 
   it("offers no Outline tab for a file without an outline", async () => {
     showPages([])
