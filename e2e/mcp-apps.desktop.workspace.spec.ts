@@ -123,10 +123,10 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   // --- test.html ---
   await send("Show an html artifact")
   const htmlFrame = artifactFrame()
-  // The artifact view embeds the HTML in a sandboxed iframe. Confirm it
-  // rendered: the "scripts are off" paragraph is the initial text and
-  // stays that way because the sandbox prevents the script from running.
+  // The artifact view runs the HTML's scripts in a sandboxed iframe whose
+  // policy refuses the fetch the fixture tries.
   const htmlInner = htmlFrame.frameLocator('iframe[title="HTML preview"]')
-  await expect(htmlInner.getByText("scripts are off")).toBeVisible()
-  await expect(htmlInner.getByText("scripts are on")).toBeHidden()
+  await expect(htmlInner.getByText("scripts are on")).toBeVisible()
+  await expect(htmlInner.getByText("fetch blocked")).toBeVisible()
+  await expect(htmlInner.getByText("fetch allowed")).toBeHidden()
 })

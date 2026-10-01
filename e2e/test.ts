@@ -23,10 +23,10 @@ function isExpectedConsoleError(message: string) {
     message.includes("net::ERR_NETWORK_CHANGED") ||
     (message.includes("Failed to fetch dynamically imported module") &&
       message.includes("127.0.0.1")) ||
-    // The artifact view's HTML preview intentionally renders Agent HTML inside
-    // `<iframe sandbox="">` with no `allow-scripts`; Chrome reports each
-    // blocked script as a console error, which is the expected behavior.
-    message.includes("Blocked script execution in 'about:srcdoc'")
+    // The artifact view's HTML fixture tries a fetch its policy refuses;
+    // Chrome reports the refusal as console errors, which is the expected
+    // behavior.
+    message.includes("https://files.invalid/")
   )
 }
 

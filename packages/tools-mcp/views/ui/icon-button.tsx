@@ -6,12 +6,14 @@ export function IconButton({
   onClick,
   disabled,
   pressed,
+  expanded,
   children,
 }: {
   label: string
   onClick: () => void
   disabled?: boolean
   pressed?: boolean
+  expanded?: boolean
   children: ReactNode
 }) {
   return (
@@ -21,6 +23,7 @@ export function IconButton({
       aria-label={label}
       title={label}
       aria-pressed={pressed}
+      aria-expanded={expanded}
       disabled={disabled}
       onClick={onClick}
     >

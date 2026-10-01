@@ -3,6 +3,14 @@
 <head><meta charset="utf-8"><title>Fixture file</title></head>
 <body>
 <p id="status">scripts are off</p>
-<script>document.getElementById("status").textContent = "scripts are on";</script>
+<p id="network">network not tried</p>
+<script>
+document.getElementById("status").textContent = "scripts are on";
+const network = document.getElementById("network");
+document.addEventListener("securitypolicyviolation", (event) => {
+  if (event.effectiveDirective === "connect-src") network.textContent = "fetch blocked";
+});
+fetch("https://files.invalid/").then(() => { network.textContent = "fetch allowed"; }, () => {});
+</script>
 </body>
 </html>

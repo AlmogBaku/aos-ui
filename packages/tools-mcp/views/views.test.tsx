@@ -3,7 +3,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import type { PDFDocumentProxy } from "pdfjs-dist"
+
 import { PREVIEW_LIMITS } from "./artifact/file"
+import { PdfPages } from "./artifact/pdf-preview"
 import { ArtifactView } from "./artifact-view"
 import { ChartView } from "./chart-view"
 import { VIEW_LABELS, viewLocale, type ViewLocale } from "./locale"
@@ -438,9 +441,9 @@ describe("artifact view", () => {
     expect(fetched).toEqual([first, second, third])
   })
 
-  it("shows HTML only in a frame that runs none of its scripts", async () => {
+  it("runs HTML's scripts only in an opaque origin, under a policy that reaches no network or frame", async () => {
     const html =
-      "<h1>Launch plan</h1><script>parent.postMessage('ran', '*')</script>"
+      "<head><script>parent.postMessage('ran', '*')</script></head><h1>Launch plan</h1>"
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(html))
@@ -455,9 +458,39 @@ describe("artifact view", () => {
     )
 
     const frame = await screen.findByTitle("HTML preview")
-    expect(frame).toHaveAttribute("sandbox", "")
-    expect(frame).toHaveAttribute("srcdoc", html)
+    expect(frame.getAttribute("sandbox")?.split(/\s+/u)).toEqual([
+      "allow-scripts",
+    ])
+    const document = new DOMParser().parseFromString(
+      frame.getAttribute("srcdoc")!,
+      "text/html"
+    )
+    // The policy leads the head, so it governs the file's first script.
+    const policy = document.head.firstElementChild
+    expect(policy?.getAttribute("http-equiv")).toBe("Content-Security-Policy")
+    expect(policy?.getAttribute("content")).toContain("connect-src 'none'")
+    expect(policy?.getAttribute("content")).toContain("frame-src 'none'")
+    expect(document.querySelector("h1")?.textContent).toBe("Launch plan")
     expect(screen.queryByRole("heading", { name: "Launch plan" })).toBeNull()
+  })
+
+  it("zooms an image with Ctrl and the wheel and the zoom keys, leaving a plain wheel to scroll", async () => {
+    showFile({ filename: "preview.png" }, "")
+    const region = await screen.findByRole("region", { name: "Image preview" })
+    expect(screen.getByText("100%")).toBeVisible()
+    expect(fireEvent.wheel(region, { deltaY: -25 })).toBe(true)
+    expect(screen.getByText("100%")).toBeVisible()
+
+    expect(fireEvent.wheel(region, { deltaY: -25, ctrlKey: true })).toBe(false)
+    expect(screen.getByText("128%")).toBeVisible()
+    region.focus()
+    await userEvent.keyboard("+")
+    expect(screen.getByText("161%")).toBeVisible()
+    await userEvent.keyboard("0")
+    expect(screen.getByText("100%")).toBeVisible()
+    expect(screen.getByRole("button", { name: "Fit to view" })).toBeDisabled()
+    await userEvent.keyboard("-")
+    expect(screen.getByText("100%")).toBeVisible()
   })
 
   it("asks to return to its message on Esc only from the side panel", async () => {
@@ -542,5 +575,66 @@ describe("stats view", () => {
         }).format(-0.1234)
       )
     ).toBeInTheDocument()
+  })
+})
+
+describe("PDF sidebar", () => {
+  type Outline = Awaited<ReturnType<PDFDocumentProxy["getOutline"]>>
+
+  /** A five-page file whose "results" destination is its third page. */
+  function pdf(outline: Outline) {
+    return {
+      numPages: 5,
+      // No page ever draws; the sidebar's turns show in the page count.
+      getPage: () => new Promise(() => {}),
+      getOutline: async () => outline,
+      getDestination: async (name: string) =>
+        name === "results" ? [{ num: 7, gen: 0 }, { name: "XYZ" }] : null,
+      getPageIndex: async ({ num }: { num: number }) => (num === 7 ? 2 : 0),
+    } as unknown as PDFDocumentProxy
+  }
+
+  function entry(title: string, dest: unknown, items: unknown[] = []) {
+    return { title, dest, items } as NonNullable<Outline>[number]
+  }
+
+  function showPages(outline: Outline) {
+    render(
+      <PdfPages
+        pdf={pdf(outline)}
+        labels={VIEW_LABELS.en.artifact}
+        room={{ width: 800, height: 600 }}
+      />
+    )
+  }
+
+  it("opens on the toggle and turns to the page an outline entry or a page leads to", async () => {
+    const user = userEvent.setup()
+    showPages([
+      entry("Summary", [0, { name: "Fit" }], [entry("Results", "results")]),
+    ])
+    const toggle = screen.getByRole("button", { name: "Sidebar" })
+    expect(toggle).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByRole("navigation", { name: "Sidebar" })).toBeNull()
+
+    await user.click(toggle)
+    expect(toggle).toHaveAttribute("aria-expanded", "true")
+    await user.click(await screen.findByRole("button", { name: "Results" }))
+    expect(screen.getByText("Page 3 of 5")).toBeVisible()
+
+    await user.click(screen.getByRole("tab", { name: "Pages" }))
+    expect(screen.getByRole("button", { name: "Page 3" })).toHaveAttribute(
+      "aria-current",
+      "page"
+    )
+    await user.click(screen.getByRole("button", { name: "Page 5" }))
+    expect(screen.getByText("Page 5 of 5")).toBeVisible()
+  })
+
+  it("offers no Outline tab for a file without an outline", async () => {
+    showPages([])
+    await userEvent.click(screen.getByRole("button", { name: "Sidebar" }))
+    expect(await screen.findByRole("tab", { name: "Pages" })).toBeVisible()
+    expect(screen.queryByRole("tab", { name: "Outline" })).toBeNull()
   })
 })

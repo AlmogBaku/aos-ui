@@ -370,7 +370,9 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   own MCP server declares a `ui://` view renders that server-authored HTML as
   an inline card in the message, inside an opaque-origin double iframe with a
   CSP built from the view's declared domains and its call's own file
-  addresses; nothing else ever runs there. The card follows the App's
+  addresses; nothing else ever runs there, save the artifact view's Agent
+  HTML, which runs its inline scripts one frame deeper with an opaque origin
+  of its own and no network, frame, or form. The card follows the App's
   requested height up to 80% of the viewport. The App may ask for fullscreen,
   which covers the viewport in place with a localized close control that
   returns focus to the card, or for the side panel (`pip`), which shows the

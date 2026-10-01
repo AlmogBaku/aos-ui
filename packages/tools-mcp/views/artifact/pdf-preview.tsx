@@ -1,14 +1,20 @@
 import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js"
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import { ChevronLeft, ChevronRight, PanelLeft } from "lucide-react"
 import {
   PDFWorker,
   TextLayer,
   getDocument,
   type PDFDocumentLoadingTask,
   type PDFDocumentProxy,
-  type RenderTask,
+  type PDFPageProxy,
 } from "pdfjs-dist"
-import { useEffect, useRef, useState, type KeyboardEvent } from "react"
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react"
 
 import {
   PDFJS_RESOURCE_URI,
@@ -18,7 +24,10 @@ import type { ViewLabels } from "../locale"
 import { IconButton } from "../ui/icon-button"
 import { Status } from "../ui/status"
 import type { ViewApp } from "../view"
+import { PdfSidebar } from "./pdf-sidebar"
 import styles from "./pdf-preview.module.css"
+import type { Room } from "./room"
+import { ZoomPane, type Space } from "./zoom"
 
 type Read = ViewApp["readServerResource"]
 type Labels = ViewLabels["artifact"]
@@ -110,72 +119,127 @@ function pdfWorker(read: Read) {
   return worker
 }
 
+/** How long a zoom rests before the page is drawn again at its new scale. */
+const SETTLE_MS = 150
+
+/** A narrower room lays the sidebar over the page instead of beside it. */
+const SIDEBAR_BESIDE_WIDTH = 480
+
 /**
- * One page at a time, drawn to fit the view's width, with its text laid over
- * it for selection and screen readers. The page keys turn it.
+ * One page fitted to the space and zoomed, with its text laid over it for
+ * selection and screen readers. While a zoom settles, the drawn page and its
+ * text scale together and the page is drawn again once it rests.
  */
-function PdfPages({ pdf, labels }: { pdf: PDFDocumentProxy; labels: Labels }) {
-  const pages = pdf.numPages
-  const [page, setPage] = useState(1)
-  const [width, setWidth] = useState(0)
-  const region = useRef<HTMLDivElement>(null)
-  const sheet = useRef<HTMLDivElement>(null)
+function PdfSheet({
+  pdf,
+  page,
+  space,
+  zoom,
+}: {
+  pdf: PDFDocumentProxy
+  page: number
+  space: Space
+  zoom: number
+}) {
+  const [loaded, setLoaded] = useState<{ number: number; page: PDFPageProxy }>()
   const canvas = useRef<HTMLCanvasElement>(null)
   const text = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) setWidth(Math.floor(entry.contentRect.width))
-    })
-    observer.observe(region.current!)
-    return () => observer.disconnect()
-  }, [])
-
-  useEffect(() => {
-    if (width === 0) return
     let cancelled = false
-    let drawing: RenderTask | undefined
-    let layer: TextLayer | undefined
-    void pdf
-      .getPage(page)
-      .then((pdfPage) => {
-        if (cancelled) return
-        const viewport = pdfPage.getViewport({
-          scale: width / pdfPage.getViewport({ scale: 1 }).width,
-        })
-        const ratio = Math.min(
-          window.devicePixelRatio || 1,
-          Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height))
-        )
-        const target = canvas.current!
-        target.width = Math.floor(viewport.width * ratio)
-        target.height = Math.floor(viewport.height * ratio)
-        // pdf.js sizes the text layer and each run of text by this factor.
-        sheet.current!.style.setProperty(
-          "--total-scale-factor",
-          String(viewport.scale * viewport.userUnit)
-        )
-        drawing = pdfPage.render({
-          canvas: target,
-          viewport,
-          transform: [ratio, 0, 0, ratio, 0, 0],
-        })
-        text.current!.replaceChildren()
-        layer = new TextLayer({
-          textContentSource: pdfPage.streamTextContent(),
-          container: text.current!,
-          viewport,
-        })
-        return Promise.all([drawing.promise, layer.render()])
-      })
-      // A page turned or resized mid-draw cancels the draw, which rejects.
-      .catch(() => undefined)
+    void pdf.getPage(page).then(
+      (pdfPage) => {
+        if (!cancelled) setLoaded({ number: page, page: pdfPage })
+      },
+      () => undefined
+    )
     return () => {
       cancelled = true
-      drawing?.cancel()
-      layer?.cancel()
     }
-  }, [pdf, page, width])
+  }, [pdf, page])
+
+  const pdfPage = loaded?.number === page ? loaded.page : undefined
+  const unscaled = pdfPage?.getViewport({ scale: 1 })
+  const scale = unscaled
+    ? Math.min(space.width / unscaled.width, space.height / unscaled.height) *
+      zoom
+    : 0
+  const [drawn, setDrawn] = useState(scale)
+  useEffect(() => {
+    const settle = setTimeout(() => setDrawn(scale), SETTLE_MS)
+    return () => clearTimeout(settle)
+  }, [scale])
+
+  useEffect(() => {
+    if (!pdfPage || drawn <= 0) return
+    const viewport = pdfPage.getViewport({ scale: drawn })
+    const ratio = Math.min(
+      window.devicePixelRatio || 1,
+      Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height))
+    )
+    const target = canvas.current!
+    target.width = Math.floor(viewport.width * ratio)
+    target.height = Math.floor(viewport.height * ratio)
+    const drawing = pdfPage.render({
+      canvas: target,
+      viewport,
+      transform: [ratio, 0, 0, ratio, 0, 0],
+    })
+    text.current!.replaceChildren()
+    const layer = new TextLayer({
+      textContentSource: pdfPage.streamTextContent(),
+      container: text.current!,
+      viewport,
+    })
+    // A page turned or zoomed mid-draw cancels the draw, which rejects.
+    Promise.all([drawing.promise, layer.render()]).catch(() => undefined)
+    return () => {
+      drawing.cancel()
+      layer.cancel()
+    }
+  }, [pdfPage, drawn])
+
+  return (
+    // pdf.js places text by physical offsets, in either direction.
+    <div
+      dir="ltr"
+      className={`${styles.page} m-auto shrink-0 bg-white ring-1 ring-border`}
+      style={
+        unscaled
+          ? ({
+              width: Math.floor(unscaled.width * scale),
+              height: Math.floor(unscaled.height * scale),
+              // pdf.js sizes the text layer and each run of text by this
+              // factor, so the text keeps to the page as it scales.
+              "--total-scale-factor": scale * unscaled.userUnit,
+            } as CSSProperties)
+          : undefined
+      }
+    >
+      <canvas ref={canvas} aria-hidden="true" />
+      <div ref={text} className={styles.textLayer} />
+    </div>
+  )
+}
+
+/**
+ * One page at a time, fitted to the room and zoomable, with paging and zoom
+ * controls above it and a sidebar of the file's outline and pages that the
+ * reader opens. The page keys turn it.
+ */
+export function PdfPages({
+  pdf,
+  labels,
+  room,
+}: {
+  pdf: PDFDocumentProxy
+  labels: Labels
+  room: Room
+}) {
+  const pages = pdf.numPages
+  const [page, setPage] = useState(1)
+  const [sidebar, setSidebar] = useState(false)
+  const overlay = room.width < SIDEBAR_BESIDE_WIDTH
 
   const turn = (event: KeyboardEvent) => {
     const to = PAGE_KEYS[event.key]
@@ -185,46 +249,67 @@ function PdfPages({ pdf, labels }: { pdf: PDFDocumentProxy; labels: Labels }) {
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <div
-        ref={region}
-        role="region"
-        aria-label={labels.pdfTitle}
-        tabIndex={0}
-        onKeyDown={turn}
-        className="overflow-hidden rounded-md border outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        {/* pdf.js places text by physical offsets, in either direction. */}
-        <div ref={sheet} dir="ltr" className={styles.page}>
-          <canvas ref={canvas} aria-hidden="true" />
-          <div ref={text} className={styles.textLayer} />
-        </div>
-      </div>
-      {pages > 1 ? (
-        <div className="flex items-center justify-center gap-2">
+    <ZoomPane
+      room={room}
+      label={labels.pdfTitle}
+      labels={labels}
+      fill
+      onKeyDown={turn}
+      controls={
+        <>
           <IconButton
-            label={labels.previousPage}
-            disabled={page === 1}
-            onClick={() => setPage(page - 1)}
+            label={labels.sidebar}
+            expanded={sidebar}
+            onClick={() => setSidebar(!sidebar)}
           >
-            <ChevronLeft className="rtl:-scale-x-100" />
+            <PanelLeft className="rtl:-scale-x-100" />
           </IconButton>
-          <p
-            className="m-0 text-xs text-muted-foreground tabular-nums"
-            aria-live="polite"
-          >
-            {labels.page(page, pages)}
-          </p>
-          <IconButton
-            label={labels.nextPage}
-            disabled={page === pages}
-            onClick={() => setPage(page + 1)}
-          >
-            <ChevronRight className="rtl:-scale-x-100" />
-          </IconButton>
-        </div>
-      ) : null}
-    </div>
+          {pages > 1 ? (
+            <>
+              <IconButton
+                label={labels.previousPage}
+                disabled={page === 1}
+                onClick={() => setPage(page - 1)}
+              >
+                <ChevronLeft className="rtl:-scale-x-100" />
+              </IconButton>
+              <p
+                className="m-0 text-xs text-muted-foreground tabular-nums"
+                aria-live="polite"
+              >
+                {labels.page(page, pages)}
+              </p>
+              <IconButton
+                label={labels.nextPage}
+                disabled={page === pages}
+                onClick={() => setPage(page + 1)}
+              >
+                <ChevronRight className="rtl:-scale-x-100" />
+              </IconButton>
+            </>
+          ) : null}
+        </>
+      }
+      aside={
+        sidebar ? (
+          <PdfSidebar
+            pdf={pdf}
+            page={page}
+            overlay={overlay}
+            labels={labels}
+            onPage={(next) => {
+              setPage(next)
+              // Over the page, the sidebar steps aside once it has turned it.
+              if (overlay) setSidebar(false)
+            }}
+          />
+        ) : null
+      }
+    >
+      {(space, zoom) => (
+        <PdfSheet pdf={pdf} page={page} space={space} zoom={zoom} />
+      )}
+    </ZoomPane>
   )
 }
 
@@ -236,10 +321,12 @@ export function PdfPreview({
   blob,
   read,
   labels,
+  room,
 }: {
   blob: Blob
   read: Read
   labels: Labels
+  room: Room
 }) {
   const [loaded, setLoaded] = useState<{
     blob: Blob
@@ -279,5 +366,5 @@ export function PdfPreview({
   const pdf = loaded?.blob === blob ? loaded.pdf : undefined
   if (pdf === undefined) return <Status>{labels.loading}</Status>
   if (pdf === null) return <Status>{labels.noPreview}</Status>
-  return <PdfPages pdf={pdf} labels={labels} />
+  return <PdfPages pdf={pdf} labels={labels} room={room} />
 }

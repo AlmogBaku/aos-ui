@@ -25,8 +25,11 @@ import { CopyButton } from "./artifact/copy-button"
 import { CsvTable } from "./artifact/csv-table"
 import { HtmlPreview } from "./artifact/html-preview"
 import { Markdown } from "./artifact/markdown"
+import { useRoom, type Room } from "./artifact/room"
 import { useFile } from "./artifact/use-file"
+import { ZoomPane } from "./artifact/zoom"
 import type { ViewLabels } from "./locale"
+import { cn } from "./ui/cn"
 import { IconButton } from "./ui/icon-button"
 import { Status } from "./ui/status"
 import { ViewTitle } from "./ui/view-title"
@@ -48,24 +51,54 @@ type ArtifactLabels = ViewLabels["artifact"]
 
 function ignore() {}
 
+/**
+ * An image fitted to the room, never past its own size until zoomed, so a
+ * small one stays sharp and a large one shows whole.
+ */
 function ImagePreview({
   url,
   name,
-  fallback,
+  labels,
+  room,
 }: {
   url: string
   name: string
-  fallback: string
+  labels: ArtifactLabels
+  room: Room
 }) {
   const [broken, setBroken] = useState(false)
-  if (broken) return <Status>{fallback}</Status>
+  const [size, setSize] = useState<{ width: number; height: number }>()
+  if (broken) return <Status>{labels.noPreview}</Status>
   return (
-    <img
-      src={url}
-      alt={name}
-      className="max-h-96 max-w-full rounded-md object-contain"
-      onError={() => setBroken(true)}
-    />
+    <ZoomPane room={room} label={labels.imageTitle} labels={labels}>
+      {(space, zoom) => {
+        const fit = size
+          ? Math.min(1, space.width / size.width, space.height / size.height)
+          : 0
+        return (
+          <img
+            src={url}
+            alt={name}
+            className="m-auto block max-w-none shrink-0 rounded-md"
+            style={
+              size
+                ? {
+                    width: Math.floor(size.width * fit * zoom),
+                    height: Math.floor(size.height * fit * zoom),
+                  }
+                : { maxWidth: "100%", maxHeight: space.height }
+            }
+            onLoad={(event) => {
+              // An SVG without a size of its own keeps to the space unzoomed.
+              const { naturalWidth: width, naturalHeight: height } =
+                event.currentTarget
+              if (width && height) setSize({ width, height })
+            }}
+            onError={() => setBroken(true)}
+          />
+        )
+      }}
+    </ZoomPane>
   )
 }
 
@@ -138,11 +171,13 @@ function Preview({
   filename,
   labels,
   app,
+  room,
 }: {
   preview: FilePreview
   filename: string
   labels: ArtifactLabels
   app: ViewApp
+  room: Room
 }) {
   switch (preview.kind) {
     case "pdf":
@@ -152,6 +187,7 @@ function Preview({
             blob={preview.blob}
             read={app.readServerResource}
             labels={labels}
+            room={room}
           />
         </Suspense>
       )
@@ -160,11 +196,14 @@ function Preview({
         <ImagePreview
           url={preview.url}
           name={filename}
-          fallback={labels.noPreview}
+          labels={labels}
+          room={room}
         />
       )
     case "html":
-      return <HtmlPreview text={preview.text} labels={labels} />
+      return (
+        <HtmlPreview text={preview.text} height={room.height} labels={labels} />
+      )
     case "text":
       return (
         <TextPreview
@@ -177,6 +216,21 @@ function Preview({
     case "none":
       return <Status>{labels.noPreview}</Status>
   }
+}
+
+/** The height the view keeps to in its message when the host names none. */
+const INLINE_HEIGHT = 480
+
+/**
+ * The height the host lets the view take in its message, which a page, an
+ * image, or an HTML file fills, as the page's own preview gave one most of
+ * the window.
+ */
+function inlineLimit(context: ViewProps<unknown>["context"]) {
+  const dimensions = context?.containerDimensions
+  return dimensions && "maxHeight" in dimensions && dimensions.maxHeight
+    ? dimensions.maxHeight
+    : INLINE_HEIGHT
 }
 
 /** What a press on a control or link does itself, rather than expand the view. */
@@ -202,6 +256,16 @@ export function ArtifactView({
   const address = filesSchema.safeParse(context?.["aos/files"]).data?.path
   const file = useFile(address, value.filename, value.mimeType, previewLimits)
   const pip = context?.displayMode === "pip"
+  const root = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLDivElement>(null)
+  // In the side panel the view fills it; in its message it keeps to the
+  // height the host allows.
+  const room = useRoom(
+    root,
+    box,
+    pip ? undefined : inlineLimit(context),
+    file.state.status === "ready"
+  )
   const offersPip = context?.availableDisplayModes?.includes("pip") === true
   // A press that starts or ends inside a selection is reading, not asking.
   const selected = useRef(false)
@@ -225,7 +289,7 @@ export function ArtifactView({
     return () => window.removeEventListener("keydown", leave)
   }, [app, pip])
   return (
-    <div className="flex flex-col gap-3 p-3">
+    <div ref={root} className={cn("flex flex-col gap-3 p-3", pip && "h-dvh")}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1 wrap-anywhere">
           <ViewTitle title={value.filename} />
@@ -289,6 +353,7 @@ export function ArtifactView({
         // A press on the preview opens the side panel; the Picture in picture
         // button does the same from the keyboard.
         <div
+          ref={box}
           onPointerDown={() => {
             selected.current = selecting()
           }}
@@ -299,6 +364,7 @@ export function ArtifactView({
             filename={value.filename}
             labels={artifact}
             app={app}
+            room={room}
           />
         </div>
       ) : (

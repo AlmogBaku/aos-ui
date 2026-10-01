@@ -3,7 +3,7 @@
  * Copyright 2014 Mozilla Foundation, under the Apache License, Version 2.0.
  *
  * pdf.js sizes the layer and each run of text by `--total-scale-factor`, which
- * the view sets on the page as it draws, and places every run by physical
+ * the view sets on the page as it scales, and places every run by physical
  * offsets from the page's top left.
  */
 .page {
@@ -15,7 +15,7 @@
 .page canvas {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
 }
 
 .textLayer {

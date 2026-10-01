@@ -57,7 +57,8 @@ server (`packages/tools-mcp`). Each harness prefixes MCP tool names differently
 the proxy canonicalizes them in `packages/proxy/core/aos-tool-names.ts`, so
 the registry only ever sees the bare names above. `present_artifact` is an MCP
 App: its `artifact` view (`ui://aos-ui/artifact`) renders PDFs, images, plain
-text, and sandboxed HTML inside the App card. It is not dispatched by this
+text, and Agent HTML (its scripts run in an opaque-origin frame with no network)
+inside the App card. It is not dispatched by this
 registry; the App card is owned by `src/components/mcp-apps`.
 
 ## Safety rule

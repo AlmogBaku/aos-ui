@@ -236,7 +236,8 @@ Any of these causes the proxy to log `app_file.refused` with code `real_path_unk
 For HTML files shown in the `present_artifact` card:
 
 - The view loads no external or relative resources; an HTML file that needs them must inline everything.
-- Scripts are off; any effect that requires a script will not appear in the preview.
+- Inline scripts run, but in an opaque origin with no network: a script that fetches, opens a frame, submits a form, or reads storage fails in the preview.
+- Images and media from `blob:` addresses stay blank; inline them as `data:` addresses.
 
 For PDFs:
 

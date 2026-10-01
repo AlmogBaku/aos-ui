@@ -64,6 +64,15 @@ viewer's own machine. CSP cannot name an IPv6 literal, so `[::1]` is refused. De
 (camera, microphone, geolocation, clipboard write) become the frame's `allow`
 attribute.
 
+A frame a view opens from `srcdoc` inherits the view's CSP. The `artifact`
+view shows Agent-written HTML that way, in a frame sandboxed with
+`allow-scripts` and never `allow-same-origin`, so the file's inline scripts run
+in an opaque origin of their own that reaches neither the view nor the page.
+The view also injects a policy into that document allowing only inline scripts
+and styles, `data:` fonts, and `data:` and `blob:` images and media, with
+`connect-src` and `frame-src` set to `'none'`. Because the inherited view CSP
+grants images and media `data:` only, `blob:` images stay blank.
+
 ## Host requests
 
 | Request                   | Behavior                                                                                          |

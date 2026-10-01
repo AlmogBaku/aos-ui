@@ -48,6 +48,15 @@ export type ViewLabels = {
     previousPage: string
     nextPage: string
     page: (page: number, pages: number) => string
+    zoomIn: string
+    zoomOut: string
+    zoomFit: string
+    zoomLevel: (percent: number) => string
+    imageTitle: string
+    sidebar: string
+    outline: string
+    pages: string
+    goToPage: (page: number) => string
   }
 }
 
@@ -89,6 +98,15 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       previousPage: "Previous page",
       nextPage: "Next page",
       page: (page, pages) => `Page ${page} of ${pages}`,
+      zoomIn: "Zoom in",
+      zoomOut: "Zoom out",
+      zoomFit: "Fit to view",
+      zoomLevel: (percent) => `${percent}%`,
+      imageTitle: "Image preview",
+      sidebar: "Sidebar",
+      outline: "Outline",
+      pages: "Pages",
+      goToPage: (page) => `Page ${page}`,
     },
   },
   he: {
@@ -128,6 +146,15 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       previousPage: "העמוד הקודם",
       nextPage: "העמוד הבא",
       page: (page, pages) => `עמוד ${page} מתוך ${pages}`,
+      zoomIn: "הגדלה",
+      zoomOut: "הקטנה",
+      zoomFit: "התאמה לתצוגה",
+      zoomLevel: (percent) => `${percent}%`,
+      imageTitle: "תצוגה מקדימה של תמונה",
+      sidebar: "סרגל צד",
+      outline: "תוכן עניינים",
+      pages: "עמודים",
+      goToPage: (page) => `עמוד ${page}`,
     },
   },
 }
