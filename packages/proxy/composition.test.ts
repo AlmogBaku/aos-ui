@@ -54,6 +54,7 @@ async function configuration(withGuest = false) {
       baseUrl: "http://127.0.0.1:9119",
       tokenFile,
       sessionIdleMs: 300_000,
+      mediaArtifacts: true,
     },
     limits: {
       activeExecutions: 256,
