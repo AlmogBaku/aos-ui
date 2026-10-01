@@ -90,6 +90,12 @@ describe("virtualized thread", () => {
    */
   let anchor: { row: HTMLElement; top: number; margin: string } | undefined
   let adjusting = false
+  /**
+   * Like WebKit as the window moves down: the scroll position drops by as much
+   * as the spacing before the first mounted row grew. Off until a test turns
+   * it on, with the first row's top it last saw.
+   */
+  let leadingGrowthDrop: { top: number } | undefined
 
   function isViewport(element: HTMLElement) {
     return element.dataset.slot === "aui_thread-viewport"
@@ -192,6 +198,17 @@ describe("virtualized thread", () => {
     }
   }
 
+  function dropOnLeadingGrowth(viewport: HTMLElement) {
+    if (!leadingGrowthDrop || adjusting) return
+    const { mounted, boxes } = layout(viewport)
+    const top = mounted[0] ? boxes.get(mounted[0])?.top : undefined
+    if (top === undefined) return
+    const growth = top - leadingGrowthDrop.top
+    leadingGrowthDrop.top = top
+    if (growth > 0)
+      scrollTops.set(viewport, Math.max(0, viewport.scrollTop - growth))
+  }
+
   /** One line per 40 characters, so a streaming message grows. */
   function messageHeight(row: HTMLElement) {
     const lines = Math.ceil((row.textContent?.length ?? 0) / 40)
@@ -221,6 +238,7 @@ describe("virtualized thread", () => {
 
   beforeEach(() => {
     anchor = undefined
+    leadingGrowthDrop = undefined
     define("offsetTop", {
       get(this: HTMLElement) {
         const viewport = this.closest(VIEWPORT_SELECTOR)
@@ -246,6 +264,11 @@ describe("virtualized thread", () => {
       },
     })
     define("offsetWidth", { get: () => 800 })
+    define("scrollTo", {
+      value(this: HTMLElement, options: ScrollToOptions) {
+        this.scrollTop = options.top ?? this.scrollTop
+      },
+    })
     define("clientHeight", {
       get(this: HTMLElement) {
         return isViewport(this) ? VIEWPORT_HEIGHT : 0
@@ -258,6 +281,7 @@ describe("virtualized thread", () => {
     })
     define("scrollTop", {
       get(this: HTMLElement) {
+        if (isViewport(this)) dropOnLeadingGrowth(this)
         return scrollTops.get(this) ?? 0
       },
       set(this: HTMLElement, value: number) {
@@ -448,6 +472,7 @@ describe("virtualized thread", () => {
       ).toHaveAttribute("aria-expanded", "true")
 
       // The focused message stays mounted, so the reader moves on to another.
+      fireEvent.wheel(viewport())
       viewport().scrollTop = 0
       await settle()
       const elsewhere = screen.getByText("Long thread message 0")
@@ -456,11 +481,52 @@ describe("virtualized thread", () => {
       await settle()
       expect(screen.queryByText("The settled answer.")).not.toBeInTheDocument()
 
+      fireEvent.wheel(viewport())
       viewport().scrollTop = maximumScrollTop(viewport())
       await settle()
       expect(
         await screen.findByRole("button", { name: "Worked for 29s" })
       ).toHaveAttribute("aria-expanded", "true")
+    }
+  )
+
+  layoutIt(
+    "lands at the latest message when the browser drops the scroll position as the window moves",
+    async ({ settle }) => {
+      const user = userEvent.setup()
+      render(<LocalThread initialMessages={longThread()} />)
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = maximumScrollTop(viewport()) - 4000
+      await settle()
+      leadingGrowthDrop = { top: rowTop(viewport(), rows(viewport())[0]!) }
+
+      await user.click(screen.getByRole("button", { name: "Scroll to bottom" }))
+      await settle()
+
+      expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+      expect(
+        screen.getByText(`Long thread message ${LONG_THREAD_LENGTH - 1}`)
+      ).toBeInTheDocument()
+    }
+  )
+
+  layoutIt(
+    "keeps the reader's place when the browser drops the scroll position as the window moves",
+    async ({ settle }) => {
+      render(<LocalThread initialMessages={longThread()} />)
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = maximumScrollTop(viewport()) - 8000
+      await settle()
+      leadingGrowthDrop = { top: rowTop(viewport(), rows(viewport())[0]!) }
+
+      fireEvent.wheel(viewport())
+      const reading = viewport().scrollTop + 3000
+      viewport().scrollTop = reading
+      await settle()
+
+      expect(viewport().scrollTop).toBe(reading)
     }
   )
 

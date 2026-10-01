@@ -122,17 +122,37 @@ export class ThreadReadingPositionController {
   }
 
   /**
-   * Only the reader scrolling up leaves follow mode. Everything else that
-   * moves a following viewport — Assistant UI's smooth scroll toward grown
-   * content, scroll anchoring, a focus change — would otherwise be captured
-   * mid-way and pin the thread short of its latest content.
+   * Only the reader moves a bookmark, and only scrolling up leaves follow
+   * mode. Everything else that moves the viewport — Assistant UI's smooth
+   * scroll toward grown content, scroll anchoring, a focus change, a restore
+   * landing before its message is measured — would otherwise be captured
+   * mid-way: a following thread would stop short of its latest content, and
+   * a reading one would keep whatever its saved offset happens to show.
    */
   capture(sessionId: string, viewport: HTMLElement, byReader = true) {
     const previous = this.#bookmarks.get(sessionId)
     const scrolledUp = viewport.scrollTop < this.#scrollTop
     this.#scrollTop = viewport.scrollTop
-    if (previous?.mode === "follow" && !(scrolledUp && byReader))
-      return previous
+    if (previous && !byReader) {
+      // The reader's message keeps its place, so the fallback offset follows
+      // it for a restore that finds the message not yet mounted.
+      const message =
+        previous.mode === "reading" && previous.messageId
+          ? findMessage(viewport, previous.messageId)
+          : null
+      if (previous.mode !== "reading" || !message) return previous
+      const bookmark = {
+        ...previous,
+        scrollTop:
+          viewport.scrollTop +
+          message.getBoundingClientRect().top -
+          viewport.getBoundingClientRect().top -
+          previous.offsetPx,
+      }
+      this.#bookmarks.set(sessionId, bookmark)
+      return bookmark
+    }
+    if (previous?.mode === "follow" && !scrolledUp) return previous
     const bookmark = captureThreadReadingBookmark(
       viewport,
       this.#bottomThresholdPx
