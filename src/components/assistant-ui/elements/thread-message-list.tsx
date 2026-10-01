@@ -64,11 +64,24 @@ function messageElement(viewport: HTMLElement | null, messageId: string) {
  */
 const PREPEND_CORRECTION_PASSES = 4
 
+/** A message and its top within the viewport. */
+type MessagePlace = { messageId: string; top: number }
+
 /**
- * A message the reader is looking at, its top within the viewport, and how
- * many commits have corrected for it so far.
+ * A message the reader is looking at, where it is, and how many commits have
+ * corrected for it so far.
  */
-type PrependAnchor = { messageId: string; top: number; passes: number }
+type PrependAnchor = MessagePlace & { passes: number }
+
+function placeOf(
+  viewport: HTMLElement,
+  message: HTMLElement | null | undefined
+): MessagePlace | null {
+  const messageId = message?.dataset.messageId
+  return message && messageId
+    ? { messageId, top: topWithin(viewport, message) }
+    : null
+}
 
 /**
  * What must stay in place as older messages land above: the reader's
@@ -84,10 +97,8 @@ function readPrependAnchor(
   const message =
     (place.messageId && messageElement(viewport, place.messageId)) ||
     firstVisibleMessage(viewport)
-  const messageId = message?.dataset.messageId
-  return message && messageId
-    ? { messageId, top: topWithin(viewport, message), passes: 0 }
-    : null
+  const anchor = placeOf(viewport, message)
+  return anchor && { ...anchor, passes: 0 }
 }
 
 function topWithin(viewport: HTMLElement, element: HTMLElement) {
@@ -281,6 +292,42 @@ export function ThreadMessageList({
 
   // A short Session skips the window, so it also renders before layout.
   const whole = count <= WHOLE_THREAD_MESSAGE_LIMIT
+
+  // WebKit can drop the scroll position as a commit moves the window, and
+  // without scroll anchoring nothing puts it back: a restored or followed
+  // thread lands short, and the reading position records that as the reader's
+  // place. Where the thread stands is read here, before the commit, so the
+  // effect below returns it: the first message in view to its place, or the
+  // scroll position itself when the window has yet to reach the viewport.
+  // Where the browser anchored it, nothing moves; a page landing above keeps
+  // its own anchor.
+  const viewport = viewportRef.current
+  const beforeCommit =
+    viewport && !whole && !prependAnchor
+      ? {
+          scrollTop: viewport.scrollTop,
+          inView: placeOf(viewport, firstVisibleMessage(viewport)),
+        }
+      : null
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport || !beforeCommit) return
+    const { scrollTop, inView } = beforeCommit
+    const message = inView && messageElement(viewport, inView.messageId)
+    const shift =
+      inView && message
+        ? topWithin(viewport, message) - inView.top
+        : scrollTop - viewport.scrollTop
+    if (shift === 0) return
+    setScrollTopImmediately(viewport, viewport.scrollTop + shift)
+    // A scroll toward the latest content the drop cut short continues.
+    if (
+      readingBookmark?.()?.mode === "follow" &&
+      viewport.scrollTop < viewport.scrollHeight - viewport.clientHeight
+    )
+      viewport.scrollTo({ top: viewport.scrollHeight })
+  })
+
   // Read in both modes, so the virtualizer's measurements follow every commit.
   const virtualItems = virtualizer.getVirtualItems()
   const items = whole

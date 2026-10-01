@@ -9,7 +9,7 @@ import {
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown"
 import remarkGfm from "remark-gfm"
-import { type FC, memo, useMemo } from "react"
+import { type FC, memo, type ReactNode, useMemo } from "react"
 import type { TextMessagePartProps } from "@assistant-ui/react"
 import { CheckIcon, CopyIcon } from "lucide-react"
 
@@ -131,6 +131,17 @@ function isExternalHref(href: string | undefined): boolean {
     return false
   }
 }
+
+/**
+ * A table takes one direction from its first strong text, so its columns,
+ * borders, and alignment agree. Each cell's text still orders by its own
+ * content (`340 g` stays `340 g` in a Hebrew table) through an inline
+ * plaintext isolate; a `dir` attribute or `bdi` here would hide the text from
+ * the table's own `dir="auto"`.
+ */
+const TableCellText: FC<{ children?: ReactNode }> = ({ children }) => (
+  <span className="[unicode-bidi:plaintext]">{children}</span>
+)
 
 const componentsByLanguage = {
   mermaid: {
@@ -268,7 +279,7 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   table: ({ className, ...props }) => (
-    <div className="aui-md-table-scroll my-3 overflow-x-auto">
+    <div dir="auto" className="aui-md-table-scroll my-3 overflow-x-auto">
       <table
         className={cn(
           "aui-md-table w-full border-separate border-spacing-0",
@@ -278,25 +289,27 @@ const defaultComponents = memoizeMarkdownComponents({
       />
     </div>
   ),
-  th: ({ className, ...props }) => (
+  th: ({ className, children, ...props }) => (
     <th
-      dir="auto"
       className={cn(
         "aui-md-th bg-muted px-3 py-1.5 text-start font-medium first:rounded-ss-lg last:rounded-se-lg [[align=center]]:text-center [[align=right]]:text-end",
         className
       )}
       {...props}
-    />
+    >
+      <TableCellText>{children}</TableCellText>
+    </th>
   ),
-  td: ({ className, ...props }) => (
+  td: ({ className, children, ...props }) => (
     <td
-      dir="auto"
       className={cn(
         "aui-md-td border-s border-b border-muted-foreground/20 px-3 py-1.5 text-start last:border-e [[align=center]]:text-center [[align=right]]:text-end",
         className
       )}
       {...props}
-    />
+    >
+      <TableCellText>{children}</TableCellText>
+    </td>
   ),
   tr: ({ className, ...props }) => (
     <tr

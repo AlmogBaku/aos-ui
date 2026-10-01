@@ -194,6 +194,36 @@ describe("thread reading position", () => {
     })
   })
 
+  it("keeps the reader's place through a scroll the reader did not make", () => {
+    const controller = new ThreadReadingPositionController()
+    const viewport = createViewport({ scrollTop: 300 })
+    const message = appendMessage(viewport, "anchor", 80, 120)
+    const reading = controller.capture("thread-a", viewport)
+
+    viewport.scrollTop = 450
+    message.getBoundingClientRect = () => rect(-70, 120)
+    expect(controller.capture("thread-a", viewport, false)).toEqual(reading)
+
+    controller.syncAfterContentChange("thread-a", viewport)
+    expect(viewport.scrollTop).toBe(300)
+  })
+
+  it("moves the saved offset with the reader's message as content lands above it", () => {
+    const controller = new ThreadReadingPositionController()
+    const viewport = createViewport({ scrollTop: 300 })
+    const message = appendMessage(viewport, "anchor", 80, 120)
+    controller.capture("thread-a", viewport)
+
+    // Anchored in place while older messages land above.
+    viewport.scrollTop = 800
+    controller.capture("thread-a", viewport, false)
+    message.remove()
+    viewport.scrollTop = 0
+    controller.restore("thread-a", viewport)
+
+    expect(viewport.scrollTop).toBe(800)
+  })
+
   it("keeps bookmarks independent by thread for the controller lifetime", () => {
     const controller = new ThreadReadingPositionController()
     const viewport = createViewport({ scrollTop: 300 })

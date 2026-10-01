@@ -7,7 +7,7 @@ import { useAui, useAuiState } from "@assistant-ui/react"
 import { useCallback } from "react"
 
 import { usePendingInteractionGate } from "@/components/runtime-interactions/pending-interaction-context"
-import { copyTextToClipboard } from "@/lib/clipboard"
+import { copyMarkdownToClipboard } from "@/lib/clipboard"
 
 import { useVoiceContext } from "../voice/voice-context"
 import type { MessageRewind } from "./thread.aui"
@@ -19,7 +19,7 @@ import type { MessageRewind } from "./thread.aui"
  */
 
 /** Copies through the clipboard helper that survives a denied Clipboard API. */
-const COPY_OPTIONS = { copyToClipboard: copyTextToClipboard }
+const COPY_OPTIONS = { copyToClipboard: copyMarkdownToClipboard }
 
 export function useMessageCopy(): { copy: () => void; disabled: boolean } {
   const { copy, disabled } = useActionBarCopy(COPY_OPTIONS)
