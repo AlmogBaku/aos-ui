@@ -66,15 +66,15 @@ capacity.
 
 An Agent shows a file with `present_artifact` from the AOS UI tools MCP server, passing an absolute path. A card appears in the conversation. It renders:
 
-- **PDFs** fitted to the card, with selectable, findable text, keyboard paging (Page Up/Down, Home, End), and a sidebar of the outline and pages that the Sidebar control opens
+- **PDFs** as wide as the card, with selectable, findable text, keyboard paging (Page Up/Down, Home, End), and a sidebar of the outline and pages that the Sidebar control opens
 - **Images**, fitted to the card
-
-PDFs and images zoom with a pinch, Ctrl and the wheel or a trackpad pinch, the + and - keys (0 fits again), or the controls above them; zoomed in, they pan by scrolling.
 - **Plain text**
-- **Agent-written HTML** with its own scripts, in a sandboxed frame with an opaque origin that reaches no network and loads no outside or relative files
+- **Agent-written HTML** with its own scripts, in a sandboxed frame with an opaque origin that reaches no network and loads no outside or relative files, beside its source highlighted as HTML
 - **Anything else** as "No preview"
 
-The card's controls are Refresh, Download, Open in new tab, and pip.
+PDFs and images zoom with a pinch, Ctrl and the wheel or a trackpad pinch, the + and - keys (0 fits again), or the zoom controls; zoomed in, they pan by scrolling. Agent HTML zooms with Ctrl and the wheel or a trackpad pinch over its frame.
+
+The card's controls are Refresh, Download, Open in new tab, and pip, on one row with the preview's own controls; in the side panel, which names the file, the view does not repeat the name.
 
 A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) shows Download and Open in new tab instead of a preview.
 

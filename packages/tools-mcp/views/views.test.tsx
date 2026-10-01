@@ -301,16 +301,21 @@ describe("artifact view", () => {
     ).toBe('{"region":')
   })
 
-  it("shows an HTML file's source from the keyboard", async () => {
+  it("shows an HTML file's source, highlighted as HTML, from the keyboard", async () => {
     const html = "<h1>Launch plan</h1>"
-    showFile({ filename: "plan.html" }, html)
+    const { app } = showFile({ filename: "plan.html" }, html)
     await userEvent.click(await screen.findByRole("tab", { name: "Preview" }))
     await userEvent.keyboard("{ArrowRight}")
     const source = screen.getByRole("tab", { name: "Source" })
     expect(source).toHaveFocus()
     expect(source).toHaveAttribute("aria-selected", "true")
-    expect(screen.getByRole("tabpanel")).toHaveTextContent(html)
+    const panel = screen.getByRole("tabpanel")
+    expect(panel).toHaveTextContent(html)
     expect(screen.queryByTitle("HTML preview")).toBeNull()
+    await waitFor(() => expect(panel.querySelector("span")).not.toBeNull())
+    expect(app.readServerResource.mock.calls[0]?.[0].uri).toBe(
+      `${GRAMMAR_RESOURCE_URI}html.json`
+    )
   })
 
   // Each case names a grammar no other case loads, since a loaded grammar

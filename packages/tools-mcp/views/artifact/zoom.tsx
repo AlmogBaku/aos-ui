@@ -12,6 +12,7 @@ import {
 import type { ViewLabels } from "../locale"
 import { cn } from "../ui/cn"
 import { IconButton } from "../ui/icon-button"
+import { Toolbar } from "../ui/toolbar"
 import type { Room } from "./room"
 
 type Labels = ViewLabels["artifact"]
@@ -51,11 +52,12 @@ function middle([a, b]: Point[]): Point | undefined {
 }
 
 /**
- * Content fitted to the room, with zoom controls above it. A pinch, a
+ * Content fitted to the room, with zoom controls among the view's. A pinch, a
  * trackpad pinch or Ctrl with the wheel, the zoom keys (+, -, and 0 to fit),
  * or the controls zoom it about the point they act at; zoomed in, it scrolls
  * to pan. `children` lays the content out at a zoom in the space it fits.
- * Unless `fill` holds, the pane is only as tall as its fitted content.
+ * Unless `fill` holds, the pane is only as tall as its fitted content. A new
+ * `start` scrolls back to the content's top.
  */
 export function ZoomPane({
   room,
@@ -64,6 +66,7 @@ export function ZoomPane({
   controls,
   aside,
   fill = false,
+  start,
   onKeyDown,
   children,
 }: {
@@ -73,6 +76,7 @@ export function ZoomPane({
   controls?: ReactNode
   aside?: ReactNode
   fill?: boolean
+  start?: unknown
   onKeyDown?: (event: KeyboardEvent) => void
   children: (space: Space, zoom: number) => ReactNode
 }) {
@@ -84,8 +88,8 @@ export function ZoomPane({
   const current = useRef(zoom)
   const anchor = useRef<Anchor | undefined>(undefined)
 
-  // The space below the controls and beside any aside, neither of which
-  // moves as the content grows.
+  // The space below anything above the content and beside any aside, neither
+  // of which moves as the content grows.
   useLayoutEffect(() => {
     const measure = () => {
       const width = box.current!.clientWidth
@@ -118,6 +122,10 @@ export function ZoomPane({
     box.current!.scrollLeft += rect.left + at.across * rect.width - at.x
     box.current!.scrollTop += rect.top + at.down * rect.height - at.y
   }, [zoom])
+
+  useLayoutEffect(() => {
+    box.current!.scrollTop = 0
+  }, [start])
 
   const zoomTo = useCallback((next: number, at?: Point) => {
     const element = box.current
@@ -166,10 +174,7 @@ export function ZoomPane({
       touches.set(event.pointerId, { x: event.clientX, y: event.clientY })
       const points = [...touches.values()]
       if (!pinch || points.length !== 2 || !pinch.distance) return
-      zoomTo(
-        (pinch.zoom * distance(points)) / pinch.distance,
-        middle(points)
-      )
+      zoomTo((pinch.zoom * distance(points)) / pinch.distance, middle(points))
     }
     const up = (event: PointerEvent) => {
       touches.delete(event.pointerId)
@@ -205,7 +210,7 @@ export function ZoomPane({
       className="flex flex-col gap-2"
       style={fill ? { height: room.height } : undefined}
     >
-      <div className="flex flex-wrap items-center justify-center gap-1">
+      <Toolbar>
         {controls}
         <IconButton
           label={labels.zoomOut}
@@ -231,10 +236,10 @@ export function ZoomPane({
         >
           <Shrink />
         </IconButton>
-      </div>
+      </Toolbar>
       <div
         ref={body}
-        className={cn("relative flex min-h-0 gap-2", fill && "flex-1")}
+        className={cn("relative flex min-h-0", fill && "flex-1")}
         style={{ maxHeight: space.height }}
       >
         {aside}

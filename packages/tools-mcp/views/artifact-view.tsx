@@ -32,6 +32,7 @@ import type { ViewLabels } from "./locale"
 import { cn } from "./ui/cn"
 import { IconButton } from "./ui/icon-button"
 import { Status } from "./ui/status"
+import { ToolbarSlot } from "./ui/toolbar"
 import { ViewTitle } from "./ui/view-title"
 import type { ViewApp, ViewProps } from "./view"
 
@@ -209,7 +210,12 @@ function Preview({
       )
     case "html":
       return (
-        <HtmlPreview text={preview.text} height={room.height} labels={labels} />
+        <HtmlPreview
+          text={preview.text}
+          height={room.height}
+          labels={labels}
+          read={app.readServerResource}
+        />
       )
     case "text":
       return (
@@ -265,6 +271,7 @@ export function ArtifactView({
   const pip = context?.displayMode === "pip"
   const root = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLDivElement>(null)
+  const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
   // In the side panel the view fills it; in its message it keeps to the
   // height the host allows.
   const room = useRoom(
@@ -297,12 +304,16 @@ export function ArtifactView({
   }, [app, pip])
   return (
     <div ref={root} className={cn("flex flex-col gap-3 p-3", pip && "h-dvh")}>
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1 wrap-anywhere">
-          <ViewTitle title={value.filename} />
-        </div>
+      {/* The side panel names the file above the view, so the view does not. */}
+      <div className="flex flex-wrap items-center gap-2">
+        {pip ? null : (
+          <div className="min-w-0 flex-1 basis-48 wrap-anywhere">
+            <ViewTitle title={value.filename} />
+          </div>
+        )}
+        <div ref={setToolbar} className="flex items-center empty:hidden" />
         {address === undefined ? null : (
-          <div className="flex items-center gap-1">
+          <div className="ms-auto flex items-center gap-1">
             {file.state.status === "ready" &&
             (file.state.preview.kind === "text" ||
               file.state.preview.kind === "html") ? (
@@ -366,13 +377,15 @@ export function ArtifactView({
           }}
           onClick={expand}
         >
-          <Preview
-            preview={file.state.preview}
-            filename={value.filename}
-            labels={artifact}
-            app={app}
-            room={room}
-          />
+          <ToolbarSlot value={toolbar}>
+            <Preview
+              preview={file.state.preview}
+              filename={value.filename}
+              labels={artifact}
+              app={app}
+              room={room}
+            />
+          </ToolbarSlot>
         </div>
       ) : (
         // Each state still loading or refused names its own label.

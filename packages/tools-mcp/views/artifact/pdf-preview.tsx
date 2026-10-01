@@ -21,6 +21,7 @@ import {
   PDFJS_WORKER_FILE,
 } from "../../../../shared/presentation/views"
 import type { ViewLabels } from "../locale"
+import { cn } from "../ui/cn"
 import { IconButton } from "../ui/icon-button"
 import { Status } from "../ui/status"
 import type { ViewApp } from "../view"
@@ -125,10 +126,31 @@ const SETTLE_MS = 150
 /** A narrower room lays the sidebar over the page instead of beside it. */
 const SIDEBAR_BESIDE_WIDTH = 480
 
+/** How far a turned page slides in, in CSS pixels, and for how long. */
+const TURN = { distance: 24, duration: 200 }
+
 /**
- * One page fitted to the space and zoomed, with its text laid over it for
- * selection and screen readers. While a zoom settles, the drawn page and its
- * text scale together and the page is drawn again once it rests.
+ * Slides a page just turned in from the side its turn came from, unless the
+ * reader asks for less motion.
+ */
+function slideIn(sheet: HTMLElement, forward: boolean) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return
+  const rtl = document.documentElement.dir === "rtl"
+  const from = (forward !== rtl ? 1 : -1) * TURN.distance
+  sheet.animate(
+    [
+      { opacity: 0, transform: `translateX(${from}px)` },
+      { opacity: 1, transform: "none" },
+    ],
+    { duration: TURN.duration, easing: "ease-out" }
+  )
+}
+
+/**
+ * One page fitted to the width of the space and zoomed, with its text laid
+ * over it for selection and screen readers. A page is drawn off screen and
+ * shown once whole, so the one before stays until it is; while a zoom
+ * settles, the drawn page and its text scale together.
  */
 function PdfSheet({
   pdf,
@@ -141,15 +163,20 @@ function PdfSheet({
   space: Space
   zoom: number
 }) {
-  const [loaded, setLoaded] = useState<{ number: number; page: PDFPageProxy }>()
+  const [loaded, setLoaded] = useState<{
+    pdf: PDFDocumentProxy
+    page: PDFPageProxy
+  }>()
+  const sheet = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const text = useRef<HTMLDivElement>(null)
+  const shown = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     let cancelled = false
     void pdf.getPage(page).then(
       (pdfPage) => {
-        if (!cancelled) setLoaded({ number: page, page: pdfPage })
+        if (!cancelled) setLoaded({ pdf, page: pdfPage })
       },
       () => undefined
     )
@@ -158,12 +185,9 @@ function PdfSheet({
     }
   }, [pdf, page])
 
-  const pdfPage = loaded?.number === page ? loaded.page : undefined
+  const pdfPage = loaded?.pdf === pdf ? loaded.page : undefined
   const unscaled = pdfPage?.getViewport({ scale: 1 })
-  const scale = unscaled
-    ? Math.min(space.width / unscaled.width, space.height / unscaled.height) *
-      zoom
-    : 0
+  const scale = unscaled ? (space.width / unscaled.width) * zoom : 0
   const [drawn, setDrawn] = useState(scale)
   useEffect(() => {
     const settle = setTimeout(() => setDrawn(scale), SETTLE_MS)
@@ -177,33 +201,48 @@ function PdfSheet({
       window.devicePixelRatio || 1,
       Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height))
     )
-    const target = canvas.current!
-    target.width = Math.floor(viewport.width * ratio)
-    target.height = Math.floor(viewport.height * ratio)
+    const offscreen = document.createElement("canvas")
+    offscreen.width = Math.floor(viewport.width * ratio)
+    offscreen.height = Math.floor(viewport.height * ratio)
     const drawing = pdfPage.render({
-      canvas: target,
+      canvas: offscreen,
       viewport,
       transform: [ratio, 0, 0, ratio, 0, 0],
     })
-    text.current!.replaceChildren()
-    const layer = new TextLayer({
+    const layer = document.createElement("div")
+    layer.className = styles.textLayer!
+    const textLayer = new TextLayer({
       textContentSource: pdfPage.streamTextContent(),
-      container: text.current!,
+      container: layer,
       viewport,
     })
     // A page turned or zoomed mid-draw cancels the draw, which rejects.
-    Promise.all([drawing.promise, layer.render()]).catch(() => undefined)
+    Promise.all([drawing.promise, textLayer.render()]).then(
+      () => {
+        const target = canvas.current!
+        target.width = offscreen.width
+        target.height = offscreen.height
+        target.getContext("2d")!.drawImage(offscreen, 0, 0)
+        text.current!.replaceChildren(layer)
+        const number = pdfPage.pageNumber
+        if (shown.current !== undefined && shown.current !== number)
+          slideIn(sheet.current!, number > shown.current)
+        shown.current = number
+      },
+      () => undefined
+    )
     return () => {
       drawing.cancel()
-      layer.cancel()
+      textLayer.cancel()
     }
   }, [pdfPage, drawn])
 
   return (
     // pdf.js places text by physical offsets, in either direction.
     <div
+      ref={sheet}
       dir="ltr"
-      className={`${styles.page} m-auto shrink-0 bg-white ring-1 ring-border`}
+      className={`${styles.page} mx-auto shrink-0 bg-white ring-1 ring-border`}
       style={
         unscaled
           ? ({
@@ -217,15 +256,16 @@ function PdfSheet({
       }
     >
       <canvas ref={canvas} aria-hidden="true" />
-      <div ref={text} className={styles.textLayer} />
+      <div ref={text} />
     </div>
   )
 }
 
 /**
- * One page at a time, fitted to the room and zoomable, with paging and zoom
- * controls above it and a sidebar of the file's outline and pages that the
- * reader opens. The page keys turn it.
+ * One page at a time, as wide as the room and zoomable, with paging and zoom
+ * controls among the view's and a sidebar of the file's outline and pages
+ * that the reader opens, which slides open beside the page or over it. The
+ * page keys turn it.
  */
 export function PdfPages({
   pdf,
@@ -254,6 +294,7 @@ export function PdfPages({
       label={labels.pdfTitle}
       labels={labels}
       fill
+      start={page}
       onKeyDown={turn}
       controls={
         <>
@@ -291,19 +332,28 @@ export function PdfPages({
         </>
       }
       aside={
-        sidebar ? (
-          <PdfSidebar
-            pdf={pdf}
-            page={page}
-            overlay={overlay}
-            labels={labels}
-            onPage={(next) => {
-              setPage(next)
-              // Over the page, the sidebar steps aside once it has turned it.
-              if (overlay) setSidebar(false)
-            }}
-          />
-        ) : null
+        // The sidebar's column opens and closes by its width, so the page
+        // beside it narrows and widens in step.
+        <div
+          className={cn(
+            "flex shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none",
+            sidebar ? "w-46" : "w-0",
+            overlay && "absolute inset-y-0 start-0 z-10"
+          )}
+        >
+          {sidebar ? (
+            <PdfSidebar
+              pdf={pdf}
+              page={page}
+              labels={labels}
+              onPage={(next) => {
+                setPage(next)
+                // Over the page, the sidebar steps aside once it has turned it.
+                if (overlay) setSidebar(false)
+              }}
+            />
+          ) : null}
+        </div>
       }
     >
       {(space, zoom) => (

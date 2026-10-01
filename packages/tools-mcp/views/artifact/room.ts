@@ -45,7 +45,8 @@ export function useRoom(
     }
     measure()
     const observer = new ResizeObserver(measure)
-    observer.observe(outer)
+    // The header above the preview may wrap as the view narrows.
+    for (const element of [outer, ...outer.children]) observer.observe(element)
     return () => observer.disconnect()
   }, [root, box, limit, ready])
   return room

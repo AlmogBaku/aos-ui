@@ -12,6 +12,7 @@ import { Fragment, useEffect, useState } from "react"
 
 import { GRAMMAR_RESOURCE_URI } from "../../../../shared/presentation/views"
 import { normalizeSyntaxLanguage } from "../../../../shared/syntax-language"
+import { cn } from "../ui/cn"
 import type { ViewApp } from "../view"
 import styles from "./code.module.css"
 
@@ -105,12 +106,14 @@ export function Code({
   label,
   read,
   limit = MAX_HIGHLIGHTED_CHARACTERS,
+  className,
 }: {
   code: string
   language: string | undefined
   label?: string
   read: Read
   limit?: number
+  className?: string
 }) {
   const [coloured, setColoured] = useState<{
     code: string
@@ -142,7 +145,11 @@ export function Code({
       tabIndex={0}
       role="region"
       aria-label={label}
-      className={`${styles.code} m-0 max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring`}
+      className={cn(
+        styles.code,
+        "m-0 max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+        className
+      )}
     >
       <code>
         {lines

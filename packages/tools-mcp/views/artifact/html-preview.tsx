@@ -2,6 +2,9 @@ import { useMemo, useState } from "react"
 
 import type { ViewLabels } from "../locale"
 import { Tabs } from "../ui/tabs"
+import type { ViewApp } from "../view"
+import { Code } from "./code"
+import { MAX_ZOOM } from "./zoom"
 
 const TABS = ["preview", "source"] as const
 
@@ -26,38 +29,59 @@ export const AGENT_HTML_CSP = [
 ].join("; ")
 
 /**
+ * Zooms the file's own page with Ctrl and the wheel, which is also how a
+ * trackpad pinch arrives, from fitted up to the view's `MAX_ZOOM`. A wheel
+ * over the frame never reaches the view, and unhandled it would zoom the
+ * whole page instead.
+ */
+const ZOOM_SCRIPT = `addEventListener("wheel", (event) => {
+  if (!event.ctrlKey) return
+  event.preventDefault()
+  const root = document.documentElement
+  const delta = Math.min(Math.max(event.deltaY, -25), 25)
+  const zoom = Number(root.style.zoom || 1) * Math.exp(-delta / 100)
+  root.style.zoom = String(Math.min(Math.max(zoom, 1), ${MAX_ZOOM}))
+}, { passive: false })`
+
+/**
  * The file's HTML with the policy as the first child of its head, so it
- * governs every script the file holds. The page's `injectHtmlCsp` does the
- * same for a view; the view cannot import the page's code.
+ * governs every script the file holds, and the zoom script after it. The
+ * page's `injectHtmlCsp` does the same for a view; the view cannot import
+ * the page's code.
  */
 function withPolicy(html: string) {
   const document = new DOMParser().parseFromString(html, "text/html")
   const meta = document.createElement("meta")
   meta.httpEquiv = "Content-Security-Policy"
   meta.content = AGENT_HTML_CSP
-  document.head.prepend(meta)
+  const script = document.createElement("script")
+  script.textContent = ZOOM_SCRIPT
+  document.head.prepend(meta, script)
   return `<!doctype html>${document.documentElement.outerHTML}`
 }
 
 /**
  * An HTML file, run with its scripts in a frame of its own, beside its source
- * as text, both `height` pixels tall with the tabs. The arrow keys, Home,
- * and End move between the two tabs.
+ * highlighted as HTML, either `height` pixels tall. The tabs between them sit
+ * among the view's controls; the arrow keys, Home, and End move between them.
  */
 export function HtmlPreview({
   text,
   height,
   labels,
+  read,
 }: {
   text: string
   height: number
   labels: ViewLabels["artifact"]
+  read: ViewApp["readServerResource"]
 }) {
   const html = useMemo(() => withPolicy(text), [text])
   const [tab, setTab] = useState<(typeof TABS)[number]>("preview")
   return (
-    <div className="flex flex-col gap-2" style={{ height }}>
+    <div className="flex flex-col" style={{ height }}>
       <Tabs
+        toolbar
         label={labels.htmlView}
         tabs={TABS.map((name) => ({ name, label: labels[name] }))}
         selected={tab}
@@ -75,13 +99,13 @@ export function HtmlPreview({
             className="block h-full w-full rounded-md border bg-white"
           />
         ) : (
-          <pre
-            dir="ltr"
-            tabIndex={0}
-            className="m-0 h-full overflow-auto rounded-md bg-muted p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          >
-            {text}
-          </pre>
+          <Code
+            code={text}
+            language="html"
+            label={labels.source}
+            read={read}
+            className="h-full max-h-none"
+          />
         )}
       </Tabs>
     </div>

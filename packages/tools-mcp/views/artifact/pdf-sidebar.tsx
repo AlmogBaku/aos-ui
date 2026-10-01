@@ -2,7 +2,6 @@ import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist"
 import { useEffect, useRef, useState } from "react"
 
 import type { ViewLabels } from "../locale"
-import { cn } from "../ui/cn"
 import { Tabs } from "../ui/tabs"
 
 type Labels = ViewLabels["artifact"]
@@ -151,19 +150,16 @@ function Thumbnail({ pdf, page }: { pdf: PDFDocumentProxy; page: number }) {
 
 /**
  * The file's outline, when it has one, and its pages as thumbnails; either
- * turns the page. Beside the page it takes its own column; `overlay` lays it
- * over the page instead, at the inline start.
+ * turns the page.
  */
 export function PdfSidebar({
   pdf,
   page,
-  overlay,
   labels,
   onPage,
 }: {
   pdf: PDFDocumentProxy
   page: number
-  overlay: boolean
   labels: Labels
   onPage: (page: number) => void
 }) {
@@ -179,10 +175,7 @@ export function PdfSidebar({
   return (
     <nav
       aria-label={labels.sidebar}
-      className={cn(
-        "flex w-44 shrink-0 flex-col gap-2 rounded-md border bg-background p-2",
-        overlay && "absolute inset-y-0 start-0 z-10 shadow-lg"
-      )}
+      className="me-2 flex w-44 shrink-0 flex-col gap-2 rounded-md border bg-background p-2"
     >
       <Tabs
         label={labels.sidebar}
