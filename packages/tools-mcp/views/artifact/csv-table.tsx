@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, type CSSProperties } from "react"
 
 /** The most rows a CSV preview lays out; Download carries the rest. */
 const MAX_ROWS = 500
@@ -45,10 +45,12 @@ export function CsvTable({
   text,
   label,
   truncatedLabel,
+  style,
 }: {
   text: string
   label: string
   truncatedLabel: (rows: number) => string
+  style: CSSProperties
 }) {
   const { rows, truncated } = useMemo(() => parseCsv(text), [text])
   const [header, ...body] = rows
@@ -57,7 +59,8 @@ export function CsvTable({
       tabIndex={0}
       role="region"
       aria-label={label}
-      className="max-h-96 overflow-auto rounded-md border outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      style={style}
+      className="overflow-auto rounded-md border outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
     >
       <table className="w-full border-collapse text-xs tabular-nums">
         {header ? (

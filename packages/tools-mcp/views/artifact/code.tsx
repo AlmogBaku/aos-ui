@@ -8,7 +8,7 @@ import {
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript"
 import githubDark from "shiki/themes/github-dark.mjs"
 import githubLight from "shiki/themes/github-light.mjs"
-import { Fragment, useEffect, useState } from "react"
+import { Fragment, useEffect, useState, type CSSProperties } from "react"
 
 import { GRAMMAR_RESOURCE_URI } from "../../../../shared/presentation/views"
 import { normalizeSyntaxLanguage } from "../../../../shared/syntax-language"
@@ -107,6 +107,7 @@ export function Code({
   read,
   limit = MAX_HIGHLIGHTED_CHARACTERS,
   className,
+  style,
 }: {
   code: string
   language: string | undefined
@@ -114,6 +115,7 @@ export function Code({
   read: Read
   limit?: number
   className?: string
+  style?: CSSProperties
 }) {
   const [coloured, setColoured] = useState<{
     code: string
@@ -147,9 +149,10 @@ export function Code({
       aria-label={label}
       className={cn(
         styles.code,
-        "m-0 max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+        "m-0 overflow-auto rounded-md bg-muted p-3 font-mono text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
         className
       )}
+      style={style}
     >
       <code>
         {lines

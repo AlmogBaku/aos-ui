@@ -1,5 +1,6 @@
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -13,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { Code } from "./artifact/code"
 import { PREVIEW_LIMITS } from "./artifact/file"
+import { keyAction } from "./artifact/zoom"
 import { PdfPages } from "./artifact/pdf-preview"
 import { ArtifactView } from "./artifact-view"
 import { ChartView } from "./chart-view"
@@ -710,10 +712,65 @@ describe("PDF sidebar", () => {
     expect(screen.getByText("Page 5 of 5")).toBeVisible()
   })
 
+  it("turns pages by key from the view's controls, but leaves Space to a button and arrows to the sidebar", async () => {
+    const user = userEvent.setup()
+    showPages([])
+    // jsdom lays nothing out, so every page is already at its edge.
+    await user.click(screen.getByRole("button", { name: "Next page" }))
+    await user.keyboard("{ArrowDown}")
+    expect(screen.getByText("Page 3 of 5")).toBeVisible()
+    act(() => screen.getByRole("button", { name: "Previous page" }).focus())
+    await user.keyboard(" ")
+    expect(screen.getByText("Page 2 of 5")).toBeVisible()
+    await user.keyboard("{End}")
+    expect(screen.getByText("Page 5 of 5")).toBeVisible()
+
+    await user.click(screen.getByRole("button", { name: "Sidebar" }))
+    await user.click(await screen.findByRole("tab", { name: "Pages" }))
+    await user.click(screen.getByRole("button", { name: "Page 3" }))
+    await user.keyboard("{ArrowDown}")
+    expect(screen.getByText("Page 3 of 5")).toBeVisible()
+  })
+
   it("offers no Outline tab for a file without an outline", async () => {
     showPages([])
     await userEvent.click(screen.getByRole("button", { name: "Sidebar" }))
     expect(await screen.findByRole("tab", { name: "Pages" })).toBeVisible()
     expect(screen.queryByRole("tab", { name: "Outline" })).toBeNull()
+  })
+})
+
+describe("zoom pane keys", () => {
+  /** Content 300px tall and as wide as its 100px box, scrolled `top` down it. */
+  const box = (top: number) =>
+    ({
+      scrollTop: top,
+      scrollHeight: 300,
+      clientHeight: 100,
+      scrollLeft: 0,
+      scrollWidth: 100,
+      clientWidth: 100,
+    }) as Element
+
+  it.each([
+    ["ArrowDown", false, 100, "ltr", { scroll: { top: 40, left: 0 } }],
+    ["ArrowDown", false, 200, "ltr", { turn: "next" }],
+    ["PageDown", false, 100, "ltr", { scroll: { top: 60, left: 0 } }],
+    [" ", false, 200, "ltr", { turn: "next" }],
+    [" ", true, 0, "ltr", { turn: "previous" }],
+    ["PageUp", false, 100, "ltr", { scroll: { top: -60, left: 0 } }],
+    ["ArrowUp", false, 0, "ltr", { turn: "previous" }],
+    ["ArrowRight", false, 100, "ltr", { turn: "next" }],
+    ["ArrowRight", false, 100, "rtl", { turn: "previous" }],
+    ["Home", false, 100, "ltr", { turn: "first" }],
+    ["End", false, 100, "ltr", { turn: "last" }],
+    ["a", false, 200, "ltr", undefined],
+  ])("%s (shift %s) at %ipx in %s", (key, shiftKey, top, dir, expected) => {
+    document.documentElement.dir = dir
+    try {
+      expect(keyAction({ key, shiftKey }, box(top))).toEqual(expected)
+    } finally {
+      document.documentElement.dir = ""
+    }
   })
 })

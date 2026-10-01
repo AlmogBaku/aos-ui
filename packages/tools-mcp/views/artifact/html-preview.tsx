@@ -104,7 +104,7 @@ export function HtmlPreview({
             language="html"
             label={labels.source}
             read={read}
-            className="h-full max-h-none"
+            className="h-full"
           />
         )}
       </Tabs>

@@ -66,7 +66,7 @@ capacity.
 
 An Agent shows a file with `present_artifact` from the AOS UI tools MCP server, passing an absolute path. A card appears in the conversation. It renders:
 
-- **PDFs** as wide as the card, with selectable, findable text, keyboard paging (Page Up/Down, Home, End), and a sidebar of the outline and pages that the Sidebar control opens
+- **PDFs** as wide as the card, with selectable, findable text, keyboard reading (the arrow, Page Up/Down, and Space keys scroll the page and turn it at its edge; Home and End jump to the first and last page), and a sidebar of the outline and pages that the Sidebar control opens
 - **Images**, fitted to the card
 - **Plain text**
 - **Agent-written HTML** with its own scripts, in a sandboxed frame with an opaque origin that reaches no network and loads no outside or relative files, beside its source highlighted as HTML

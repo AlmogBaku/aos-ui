@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react"
+import { useMemo, type CSSProperties, type ReactNode } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -94,6 +94,7 @@ function components(
             code={source.replace(/\n$/u, "")}
             language={codeLanguage(name)}
             read={read}
+            className="max-h-96"
           />
         </div>
       )
@@ -122,11 +123,13 @@ export function Markdown({
   label,
   openLink,
   read,
+  style,
 }: {
   source: string
   label: string
   openLink: ViewApp["openLink"]
   read: ViewApp["readServerResource"]
+  style: CSSProperties
 }) {
   const parts = useMemo(() => components(openLink, read), [openLink, read])
   return (
@@ -134,7 +137,8 @@ export function Markdown({
       tabIndex={0}
       role="region"
       aria-label={label}
-      className="max-h-96 overflow-auto rounded-md bg-muted/40 p-4 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      style={style}
+      className="overflow-auto rounded-md bg-muted/40 p-4 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
     >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={parts}>
         {source}

@@ -8,13 +8,7 @@ import {
   type PDFDocumentProxy,
   type PDFPageProxy,
 } from "pdfjs-dist"
-import {
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type KeyboardEvent,
-} from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 
 import {
   PDFJS_RESOURCE_URI,
@@ -28,7 +22,7 @@ import type { ViewApp } from "../view"
 import { PdfSidebar } from "./pdf-sidebar"
 import styles from "./pdf-preview.module.css"
 import type { Room } from "./room"
-import { ZoomPane, type Space } from "./zoom"
+import { ZoomPane, type Space, type Turn } from "./zoom"
 
 type Read = ViewApp["readServerResource"]
 type Labels = ViewLabels["artifact"]
@@ -44,16 +38,6 @@ type DataKind = keyof typeof DATA_URLS
 
 /** The largest canvas iOS Safari draws, which pdf.js's own viewer keeps to. */
 const MAX_CANVAS_PIXELS = 2 ** 24
-
-/** The page each paging key turns to. */
-const PAGE_KEYS: Partial<
-  Record<string, (page: number, pages: number) => number>
-> = {
-  PageUp: (page) => page - 1,
-  PageDown: (page) => page + 1,
-  Home: () => 1,
-  End: (_page, pages) => pages,
-}
 
 function bytesOf({ contents: [content] }: ReadResourceResult) {
   if (content && "blob" in content && typeof content.blob === "string")
@@ -265,7 +249,8 @@ function PdfSheet({
  * One page at a time, as wide as the room and zoomable, with paging and zoom
  * controls among the view's and a sidebar of the file's outline and pages
  * that the reader opens, which slides open beside the page or over it. The
- * page keys turn it.
+ * keys that scroll the page turn it at its edge, and Home and End turn to the
+ * first and last.
  */
 export function PdfPages({
   pdf,
@@ -281,11 +266,16 @@ export function PdfPages({
   const [sidebar, setSidebar] = useState(false)
   const overlay = room.width < SIDEBAR_BESIDE_WIDTH
 
-  const turn = (event: KeyboardEvent) => {
-    const to = PAGE_KEYS[event.key]
-    if (!to) return
-    event.preventDefault()
-    setPage(Math.min(Math.max(to(page, pages), 1), pages))
+  const turn = (to: Turn) => {
+    const next =
+      to === "first"
+        ? 1
+        : to === "last"
+          ? pages
+          : page + (to === "next" ? 1 : -1)
+    if (next === page || next < 1 || next > pages) return false
+    setPage(next)
+    return true
   }
 
   return (
@@ -295,7 +285,7 @@ export function PdfPages({
       labels={labels}
       fill
       start={page}
-      onKeyDown={turn}
+      onTurn={turn}
       controls={
         <>
           <IconButton

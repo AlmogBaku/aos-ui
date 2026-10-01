@@ -10,6 +10,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent,
 } from "react"
 import { z } from "zod"
@@ -112,16 +113,22 @@ function prettyJson(text: string) {
   }
 }
 
+/**
+ * A text file in a box of its own that scrolls: in the side panel it fills the
+ * room, and in its message it grows with the text up to the room's height.
+ */
 function TextPreview({
   preview,
   filename,
   labels,
   app,
+  size,
 }: {
   preview: Extract<FilePreview, { kind: "text" }>
   filename: string
   labels: ArtifactLabels
   app: ViewApp
+  size: CSSProperties
 }) {
   switch (preview.format) {
     case "markdown":
@@ -131,6 +138,7 @@ function TextPreview({
           label={filename}
           openLink={app.openLink}
           read={app.readServerResource}
+          style={size}
         />
       )
     case "csv":
@@ -139,6 +147,7 @@ function TextPreview({
           text={preview.text}
           label={filename}
           truncatedLabel={labels.csvTruncated}
+          style={size}
         />
       )
     case "json":
@@ -148,6 +157,7 @@ function TextPreview({
           language="json"
           label={filename}
           read={app.readServerResource}
+          style={size}
         />
       )
     case "code":
@@ -157,6 +167,7 @@ function TextPreview({
           language={preview.language}
           label={filename}
           read={app.readServerResource}
+          style={size}
         />
       )
     case "plain":
@@ -166,7 +177,8 @@ function TextPreview({
           tabIndex={0}
           role="region"
           aria-label={filename}
-          className="m-0 max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          style={size}
+          className="m-0 overflow-auto rounded-md bg-muted p-3 font-mono text-xs wrap-anywhere whitespace-pre-wrap outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           {preview.text}
         </pre>
@@ -180,12 +192,14 @@ function Preview({
   labels,
   app,
   room,
+  pip,
 }: {
   preview: FilePreview
   filename: string
   labels: ArtifactLabels
   app: ViewApp
   room: Room
+  pip: boolean
 }) {
   switch (preview.kind) {
     case "pdf":
@@ -224,6 +238,7 @@ function Preview({
           filename={filename}
           labels={labels}
           app={app}
+          size={pip ? { height: room.height } : { maxHeight: room.height }}
         />
       )
     case "none":
@@ -384,6 +399,7 @@ export function ArtifactView({
               labels={artifact}
               app={app}
               room={room}
+              pip={pip}
             />
           </ToolbarSlot>
         </div>

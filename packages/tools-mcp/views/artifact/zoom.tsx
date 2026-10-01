@@ -5,7 +5,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type KeyboardEvent,
   type ReactNode,
 } from "react"
 
@@ -38,6 +37,65 @@ const ZOOM_KEYS: Partial<Record<string, (zoom: number) => number>> = {
   "0": () => 1,
 }
 
+/** Where the reader turns a paged document. */
+export type Turn = "previous" | "next" | "first" | "last"
+
+/** How far an arrow key scrolls, in CSS pixels; a page key scrolls a screen less this. */
+const ARROW_STEP = 40
+
+/**
+ * Each key that scrolls the content: down it or across it, toward its end (1)
+ * or its start (-1).
+ */
+const SCROLL_KEYS: Partial<Record<string, ["y" | "x", 1 | -1]>> = {
+  ArrowDown: ["y", 1],
+  PageDown: ["y", 1],
+  " ": ["y", 1],
+  ArrowUp: ["y", -1],
+  PageUp: ["y", -1],
+  ArrowRight: ["x", 1],
+  ArrowLeft: ["x", -1],
+}
+
+/** Where a key belongs to the control it is pressed in, not the content. */
+const OWN_KEYS = "input, textarea, select, [contenteditable], nav"
+
+/** Where Space and Enter press the control rather than scroll. */
+const PRESSABLE = "a, button, summary, [role='button']"
+
+/**
+ * What a key does to the content in `box`: scroll it, or, with the content
+ * already at that edge, turn to the next or previous page. Across the content,
+ * the arrow toward the next page follows the reading direction, as the paging
+ * buttons do. Home and End turn to the first and last page.
+ */
+export function keyAction(
+  event: Pick<KeyboardEvent, "key" | "shiftKey">,
+  box: Element
+): { scroll: { top: number; left: number } } | { turn: Turn } | undefined {
+  if (event.key === "Home") return { turn: "first" }
+  if (event.key === "End") return { turn: "last" }
+  const scroll = SCROLL_KEYS[event.key]
+  if (!scroll) return undefined
+  const [axis, toward] = scroll
+  const way = event.key === " " && event.shiftKey ? -1 : toward
+  const down = axis === "y"
+  const at = down ? box.scrollTop : box.scrollLeft
+  const end = down
+    ? box.scrollHeight - box.clientHeight
+    : box.scrollWidth - box.clientWidth
+  if (way > 0 ? at >= end - 1 : at <= 0) {
+    const rtl = !down && document.documentElement.dir === "rtl"
+    return { turn: way > 0 !== rtl ? "next" : "previous" }
+  }
+  const step = event.key.startsWith("Arrow")
+    ? ARROW_STEP
+    : Math.max(box.clientHeight - ARROW_STEP, ARROW_STEP)
+  return {
+    scroll: { top: down ? way * step : 0, left: down ? 0 : way * step },
+  }
+}
+
 type Point = { x: number; y: number }
 
 /** A point on the screen and where it falls across the content, 0 to 1. */
@@ -55,9 +113,14 @@ function middle([a, b]: Point[]): Point | undefined {
  * Content fitted to the room, with zoom controls among the view's. A pinch, a
  * trackpad pinch or Ctrl with the wheel, the zoom keys (+, -, and 0 to fit),
  * or the controls zoom it about the point they act at; zoomed in, it scrolls
- * to pan. `children` lays the content out at a zoom in the space it fits.
- * Unless `fill` holds, the pane is only as tall as its fitted content. A new
- * `start` scrolls back to the content's top.
+ * to pan. The arrow, page, and space keys scroll it, and `onTurn` takes those
+ * that would scroll past its edge, with Home and End, and answers whether it
+ * turned. The keys work from
+ * anywhere in the view but a field or the sidebar, unless a control used the
+ * key. `children` lays the content out at a zoom in the space it fits. Unless
+ * `fill` holds, the pane is only as tall as its fitted content. A new `start`
+ * scrolls back to the content's top, or to its foot when the reader scrolled
+ * up into it.
  */
 export function ZoomPane({
   room,
@@ -67,7 +130,7 @@ export function ZoomPane({
   aside,
   fill = false,
   start,
-  onKeyDown,
+  onTurn,
   children,
 }: {
   room: Room
@@ -77,7 +140,7 @@ export function ZoomPane({
   aside?: ReactNode
   fill?: boolean
   start?: unknown
-  onKeyDown?: (event: KeyboardEvent) => void
+  onTurn?: (to: Turn) => boolean
   children: (space: Space, zoom: number) => ReactNode
 }) {
   const pane = useRef<HTMLDivElement>(null)
@@ -123,8 +186,12 @@ export function ZoomPane({
     box.current!.scrollTop += rect.top + at.down * rect.height - at.y
   }, [zoom])
 
+  // Scrolling back past a page's top lands at the foot of the one before.
+  const fromBelow = useRef(false)
   useLayoutEffect(() => {
-    box.current!.scrollTop = 0
+    const element = box.current!
+    element.scrollTop = fromBelow.current ? element.scrollHeight : 0
+    fromBelow.current = false
   }, [start])
 
   const zoomTo = useCallback((next: number, at?: Point) => {
@@ -194,15 +261,43 @@ export function ZoomPane({
     }
   }, [zoomTo])
 
-  const keyDown = (event: KeyboardEvent) => {
-    const to = ZOOM_KEYS[event.key]
-    if (to && !event.ctrlKey && !event.metaKey && !event.altKey) {
+  const turn = useRef(onTurn)
+  useEffect(() => {
+    turn.current = onTurn
+  })
+  useEffect(() => {
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey) return
+      if (event.altKey) return
+      const target = event.target instanceof Element ? event.target : null
+      if (target?.closest(OWN_KEYS)) return
+      if (/^(?: |Enter)$/u.test(event.key) && target?.closest(PRESSABLE)) return
+      const to = ZOOM_KEYS[event.key]
+      if (to) {
+        event.preventDefault()
+        zoomTo(to(current.current))
+        return
+      }
+      const element = box.current!
+      const action = keyAction(event, element)
+      if (!action) return
+      if ("turn" in action) {
+        fromBelow.current =
+          action.turn === "previous" && SCROLL_KEYS[event.key]?.[0] === "y"
+        if (turn.current?.(action.turn)) event.preventDefault()
+        else fromBelow.current = false
+        return
+      }
       event.preventDefault()
-      zoomTo(to(zoom))
-      return
+      const still = matchMedia("(prefers-reduced-motion: reduce)").matches
+      element.scrollBy({
+        ...action.scroll,
+        behavior: still ? "auto" : "smooth",
+      })
     }
-    onKeyDown?.(event)
-  }
+    window.addEventListener("keydown", keyDown)
+    return () => window.removeEventListener("keydown", keyDown)
+  }, [zoomTo])
 
   return (
     <div
@@ -250,7 +345,6 @@ export function ZoomPane({
           aria-label={label}
           tabIndex={0}
           dir="ltr"
-          onKeyDown={keyDown}
           className="flex min-w-0 flex-1 touch-pan-x touch-pan-y overflow-auto rounded-md outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         >
           {children(space, zoom)}
