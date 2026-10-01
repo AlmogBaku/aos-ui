@@ -159,8 +159,11 @@ export type HermesGatewayOptions = {
   log?: HermesGatewayLog
 }
 
-/** The gateway's log: an outage warns once, each redial rung in it is debug. */
-export type HermesGatewayLog = HermesLog & Pick<Logger, "debug">
+/**
+ * The gateway's log: an outage warns once, each redial rung in it is debug, a
+ * socket opening or closing is info, and a slow request warns.
+ */
+export type HermesGatewayLog = HermesLog & Pick<Logger, "debug" | "info">
 
 /** A caller parked in `#awaitOpen` until a socket is open. */
 type OpenWaiter = { resolve(): void; reject(error: Error): void }
@@ -178,6 +181,8 @@ const DEFAULT_HEAL_GRACE_MS = 20_000
 /** How long a generation may take to announce its epoch in `gateway.ready`. */
 const READY_EPOCH_WAIT_MS = 2_000
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+/** A request slower than this, queue wait included, warns; any other is debug. */
+const SLOW_REQUEST_MS = 2_000
 /**
  * Requests past the open socket: `limit` running (waiting on it or in flight)
  * and `queue` more behind them. One `waitMs` budget covers a queue slot and
@@ -279,6 +284,8 @@ export class HermesGateway implements HermesRpcTransport {
   /** The socket generation currently dialled or open, and its dial token. */
   #generation: { token: string | null } | undefined
   #dialFailureLogged = false
+  /** When the current socket opened, while it is open. */
+  #openedAt: number | undefined
   #dial: Promise<void> | undefined
   #redialTimer: ReturnType<typeof setTimeout> | undefined
   #healTimer: ReturnType<typeof setTimeout> | undefined
@@ -480,6 +487,8 @@ export class HermesGateway implements HermesRpcTransport {
   #onState(state: ConnectionState) {
     if (this.#closed) return
     if (state === "open") {
+      this.#log?.info({ redials: this.#attempt }, "hermes.gateway.opened")
+      this.#openedAt = defaultClock.now()
       this.#attempt = 0
       this.#lostAnnounced = false
       this.#dialFailureLogged = false
@@ -497,6 +506,11 @@ export class HermesGateway implements HermesRpcTransport {
       return
     }
     if (state !== "closed" && state !== "error") return
+    if (this.#openedAt !== undefined) {
+      const openMs = Math.round(defaultClock.now() - this.#openedAt)
+      this.#openedAt = undefined
+      this.#log?.info({ state, openMs }, "hermes.gateway.closed")
+    }
     this.#setLink("lost")
     this.#armHealGrace()
     this.#scheduleRedial()
@@ -686,6 +700,7 @@ export class HermesGateway implements HermesRpcTransport {
     } catch {
       throw new HermesUnavailableError()
     }
+    const started = defaultClock.now()
     const wait = new Deadline(
       REQUEST_QUEUE.waitMs,
       defaultClock,
@@ -706,6 +721,10 @@ export class HermesGateway implements HermesRpcTransport {
       throw written ? this.#classify(error) : this.#unwritten(error, options)
     } finally {
       wait.clear()
+      const elapsedMs = Math.round(defaultClock.now() - started)
+      if (elapsedMs >= SLOW_REQUEST_MS)
+        this.#log?.warn({ method, elapsedMs }, "hermes.gateway.request_slow")
+      else this.#log?.debug({ method, elapsedMs }, "hermes.gateway.request")
     }
   }
 

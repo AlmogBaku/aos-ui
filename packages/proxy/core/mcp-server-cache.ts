@@ -1,10 +1,12 @@
 /**
  * A per-key list cache for MCP server and tool catalogs. A fetch is shared by
  * concurrent callers, reused for `ttlMs`, and a failed refetch keeps the last
- * good list so a flaky catalog endpoint never blanks resolved tool names.
+ * good list so a flaky catalog endpoint never blanks resolved tool names. A
+ * fetch that failed with no list to keep fails again until a miss may refetch,
+ * so a server that does not answer costs one wait, not one per read.
  */
 export type McpServerCache<T> = {
-  /** Cached list; single-flight fetch; reused for ttlMs (default 5 min); a failed fetch keeps the last good list, or throws if none. */
+  /** Cached list; single-flight fetch; reused for ttlMs (default 5 min); a failed fetch keeps the last good list, or throws if none, again until missRefetchMs passed. */
   get(key: string): Promise<readonly T[]>
   /** For a lookup miss: refetch at most once per missRefetchMs (default 30 s) per key, else return the cached list. */
   refresh(key: string): Promise<readonly T[]>
@@ -12,6 +14,8 @@ export type McpServerCache<T> = {
 
 type Entry<T> = {
   list?: readonly T[]
+  /** The last fetch's failure, kept while no list stands in for it. */
+  failed?: { error: unknown }
   fetchedAt: number
   inflight?: Promise<readonly T[]>
 }
@@ -32,6 +36,7 @@ export function createMcpServerCache<T>(
     const inflight = fetch(key).then(
       (list) => {
         entry.list = list
+        entry.failed = undefined
         entry.fetchedAt = now()
         entry.inflight = undefined
         return list
@@ -41,6 +46,7 @@ export function createMcpServerCache<T>(
         entry.fetchedAt = now()
         entry.inflight = undefined
         if (entry.list) return entry.list
+        entry.failed = { error }
         throw error
       }
     )
@@ -48,20 +54,22 @@ export function createMcpServerCache<T>(
     return inflight
   }
 
-  function withinAge(key: string, ageMs: number): readonly T[] | undefined {
+  /** The list fetched within `ageMs`, or the failure of one that found none. */
+  function withinAge(
+    key: string,
+    ageMs: number
+  ): Promise<readonly T[]> | undefined {
     const entry = entries.get(key)
-    if (!entry?.list || now() - entry.fetchedAt >= ageMs) return undefined
-    return entry.list
+    if (!entry) return undefined
+    const age = now() - entry.fetchedAt
+    if (entry.list) return age < ageMs ? Promise.resolve(entry.list) : undefined
+    return entry.failed && age < missRefetchMs
+      ? Promise.reject(entry.failed.error)
+      : undefined
   }
 
   return {
-    get: (key) => {
-      const fresh = withinAge(key, ttlMs)
-      return fresh ? Promise.resolve(fresh) : load(key)
-    },
-    refresh: (key) => {
-      const recent = withinAge(key, missRefetchMs)
-      return recent ? Promise.resolve(recent) : load(key)
-    },
+    get: (key) => withinAge(key, ttlMs) ?? load(key),
+    refresh: (key) => withinAge(key, missRefetchMs) ?? load(key),
   }
 }

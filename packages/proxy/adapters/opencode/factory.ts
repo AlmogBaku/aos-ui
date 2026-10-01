@@ -59,7 +59,7 @@ export function composeOpenCodeRuntime({
   })
   const { catalog } = client
   const mcpAppClient = catalog.config
-    ? createMcpAppClient({ servers: mcpServerOverrides })
+    ? createMcpAppClient({ servers: mcpServerOverrides, logger })
     : undefined
   const mcp =
     mcpAppClient &&

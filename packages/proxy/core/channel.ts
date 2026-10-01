@@ -911,6 +911,10 @@ class Membership {
    * caught up: what a follow meanwhile replays says no state of its own.
    */
   #restating = false
+  /** What a resume in flight waits on, which a missed join deadline names. */
+  #resuming: "follow" | "history" | "report" | undefined
+  /** Set once this member parts, so only a missed deadline warns. */
+  #parted = false
   /**
    * The turn whose stream an interrupt ended, which this member follows again
    * once its coordinator settles whether it still runs.
@@ -1081,6 +1085,12 @@ class Membership {
       this.#resume(position, view.fromStart),
       this.#detaching
     ).catch((cause: unknown) => {
+      // A join its deadline cut short; the membership's log names its Session.
+      if (cause instanceof MembershipDetachedError && !this.#parted)
+        this.#options.logger.warn(
+          { agentId: this.#addressed.agentId, waitingOn: this.#resuming },
+          "membership.join.expired"
+        )
       this.endIfGone(cause)
       throw cause
     })
@@ -1095,14 +1105,17 @@ class Membership {
     this.#stated = undefined
     this.#restating = true
     try {
+      this.#resuming = "follow"
       const history =
         fromStart || !(await this.#followPositioned(position))
           ? await this.#replay()
           : undefined
+      this.#resuming = "report"
       await this.#reportView()
       return history === undefined ? {} : { history }
     } finally {
       this.#restating = false
+      this.#resuming = undefined
     }
   }
 
@@ -1127,6 +1140,7 @@ class Membership {
    * returning the page it showed.
    */
   async #replay(): Promise<SessionHistoryResponse> {
+    this.#resuming = "history"
     // A correction the provider persisted the moment it accepted the steer is
     // already in this page, so the journal's acknowledgement of it is dropped.
     const replay = await this.#replayHistory(() =>
@@ -1138,6 +1152,7 @@ class Membership {
       showsPrompt(this.#channels.current(this.#scope), {}, replay.history),
       true
     )
+    this.#resuming = "follow"
     const followed = await this.#followPage(replay)
     // A turn that ended before it was followed took the rows the page left to
     // its replay, and history now holds them.
@@ -1710,6 +1725,7 @@ class Membership {
   /** Detaches this member, first withdrawing each request it was offered. */
   part() {
     for (const requestId of [...this.#offered]) this.#withdraw(requestId)
+    this.#parted = true
     this.#send({ type: "part" })
   }
 

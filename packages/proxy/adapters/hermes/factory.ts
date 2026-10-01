@@ -44,7 +44,10 @@ export function composeHermesRuntime({
       .catch((err: unknown) =>
         logger.warn({ err }, "hermes.transport.connect_failed")
       )
-  const mcpAppClient = createMcpAppClient({ servers: mcpServerOverrides })
+  const mcpAppClient = createMcpAppClient({
+    servers: mcpServerOverrides,
+    logger,
+  })
   // Wrapped before the coordinator, which runs turns through `runtime.turns`.
   const runtime = withMcpApps(
     new HermesServerAdapter(transport, {
