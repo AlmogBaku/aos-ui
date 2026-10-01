@@ -18,6 +18,7 @@ RUN bun run build
 FROM dependencies AS tools-mcp
 COPY --chown=bun:bun packages/tools-mcp ./packages/tools-mcp
 COPY --chown=bun:bun shared/presentation ./shared/presentation
+COPY --chown=bun:bun shared/syntax-language.ts shared/playback-rate.ts ./shared/
 RUN bun run tools-mcp:build
 USER bun
 EXPOSE 4110
