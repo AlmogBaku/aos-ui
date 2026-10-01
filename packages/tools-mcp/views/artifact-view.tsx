@@ -304,6 +304,8 @@ function FileCard({
     </span>
   )
   const contentClass = "flex min-w-0 rounded-lg text-start"
+  // The name column shrinks and truncates beside the actions at their own
+  // width; the standard `grid-cols-*` scale has only equal columns.
   return (
     <article
       className={`grid ${children ? "w-full" : "w-fit"} max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-border bg-card p-2 text-card-foreground`}

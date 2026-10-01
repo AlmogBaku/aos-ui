@@ -394,11 +394,12 @@ describe("OpenClaw authoritative history", () => {
 })
 
 describe("OpenClaw history AOS tools and artifacts", () => {
-  function historyOf(messages: unknown[]) {
+  function historyOf(messages: unknown[], mediaArtifacts?: boolean) {
     return createOpenClawHistory({
       authority: authority(),
       client: { request: async () => ({ messages }) },
       subscribeSession: async () => () => undefined,
+      ...(mediaArtifacts === undefined ? {} : { mediaArtifacts }),
     })
   }
 
@@ -436,5 +437,42 @@ describe("OpenClaw history AOS tools and artifacts", () => {
       },
     ])
     expect(JSON.stringify(result)).not.toContain("/api/")
+  })
+
+  it("drops an assistant media block when media artifacts are off, and keeps a user's upload", async () => {
+    const block = () => ({
+      type: "image",
+      artifactId: "artifact_managed_image_abc",
+      alt: "chart.png",
+      mimeType: "image/png",
+    })
+    const result = await historyOf(
+      [
+        { id: "user", role: "user", content: [block()] },
+        {
+          id: "assistant",
+          role: "assistant",
+          content: [{ type: "text", text: "Here it is" }, block()],
+        },
+      ],
+      false
+    ).history("analyst", "agent:analyst:main", 200, 0)
+
+    expect(result.messages.map(({ role, content }) => [role, content])).toEqual(
+      [
+        [
+          "user",
+          [
+            expect.objectContaining({
+              name: "aos.artifact",
+              data: expect.objectContaining({
+                id: "artifact_managed_image_abc",
+              }),
+            }),
+          ],
+        ],
+        ["assistant", [{ type: "text", text: "Here it is" }]],
+      ]
+    )
   })
 })

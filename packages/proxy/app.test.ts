@@ -771,6 +771,8 @@ describe("MCP App files", () => {
     ["photo.png", "IMAGE/PNG", "image/png", "photo.png"],
     ["memo.mp3", "audio/mpeg", "audio/mpeg", "memo.mp3"],
     ["clip.mp4", "video/mp4; codecs=avc1", "video/mp4", "clip.mp4"],
+    ["feed.svg", "video/x-foo+xml", "application/octet-stream", "feed.svg"],
+    ["list.m3u", "audio/mpegurl", "application/octet-stream", "list.m3u"],
     [
       'notes "v2"; (final).txt',
       "text/plain",

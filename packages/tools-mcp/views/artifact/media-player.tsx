@@ -1,9 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 
+import { nextPlaybackRate } from "../../../../shared/playback-rate"
 import { cn } from "../ui/cn"
-
-/** The speeds the speed button steps through, in order. */
-const RATES: readonly number[] = [1, 1.25, 1.5, 2]
 
 /**
  * A file's native player, labelled `label`, playing straight from `src`, which
@@ -94,7 +92,7 @@ export function MediaPlayer({
         className="ms-auto inline-flex h-8 min-w-12 shrink-0 cursor-pointer items-center justify-center self-end rounded-md px-2 text-xs font-medium tabular-nums outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [@media(pointer:coarse)]:h-11"
         onClick={() => {
           const element = media.current!
-          const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length]!
+          const next = nextPlaybackRate(rate)
           // A reload starts at the default speed, so both are set.
           element.defaultPlaybackRate = next
           element.playbackRate = next

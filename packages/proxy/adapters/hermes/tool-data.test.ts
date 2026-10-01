@@ -336,14 +336,29 @@ describe("projectHermesToolOutcome", () => {
     ).toEqual(chart)
   })
 
-  it("collapses a text_to_speech receipt to a status and trusts its media", () => {
+  it("collapses a text_to_speech receipt to a status and trusts its media, unless media artifacts are off", () => {
     const audio = "/home/alice/voice/brief.mp3"
-    const outcome = projectHermesToolOutcome("call-4", "text_to_speech", {
+    const receipt = {
       success: true,
       file_path: audio,
       file_paths: [audio],
       media_tag: `MEDIA:${audio}`,
+    }
+    expect(
+      projectHermesToolOutcome("call-4", "text_to_speech", receipt, false, {
+        mediaArtifacts: false,
+      })
+    ).toEqual({
+      isError: false,
+      result: { status: "completed" },
+      parts: [],
+      trustedMedia: [],
     })
+    const outcome = projectHermesToolOutcome(
+      "call-4",
+      "text_to_speech",
+      receipt
+    )
     expect(outcome.result).toEqual({ status: "completed" })
     expect(outcome.trustedMedia).toEqual([audio])
     expect(outcome.parts).toMatchObject([

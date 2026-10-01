@@ -4,6 +4,8 @@
 <body>
 <p id="status">scripts are off</p>
 <p id="network">network not tried</p>
+<button id="script-away" type="button">Leave by script</button>
+<button id="refresh-away" type="button">Leave by refresh</button>
 <script>
 document.getElementById("status").textContent = "scripts are on";
 const network = document.getElementById("network");
@@ -11,6 +13,16 @@ document.addEventListener("securitypolicyviolation", (event) => {
   if (event.effectiveDirective === "connect-src") network.textContent = "fetch blocked";
 });
 fetch("https://files.invalid/").then(() => { network.textContent = "fetch allowed"; }, () => {});
+// Two ways a file tries to take its frame to another page.
+document.getElementById("script-away").onclick = () => {
+  location.href = "https://files.invalid/away";
+};
+document.getElementById("refresh-away").onclick = () => {
+  const refresh = document.createElement("meta");
+  refresh.httpEquiv = "refresh";
+  refresh.content = "0; url=https://files.invalid/refreshed";
+  document.head.append(refresh);
+};
 </script>
 </body>
 </html>

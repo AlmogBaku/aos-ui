@@ -84,7 +84,9 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   // In its message the PDF is a card, without its pages.
   const card = pdfFrame.getByRole("button", { name: "View report.pdf" })
   await expect(card).toBeVisible()
-  await expect(pdfFrame.getByText("Synthetic fixture file for AOS UI.")).toHaveCount(0)
+  await expect(
+    pdfFrame.getByText("Synthetic fixture file for AOS UI.")
+  ).toHaveCount(0)
 
   // --- download ---
   const [download] = await Promise.all([
@@ -134,22 +136,45 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   // In its message the image shows alone, and opens the side panel.
   // A broken image would show its file card in its place.
   await expect(pngFrame.getByAltText("preview.png")).toBeVisible()
-  await expect(pngFrame.getByRole("button", { name: "Download" })).toHaveCount(0)
+  await expect(pngFrame.getByRole("button", { name: "Download" })).toHaveCount(
+    0
+  )
 
   // --- test.html ---
   await send("Show an html artifact")
   // In its message the HTML is a card; the side panel runs its scripts in a
   // sandboxed iframe whose policy refuses the fetch the fixture tries.
+  const reached: string[] = []
+  page.on("request", (request) => {
+    if (new URL(request.url()).hostname === "files.invalid")
+      reached.push(request.url())
+  })
   await artifactFrame().getByRole("button", { name: "View test.html" }).click()
-  const htmlInner = page
+  const htmlView = page
     .getByRole("complementary", { name: "test.html" })
     .locator("iframe")
     .first()
     .contentFrame()
     .locator("iframe")
     .contentFrame()
-    .frameLocator('iframe[title="HTML preview"]')
+  const htmlInner = htmlView.frameLocator('iframe[title="HTML preview"]')
   await expect(htmlInner.getByText("scripts are on")).toBeVisible()
   await expect(htmlInner.getByText("fetch blocked")).toBeVisible()
   await expect(htmlInner.getByText("fetch allowed")).toBeHidden()
+  // The file may try to take its frame to another page, by script or by a
+  // refresh; the view's frame-src refuses the load, the page stays where it
+  // was, and the Preview tab shows the file again.
+  const pageUrl = page.url()
+  for (const leave of ["Leave by script", "Leave by refresh"]) {
+    const refused = page.waitForEvent("console", (message) =>
+      message.text().startsWith("Framing 'https://files.invalid/' violates")
+    )
+    await htmlInner.getByRole("button", { name: leave }).click()
+    await refused
+    expect(page.url()).toBe(pageUrl)
+    await htmlView.getByRole("tab", { name: "Source" }).click()
+    await htmlView.getByRole("tab", { name: "Preview" }).click()
+    await expect(htmlInner.getByText("scripts are on")).toBeVisible()
+  }
+  expect(reached).toEqual([])
 })

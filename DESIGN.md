@@ -343,7 +343,8 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   representation available. Markdown follows the same rule: plain text stays
   lightweight, while deferred Markdown retains a localized raw-text fallback.
 - **Safety:** charts, maps, Mermaid, tool results, and generated content retain
-  textual alternatives. Never execute generated browser code or arbitrary HTML.
+  textual alternatives. Never execute generated browser code or arbitrary HTML,
+  save inside the sandboxed MCP App frame described under **MCP Apps**.
 - **Mermaid size follows the diagram:** one that fits stays a compact card at
   its natural size with no controls. One past 36rem wide or 24rem tall widens to
   the message content width and renders in a bounded, scrollable frame (max

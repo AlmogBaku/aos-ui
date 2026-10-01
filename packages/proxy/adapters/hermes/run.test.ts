@@ -5194,35 +5194,44 @@ describe("live and refreshed Hermes tool projection agree", () => {
       expect(JSON.stringify(projection)).not.toContain(undisclosed)
   })
 
-  it("publishes an assistant MEDIA line as the artifact history restores", async () => {
+  it("publishes an assistant MEDIA line as the artifact history restores, and streams it as text when media artifacts are off", async () => {
     const text = "Your chart:\nMEDIA:/home/alice/reports/chart.png\nDone."
-    const attachment = observation()
     const published = new HermesPublishedArtifacts()
-    const engine = new HermesTurnEngine(
-      runtime({
-        subscribeLive: attachment.subscribeLive,
-        submit: async () => {
-          const turn = nativeTurn("live-secret", 1)
-          for (const frame of [
-            turn.messageStart("message-media-line"),
-            turn.delta(text.slice(0, 20)),
-            turn.delta(text.slice(20)),
-            turn.complete("message-media-line", text),
-            turn.idle(),
-          ])
-            attachment.publish("live-secret", frame)
-          return accepted
-        },
-      }),
-      { publishedArtifacts: published }
-    )
-    const events = await collect(await engine.start(scope, input()))
-    const live = ofKind(events, TurnEventKind.ArtifactPublished).map(
-      (event) => (event as { artifact: unknown }).artifact
-    )
-    const streamed = ofKind(events, TurnEventKind.MessageChunk)
-      .map((event) => (event as { text: string }).text)
-      .join("")
+    async function mediaTurn(mediaArtifacts: boolean) {
+      const attachment = observation()
+      const engine = new HermesTurnEngine(
+        runtime({
+          subscribeLive: attachment.subscribeLive,
+          submit: async () => {
+            const turn = nativeTurn("live-secret", 1)
+            for (const frame of [
+              turn.messageStart("message-media-line"),
+              turn.delta(text.slice(0, 20)),
+              turn.delta(text.slice(20)),
+              turn.complete("message-media-line", text),
+              turn.idle(),
+            ])
+              attachment.publish("live-secret", frame)
+            return accepted
+          },
+        }),
+        { publishedArtifacts: published, media: { mediaArtifacts } }
+      )
+      const events = await collect(await engine.start(scope, input()))
+      const live = ofKind(events, TurnEventKind.ArtifactPublished).map(
+        (event) => (event as { artifact: unknown }).artifact
+      )
+      const streamed = ofKind(events, TurnEventKind.MessageChunk)
+        .map((event) => (event as { text: string }).text)
+        .join("")
+      return { events, live, streamed }
+    }
+
+    const off = await mediaTurn(false)
+    expect(off.streamed).toBe(text)
+    expect(off.live).toEqual([])
+
+    const { events, live, streamed } = await mediaTurn(true)
     const [message] = projectHermesHistory([
       { id: "assistant-media-line", role: "assistant", content: text },
     ])

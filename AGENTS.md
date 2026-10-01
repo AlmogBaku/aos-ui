@@ -130,7 +130,11 @@ external reverse proxy is optional.
   opaque-origin double iframe with a CSP built from its declared domains. The
   browser never talks to an MCP server; every App request goes through the
   proxy, scoped to the tool call's own Session, and the card keeps its textual
-  details.
+  details. Inside it, Agent HTML a file-showing view previews runs its scripts
+  in a nested `sandbox="allow-scripts"` frame: an opaque origin with no
+  same-origin access, popups, forms, or top navigation, under a policy whose
+  `connect-src`, `frame-src`, `base-uri`, and `form-action` are `'none'`, so it
+  reaches no network or file.
 - Preserve the separation between compact, inspectable execution history and
   first-class assistant outcomes. Final prose and meaningful rich UI remain
   visible message content; follow `DESIGN.md` for the governing principles.

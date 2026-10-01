@@ -4,8 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from "react"
 
 import { Button } from "@/components/ui/button"
 
-/** The speeds the speed button steps through, in order. */
-const RATES: readonly number[] = [1, 1.25, 1.5, 2]
+import { nextPlaybackRate } from "@shared/playback-rate"
 
 /** Plays `element` at `rate`; a reload keeps the default speed, so set both. */
 function playAt(element: HTMLMediaElement, rate: number) {
@@ -41,11 +40,7 @@ function SpeedButton({
       className="ms-auto tabular-nums [@media(pointer:coarse)]:min-h-11"
       aria-label={`${label}: ${shown}`}
       onClick={() => {
-        if (media.current)
-          playAt(
-            media.current,
-            RATES[(RATES.indexOf(rate) + 1) % RATES.length]!
-          )
+        if (media.current) playAt(media.current, nextPlaybackRate(rate))
       }}
     >
       {shown}

@@ -244,7 +244,8 @@ function projectMessages(
     const message: SessionMessage = {
       id,
       role: raw.role,
-      // The operator's own uploads stay whatever `mediaArtifacts` says.
+      // `mediaArtifacts` governs only assistant media: a user's own upload
+      // stays an Artifact even when it is off.
       content: messageParts(
         raw.content,
         outcomes,

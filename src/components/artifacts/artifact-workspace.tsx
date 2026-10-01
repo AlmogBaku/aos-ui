@@ -452,6 +452,8 @@ function ArtifactFileCard({ artifact }: { artifact: ArtifactDescriptor }) {
     />
   )
 
+  // The name column shrinks and truncates beside the actions at their own
+  // width; the standard `grid-cols-*` scale has only equal columns.
   return (
     <article className="grid w-fit max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-border bg-card p-2 text-card-foreground">
       {openInPanel ? (
@@ -670,6 +672,8 @@ function SessionOutputRow({ output }: { output: SessionOutput }) {
     />
   )
 
+  // The name column shrinks and truncates beside the actions at their own
+  // width; the standard `grid-cols-*` scale has only equal columns.
   return (
     <article className="grid grid-cols-[minmax(0,1fr)_auto] items-stretch gap-1.5 border-b border-border/70 text-card-foreground last:border-b-0">
       {openInPanel ? (
