@@ -329,9 +329,9 @@ export function ArtifactView({
         <div ref={setToolbar} className="flex items-center empty:hidden" />
         {address === undefined ? null : (
           <div className="ms-auto flex items-center gap-1">
+            {/* HTML carries its Copy over its source. */}
             {file.state.status === "ready" &&
-            (file.state.preview.kind === "text" ||
-              file.state.preview.kind === "html") ? (
+            file.state.preview.kind === "text" ? (
               <CopyButton text={file.state.preview.text} labels={artifact} />
             ) : null}
             <IconButton label={artifact.refresh} onClick={file.refresh}>

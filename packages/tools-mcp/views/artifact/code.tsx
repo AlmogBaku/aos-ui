@@ -8,7 +8,13 @@ import {
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript"
 import githubDark from "shiki/themes/github-dark.mjs"
 import githubLight from "shiki/themes/github-light.mjs"
-import { Fragment, useEffect, useState, type CSSProperties } from "react"
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react"
 
 import { GRAMMAR_RESOURCE_URI } from "../../../../shared/presentation/views"
 import { normalizeSyntaxLanguage } from "../../../../shared/syntax-language"
@@ -19,11 +25,24 @@ import styles from "./code.module.css"
 type Read = ViewApp["readServerResource"]
 
 /**
- * The longest text the view colours. Each run of colour is an element of its
- * own, so a longer file shows as plain text, as it does while its grammar
+ * The most text the view colours. Each run of colour is an element of its
+ * own, so a file with more shows as plain text, as it does while its grammar
  * loads.
  */
-export const MAX_HIGHLIGHTED_CHARACTERS = 50_000
+export const MAX_HIGHLIGHTED_CHARACTERS = 100_000
+
+/**
+ * The longest line the view colours. A longer one, such as an image embedded
+ * as data, stays plain and does not count toward the text it colours.
+ */
+export const MAX_HIGHLIGHTED_LINE = 2_000
+
+function highlightedLength(code: string, lineLimit: number) {
+  let length = 0
+  for (const line of code.split("\n"))
+    if (line.length <= lineLimit) length += line.length
+  return length
+}
 
 /** The language a fence or source type names, if the view highlights it. */
 export function codeLanguage(name: string | undefined) {
@@ -86,9 +105,14 @@ function load(name: string, read: Read): Promise<string> {
   return loading
 }
 
-function tokens(code: string, language: string): ThemedToken[][] {
+function tokens(
+  code: string,
+  language: string,
+  lineLimit: number
+): ThemedToken[][] {
   return core().codeToTokens(code, {
     lang: language,
+    tokenizeMaxLineLength: lineLimit,
     themes: { light: "github-light", dark: "github-dark" },
     defaultColor: false,
   }).tokens
@@ -97,7 +121,7 @@ function tokens(code: string, language: string): ThemedToken[][] {
 /**
  * Source text, coloured by its language for the view's theme once that
  * language's grammar loads; plain without a language, past `limit`, or when
- * the grammar cannot load. Each run of text is a React text node, so nothing
+ * the grammar cannot load, and plain in each line past `lineLimit`. Each run of text is a React text node, so nothing
  * in the file becomes markup.
  */
 export function Code({
@@ -106,6 +130,7 @@ export function Code({
   label,
   read,
   limit = MAX_HIGHLIGHTED_CHARACTERS,
+  lineLimit = MAX_HIGHLIGHTED_LINE,
   className,
   style,
 }: {
@@ -114,6 +139,7 @@ export function Code({
   label?: string
   read: Read
   limit?: number
+  lineLimit?: number
   className?: string
   style?: CSSProperties
 }) {
@@ -122,21 +148,29 @@ export function Code({
     language: string
     lines: ThemedToken[][]
   }>()
-  const highlighted = language !== undefined && code.length <= limit
+  const length = useMemo(
+    () => highlightedLength(code, lineLimit),
+    [code, lineLimit]
+  )
+  const highlighted = language !== undefined && length <= limit
   useEffect(() => {
     if (!highlighted) return
     let cancelled = false
     load(language, read).then(
       (name) => {
         if (!cancelled)
-          setColoured({ code, language, lines: tokens(code, name) })
+          setColoured({
+            code,
+            language,
+            lines: tokens(code, name, lineLimit),
+          })
       },
       () => undefined
     )
     return () => {
       cancelled = true
     }
-  }, [code, language, highlighted, read])
+  }, [code, language, highlighted, lineLimit, read])
   const lines =
     highlighted && coloured?.code === code && coloured.language === language
       ? coloured.lines

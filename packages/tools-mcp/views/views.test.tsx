@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { PDFDocumentProxy } from "pdfjs-dist"
@@ -303,11 +304,13 @@ describe("artifact view", () => {
     ).toBe('{"region":')
   })
 
-  it("shows an HTML file's source, highlighted as HTML, from the keyboard", async () => {
+  it("shows an HTML file's source, highlighted as HTML, from the keyboard, with a Copy of its own", async () => {
+    const user = userEvent.setup()
     const html = "<h1>Launch plan</h1>"
     const { app } = showFile({ filename: "plan.html" }, html)
-    await userEvent.click(await screen.findByRole("tab", { name: "Preview" }))
-    await userEvent.keyboard("{ArrowRight}")
+    await user.click(await screen.findByRole("tab", { name: "Preview" }))
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull()
+    await user.keyboard("{ArrowRight}")
     const source = screen.getByRole("tab", { name: "Source" })
     expect(source).toHaveFocus()
     expect(source).toHaveAttribute("aria-selected", "true")
@@ -318,6 +321,8 @@ describe("artifact view", () => {
     expect(app.readServerResource.mock.calls[0]?.[0].uri).toBe(
       `${GRAMMAR_RESOURCE_URI}html.json`
     )
+    await user.click(within(panel).getByRole("button", { name: "Copy" }))
+    expect(await navigator.clipboard.readText()).toBe(html)
   })
 
   // Each case names a grammar no other case loads, since a loaded grammar
@@ -368,6 +373,25 @@ describe("artifact view", () => {
     expect(region.textContent).toBe("fn main() {}")
     expect(region.querySelector("span")).toBeNull()
     expect(readServerResource).not.toHaveBeenCalled()
+  })
+
+  it("colours code up to its limit leaving out its long lines, which stay plain", async () => {
+    const { readServerResource } = fakeApp()
+    // Coloured, the long line would split at each number and sign.
+    const data = "1 + 2 + 3 + 4 + 5 + 6 + 7"
+    render(
+      <Code
+        code={`fn main() {}\n${data}`}
+        language="rust"
+        label="main.rs"
+        read={readServerResource}
+        limit={12}
+        lineLimit={20}
+      />
+    )
+    const region = screen.getByRole("region", { name: "main.rs" })
+    await waitFor(() => expect(region.querySelector("span")).not.toBeNull())
+    expect(within(region).getByText(data)).toBeInTheDocument()
   })
 
   it("copies the file's text as it came", async () => {

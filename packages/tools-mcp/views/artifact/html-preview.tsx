@@ -4,6 +4,7 @@ import type { ViewLabels } from "../locale"
 import { Tabs } from "../ui/tabs"
 import type { ViewApp } from "../view"
 import { Code } from "./code"
+import { CopyButton } from "./copy-button"
 import { MAX_ZOOM } from "./zoom"
 
 const TABS = ["preview", "source"] as const
@@ -62,7 +63,7 @@ function withPolicy(html: string) {
 
 /**
  * An HTML file, run with its scripts in a frame of its own, beside its source
- * highlighted as HTML, either `height` pixels tall. The tabs between them sit
+ * highlighted as HTML with a Copy of its own, either `height` pixels tall. The tabs between them sit
  * among the view's controls; the arrow keys, Home, and End move between them.
  */
 export function HtmlPreview({
@@ -99,13 +100,20 @@ export function HtmlPreview({
             className="block h-full w-full rounded-md border bg-white"
           />
         ) : (
-          <Code
-            code={text}
-            language="html"
-            label={labels.source}
-            read={read}
-            className="h-full"
-          />
+          // Copy shows over the source on hover or focus, and always on a
+          // screen without hover.
+          <div className="group relative h-full">
+            <Code
+              code={text}
+              language="html"
+              label={labels.source}
+              read={read}
+              className="h-full"
+            />
+            <div className="absolute end-2 top-2 rounded-md bg-muted opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none [@media(hover:none)]:opacity-100">
+              <CopyButton text={text} labels={labels} />
+            </div>
+          </div>
         )}
       </Tabs>
     </div>
