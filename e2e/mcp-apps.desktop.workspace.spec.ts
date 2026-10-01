@@ -90,8 +90,8 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   await pdfFrame.getByRole("button", { name: "Picture in picture" }).click()
   // The message card shows the "in side panel" placeholder.
   await expect(page.getByText("Shown in the side panel")).toBeVisible()
-  // The side panel is open with the artifact view inside it.
-  const panel = page.getByRole("complementary", { name: /present_artifact/ })
+  // The side panel, named for the file, holds the artifact view.
+  const panel = page.getByRole("complementary", { name: "report.pdf" })
   await expect(panel).toBeVisible()
 
   // Escape from inside the panel returns the view to the message.
@@ -102,7 +102,7 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   await pdfFrame.getByRole("button", { name: "Picture in picture" }).click()
   await expect(page.getByText("Shown in the side panel")).toBeVisible()
   await page
-    .getByRole("complementary", { name: /present_artifact/ })
+    .getByRole("complementary", { name: "report.pdf" })
     .getByRole("button", { name: "Return to the message" })
     .click()
   await expect(page.getByText("Shown in the side panel")).toBeHidden()
