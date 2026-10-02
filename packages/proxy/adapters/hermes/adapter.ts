@@ -1551,6 +1551,92 @@ export class HermesServerAdapter implements ServerRuntime {
     return result.data
   }
 
+  async searchSessions(agentId: string | undefined, query: string) {
+    if (!this.#dashboard) throw new HermesUnavailableError()
+    if (agentId !== undefined) {
+      // Search one profile.
+      let payload: unknown
+      try {
+        payload = await this.#dashboard.searchSessions(agentId, query)
+      } catch (error) {
+        throwUnavailable(error)
+      }
+      return this.#projectSearchPage(agentId, payload)
+    }
+    // Fan out across all profiles.
+    const profiles = (await this.listAgents()).agents.map(
+      ({ summary }) => summary.id
+    )
+    const pages = await Promise.all(
+      profiles.map(async (profile) => {
+        try {
+          const payload = await this.#dashboard!.searchSessions(profile, query)
+          return this.#projectSearchPage(profile, payload)
+        } catch {
+          return SessionCatalogResponseSchema.parse({
+            sessions: [],
+            total: 0,
+            limit: 0,
+            offset: 0,
+          })
+        }
+      })
+    )
+    const sessions = pages
+      .flatMap((p) => p.sessions)
+      .sort(newestSessionFirst)
+      .slice(0, SESSION_CATALOG_MAX_WINDOW)
+    const result = SessionCatalogResponseSchema.safeParse({
+      sessions,
+      total: pages.reduce((sum, p) => sum + p.total, 0),
+      limit: sessions.length,
+      offset: 0,
+    })
+    if (!result.success) throw new HermesUnavailableError()
+    return result.data
+  }
+
+  #projectSearchPage(
+    profile: string,
+    payload: unknown
+  ): import("../../../protocol").SessionCatalogResponse {
+    if (!isRecord(payload) || !Array.isArray(payload.sessions))
+      throw new HermesUnavailableError()
+    const seen = new Set<string>()
+    const sessions: Session[] = []
+    for (const row of payload.sessions) {
+      if (!isRecord(row)) continue
+      const storedId = trimmedText(row.id)
+      if (!storedId || trimmedText(row.profile) !== profile || seen.has(storedId))
+        continue
+      seen.add(storedId)
+      const platform = sessionPlatform(row.source)
+      sessions.push({
+        id: sessionId(profile, storedId),
+        agentId: profile,
+        ...titled(row),
+        archived: row.archived === true,
+        ...createdAt(row.started_at),
+        ...updatedAt(row),
+        status: SETTLED,
+        ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
+        ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
+        ...(platform !== undefined ? { platform } : {}),
+      } satisfies Session)
+    }
+    const total = typeof payload.total === "number" && Number.isSafeInteger(payload.total as number) && (payload.total as number) >= 0
+      ? (payload.total as number)
+      : sessions.length
+    const result = SessionCatalogResponseSchema.safeParse({
+      sessions,
+      total,
+      limit: sessions.length,
+      offset: 0,
+    })
+    if (!result.success) throw new HermesUnavailableError()
+    return result.data
+  }
+
   async history(
     profile: string,
     storedId: string,

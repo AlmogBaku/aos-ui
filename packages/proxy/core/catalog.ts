@@ -57,6 +57,11 @@ export type Catalog = {
     offset: number,
     limit?: number
   ): Promise<CommandResults["list"]>
+  /** Search sessions by query string. Returns matching sessions from the provider. */
+  search(
+    agentId: string | undefined,
+    query: string
+  ): Promise<CommandResults["search"]>
   /**
    * One Session's row as a replaying cell: the known row at once, then the
    * row the provider holds now, then each change. `failed` hears why that
@@ -190,6 +195,25 @@ export function createCatalog({
           ? { nextOffset: next }
           : {}),
       }
+    },
+
+    async search(agentId, query) {
+      let sessions: import("../../protocol").Session[]
+      if (runtime.searchSessions) {
+        const page = await runtime.searchSessions(agentId, query)
+        sessions = page.sessions
+      } else {
+        // Fall back: list all sessions and filter by title.
+        const lower = query.toLocaleLowerCase()
+        const page = agentId === undefined
+          ? await runtime.listAllSessions(SESSION_CATALOG_MAX_WINDOW, 0)
+          : await runtime.listSessions(agentId, SESSION_CATALOG_MAX_WINDOW, 0)
+        sessions = page.sessions.filter((s) =>
+          s.title?.toLocaleLowerCase().includes(lower) ?? false
+        )
+      }
+      rows.rememberList(sessions)
+      return { rows: sessions.map((s) => overlaid(rows.get(s.agentId, s.id) ?? s)) }
     },
 
     subscribe(target, listener, failed) {

@@ -18,6 +18,7 @@ import type {
   AosInitializeMetaSchema,
   AosPromptMetaSchema,
   AosSessionListMetaSchema,
+  AosSessionSearchMetaSchema,
   AosSessionNewMetaSchema,
   AosSessionUpdateRequestSchema,
   AosSteerRequestSchema,
@@ -136,6 +137,10 @@ export interface AcpConnection {
     meta: z.infer<typeof AosSessionListMetaSchema>,
     cursor?: string
   ): Promise<{ sessions: SessionInfo[]; nextCursor?: string }>
+  /** Search sessions at the provider. Returns matching SessionInfo entries. */
+  searchSessions(
+    meta: z.infer<typeof AosSessionSearchMetaSchema>
+  ): Promise<{ sessions: SessionInfo[] }>
   /**
    * Opens the Session while any listener subscribes. The connection joins it,
    * replaying it from the start the first time, rejoins it from its own

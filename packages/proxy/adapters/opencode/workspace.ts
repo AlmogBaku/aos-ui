@@ -328,6 +328,28 @@ export function createOpenCodeWorkspaceOperations(input: {
       })
     },
 
+    async searchSessions(
+      agentId: string | undefined,
+      query: string
+    ): Promise<SessionCatalogResponse> {
+      const lower = query.toLocaleLowerCase()
+      const all = agentId !== undefined
+        ? await owned(agentId)
+        : (await allSessions())
+            .filter((session) => !!session.agent)
+            .map((session) => projectSession(session, session.agent!))
+            .sort(newestSessionFirst)
+      const matched = all.filter((s) =>
+        s.title?.toLocaleLowerCase().includes(lower) ?? false
+      )
+      return SessionCatalogResponseSchema.parse({
+        sessions: matched,
+        total: matched.length,
+        limit: Math.max(1, matched.length),
+        offset: 0,
+      })
+    },
+
     async getSession(agentId: string, sessionId: string) {
       return (await readSession(agentId, sessionId)).session
     },

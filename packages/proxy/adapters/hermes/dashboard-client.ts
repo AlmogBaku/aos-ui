@@ -38,6 +38,21 @@ export class HermesDashboardClient {
     ) as Promise<HermesNativeSessionPage>
   }
 
+  searchSessions(profile: string, searchQuery: string, limit = 50) {
+    const query = new URLSearchParams({
+      profile,
+      q: searchQuery,
+      limit: String(limit),
+      offset: "0",
+      order: "recent",
+      archived: "include",
+      exclude_sources: "cron,tool,kanban",
+    })
+    return this.http(
+      `/api/sessions?${query}`
+    ) as Promise<HermesNativeSessionPage>
+  }
+
   getSession(profile: string, storedId: string) {
     return this.http(
       `/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`

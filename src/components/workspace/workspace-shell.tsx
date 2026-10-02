@@ -165,6 +165,15 @@ export type WorkspaceShellProps = {
   onCloseSidePanel?: () => void
   conversationHeader?: ReactNode
   navigationHidden?: boolean
+  /**
+   * Called to search sessions at the provider. Passed to the session history
+   * component to enable server-side search. Absent for runtimes without
+   * search support.
+   */
+  onSearchSessions?: (
+    query: string,
+    agentId: string
+  ) => Promise<readonly { sessionId: string; agentId: string; title: string; updatedAt: string }[]>
   children: ReactNode
 }
 
@@ -910,6 +919,7 @@ type InspectorPanelProps = Pick<
   | "onActionError"
   | "threadListRuntime"
   | "sessionActions"
+  | "onSearchSessions"
 > & {
   agent: WorkspaceAgent | null
   navigation: AgentSessionNavigation | null
@@ -930,6 +940,7 @@ function InspectorPanel({
   agent,
   navigation,
   artifactOutputs,
+  onSearchSessions,
 }: InspectorPanelProps) {
   const [query, setQuery] = useState("")
 
@@ -983,6 +994,9 @@ function InspectorPanel({
             sessionMenu={sessionMenu}
             threadListRuntime={threadListRuntime}
             onActionError={onActionError}
+            onSearch={onSearchSessions
+              ? (q) => onSearchSessions(q, navigation.agentId)
+              : undefined}
           />
         </div>
       ) : null}
@@ -1172,6 +1186,7 @@ export function WorkspaceShell({
   onCloseSidePanel,
   conversationHeader,
   navigationHidden = false,
+  onSearchSessions,
   children,
 }: WorkspaceShellProps) {
   const shellRef = useRef<HTMLElement>(null)
@@ -1490,6 +1505,7 @@ export function WorkspaceShell({
     sessionMenu,
     agent: selectedAgent,
     artifactOutputs,
+    onSearchSessions,
   }
   const skipLink = (
     <a

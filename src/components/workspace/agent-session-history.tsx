@@ -1,6 +1,12 @@
 "use client"
 
 import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react"
+import {
   ThreadListPrimitive,
   type ThreadListRuntime,
 } from "@assistant-ui/react"
@@ -86,6 +92,10 @@ export type AgentSessionHistoryProps = {
   sessionMenu?: SessionRowMenuHandlers
   threadListRuntime?: ThreadListRuntime
   onActionError?: (error: unknown) => void
+  /** Called with debounce to search sessions at the provider. */
+  onSearch?: (
+    query: string
+  ) => Promise<readonly { sessionId: string; title: string; updatedAt: string }[]>
 }
 
 function normalizeSearch(value: string, locale: Locale) {
@@ -350,14 +360,55 @@ export function AgentSessionHistory({
   sessionMenu,
   threadListRuntime,
   onActionError,
+  onSearch,
 }: AgentSessionHistoryProps) {
   const normalizedQuery = normalizeSearch(query, locale)
+  const [searching, setSearching] = useState(false)
+  const [serverResults, setServerResults] = useState<
+    readonly { sessionId: string; title: string; updatedAt: string }[]
+  >([])
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const latestQuery = useRef<string>("")
+
+  useEffect(() => {
+    if (!onSearch || !normalizedQuery) {
+      setServerResults([])
+      setSearching(false)
+      return
+    }
+    setSearching(true)
+    clearTimeout(searchTimerRef.current)
+    latestQuery.current = normalizedQuery
+    searchTimerRef.current = setTimeout(() => {
+      const captured = normalizedQuery
+      onSearch(query.trim())
+        .then((results) => {
+          if (latestQuery.current !== captured) return
+          setServerResults(results)
+        })
+        .catch(() => {
+          if (latestQuery.current !== captured) return
+          setServerResults([])
+        })
+        .finally(() => {
+          if (latestQuery.current !== captured) return
+          setSearching(false)
+        })
+    }, 300)
+    return () => {
+      clearTimeout(searchTimerRef.current)
+    }
+  }, [normalizedQuery, onSearch, query])
   const openIds = new Set(
     navigation.openSessions.map((session) => session.sessionId)
   )
-  const filter = (session: WorkspaceSession) =>
-    !normalizedQuery ||
-    normalizeSearch(session.title, locale).includes(normalizedQuery)
+  const serverResultIds = new Set(serverResults.map((r) => r.sessionId))
+  const filter = (session: WorkspaceSession) => {
+    if (!normalizedQuery) return true
+    if (onSearch && serverResults.length > 0) return serverResultIds.has(session.sessionId)
+    if (onSearch && searching) return false
+    return normalizeSearch(session.title, locale).includes(normalizedQuery)
+  }
   const historySessions = navigation.historySessions.filter(
     (session) => !openIds.has(session.sessionId)
   )
@@ -448,7 +499,11 @@ export function AgentSessionHistory({
             handlers={sessionMenu ?? {}}
           />
         ) : null}
-        {!hasResults ? (
+        {searching && normalizedQuery ? (
+          <div className={styles.empty} aria-live="polite" aria-busy="true">
+            <p>{copy.searchSessions}…</p>
+          </div>
+        ) : !hasResults ? (
           <div className={styles.empty}>
             <p>{hasSessions ? copy.noSearchResults : copy.noSessions}</p>
             {normalizedQuery ? (

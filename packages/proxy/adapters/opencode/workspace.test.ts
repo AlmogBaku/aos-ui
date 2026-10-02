@@ -241,6 +241,61 @@ describe("OpenCode workspace operations", () => {
     ).not.toHaveProperty("pinned")
   })
 
+
+  describe("searchSessions", () => {
+    it("filters sessions by title match for a given agentId", async () => {
+      const operations = createOpenCodeWorkspaceOperations({
+        client: stubClient({
+          list: async () => ({
+            data: [
+              session({ id: "s1", title: "Research notes" }),
+              session({ id: "s2", title: "Meeting minutes" }),
+              session({ id: "s3", title: "Research follow-up" }),
+              session({ id: "s4", agent: "other", title: "Other research" }),
+            ],
+            cursor: {},
+          }),
+        }),
+      })
+
+      const page = await operations.searchSessions("research", "research")
+      expect(page.sessions.map((s) => s.id)).toEqual(["s1", "s3"])
+    })
+
+    it("returns all matching sessions across all agents when agentId is undefined", async () => {
+      const operations = createOpenCodeWorkspaceOperations({
+        client: stubClient({
+          list: async () => ({
+            data: [
+              session({ id: "s1", agent: "alpha", title: "Alpha research" }),
+              session({ id: "s2", agent: "beta", title: "Beta research" }),
+              session({ id: "s3", agent: "gamma", title: "Gamma notes" }),
+            ],
+            cursor: {},
+          }),
+        }),
+      })
+
+      const page = await operations.searchSessions(undefined, "research")
+      expect(page.sessions.map((s) => s.id).sort()).toEqual(["s1", "s2"])
+    })
+
+    it("returns empty results when no sessions match the query", async () => {
+      const operations = createOpenCodeWorkspaceOperations({
+        client: stubClient({
+          list: async () => ({
+            data: [session({ id: "s1", title: "Meeting notes" })],
+            cursor: {},
+          }),
+        }),
+      })
+
+      const page = await operations.searchSessions("research", "research")
+      expect(page.sessions).toHaveLength(0)
+      expect(page.total).toBe(0)
+    })
+  })
+
   it("verifies exact Session ownership before any native mutation", async () => {
     const update = vi.fn(async () => {})
     const remove = vi.fn(async () => {})

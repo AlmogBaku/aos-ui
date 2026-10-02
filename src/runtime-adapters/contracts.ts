@@ -173,6 +173,14 @@ export type WorkspaceAdapter = {
    * caller reloads the thread list, so its cursor belongs to this Agent.
    */
   scopeSessionCatalog?: (agentId: string) => void
+  /**
+   * Search sessions by query string at the provider. Returns sessions whose
+   * title or message content matches the query.
+   */
+  searchSessions?: (
+    query: string,
+    agentId?: string
+  ) => Promise<readonly Pick<SessionMetadata & { title: string }, "sessionId" | "agentId" | "title" | "updatedAt">[]>
   /** What the runtime declares about the Session actions the UI may offer. */
   sessionActionCapabilities?: () => Promise<SessionActionCapabilities>
   /**

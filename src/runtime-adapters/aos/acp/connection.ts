@@ -13,6 +13,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SendRequestOptions,
+  type SessionInfo,
   type WireStream,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
@@ -51,6 +52,7 @@ import {
   AosInitializeMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosSteerResponseSchema,
+  AosSessionSearchMetaSchema,
   type AosHistoryCursor,
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
@@ -1461,6 +1463,20 @@ export function createAcpConnection(
         sessions: response.sessions,
         ...(response.nextCursor ? { nextCursor: response.nextCursor } : {}),
       }
+    },
+
+    async searchSessions(meta) {
+      const parsed = AosSessionSearchMetaSchema.safeParse(meta)
+      if (!parsed.success) throw new Error("Invalid search meta")
+      const response = await request("short", (agent, options) =>
+        agent.request(
+          AOS_METHODS.sessions.search,
+          { _meta: { [AOS_META_KEY]: parsed.data } },
+          options
+        )
+      )
+      const res = response as Record<string, unknown>
+      return { sessions: Array.isArray(res.sessions) ? (res.sessions as SessionInfo[]) : [] }
     },
 
     subscribe,

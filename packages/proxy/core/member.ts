@@ -247,6 +247,8 @@ export type MemberCommands = {
   }
   focus: { sessionId: string | null; foreground: boolean; idle: boolean }
   list: { agentId?: string; offset: number }
+  /** Search sessions by content or title at the provider. */
+  search: { agentId?: string; query: string }
   /** A client id names a create its client may repeat. */
   new: { agentId: string; title?: string; clientId?: string }
   delete: { sessionId: string }
@@ -278,6 +280,7 @@ export type CommandResults = {
   answer: void
   focus: void
   list: { rows: readonly SessionRow[]; nextOffset?: number }
+  search: { rows: readonly SessionRow[] }
   new: { sessionId: string }
   delete: void
   update: void

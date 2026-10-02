@@ -388,6 +388,27 @@ export function createAcpWorkspaceClient({
     },
     /** The Agent the thread list pages History for, once one is selected. */
     sessionCatalogScope: () => catalogScope,
+
+    async searchSessions(query: string, agentId?: string) {
+      const { sessions } = await connection.searchSessions({
+        query,
+        ...(agentId === undefined ? {} : { agentId }),
+      })
+      for (const session of sessions) {
+        const row = rowOf(session)
+        remember(row.sessionId, row.info, row.updatedAt)
+        if (row.title) store.setTitle(row.sessionId, row.title)
+      }
+      return sessions.map((session) => {
+        const row = rowOf(session)
+        return {
+          sessionId: row.sessionId,
+          agentId: row.info.agentId,
+          title: session.title ?? "",
+          updatedAt: session.updatedAt ?? "",
+        }
+      })
+    },
     subscribeSessionCatalog(listener: (sessionIds: readonly string[]) => void) {
       catalogListeners.add(listener)
       return () => catalogListeners.delete(listener)
