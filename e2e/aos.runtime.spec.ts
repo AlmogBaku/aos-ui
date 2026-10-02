@@ -889,6 +889,14 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("_aos/session/part", (_params, id) =>
         this.respond(id, {})
       )
+      this.handlers.set("_aos/sessions/search", (params, id) => {
+        const meta = (params as { _meta?: { aos?: { query?: string } } })?._meta?.aos
+        const query = (meta?.query ?? "").toLowerCase()
+        const results = script.sessions.filter((s) =>
+          s.title.toLowerCase().includes(query)
+        )
+        this.respond(id, { sessions: results })
+      })
       this.handlers.set("session/set_config_option", (params, id) => {
         const configOptions = script.configOptions.map((option) =>
           option.configId === params.configId &&
@@ -1350,4 +1358,69 @@ test("AOS proxy answers a permission request on the tool call it guards, and one
   await expect.poll(replies).toEqual([allowed, allowed])
   await expect(page.getByText("Answered: Allow once")).toBeVisible()
   await expect(choices).toHaveCount(0)
+})
+
+test("AOS proxy serves session search through the member stack and merges results with the loaded list", async ({
+  page,
+}) => {
+  await serveAcp(page, {
+    sessions: [
+      {
+        sessionId: SESSION_ID,
+        cwd: "/srv/demo",
+        title: "Research",
+        updatedAt: "2026-09-12T00:00:00.000Z",
+        _meta: {
+          aos: {
+            agentId: AGENT_ID,
+            status: "idle",
+            archived: false,
+            unread: false,
+          },
+        },
+      },
+      {
+        sessionId: "session-2",
+        cwd: "/srv/demo",
+        title: "Analysis notes",
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        _meta: {
+          aos: {
+            agentId: AGENT_ID,
+            status: "idle",
+            archived: false,
+            unread: false,
+          },
+        },
+      },
+    ],
+  })
+  await page.goto("/")
+
+  // Wait for initial session to appear in the inspector.
+  const inspector = page.getByRole("complementary", {
+    name: "Agent details",
+  })
+  const searchBox = inspector.getByRole("searchbox")
+  await expect(searchBox).toBeVisible()
+
+  // Type a search query; the browser debounces 300 ms before sending.
+  await searchBox.fill("research")
+  await expect
+    .poll(() => recorded(page, "_aos/sessions/search"))
+    .toHaveLength(1)
+
+  const [call] = await recorded(page, "_aos/sessions/search")
+  expect((call.params as { _meta?: { aos?: unknown } })?._meta?.aos).toMatchObject({
+    query: "research",
+  })
+
+  // The matching session is visible; the non-matching one is not.
+  await expect(inspector.getByText("Research")).toBeVisible()
+  await expect(inspector.getByText("Analysis notes")).toHaveCount(0)
+
+  // Clearing the search reverts to the full loaded list.
+  await searchBox.clear()
+  await expect(inspector.getByText("Research")).toBeVisible()
+  await expect(inspector.getByText("Analysis notes")).toBeVisible()
 })

@@ -209,7 +209,7 @@ export function createCatalog({
           ? await runtime.listAllSessions(SESSION_CATALOG_MAX_WINDOW, 0)
           : await runtime.listSessions(agentId, SESSION_CATALOG_MAX_WINDOW, 0)
         sessions = page.sessions.filter((s) =>
-          s.title.toLocaleLowerCase().includes(lower)
+          s.title?.toLocaleLowerCase().includes(lower) ?? false
         )
       }
       rows.rememberList(sessions)

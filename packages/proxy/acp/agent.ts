@@ -874,7 +874,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     undecoded,
     async ({ params: raw, requestId }) => {
       admit(AOS_METHODS.sessions.search, "search")
-      const meta = parseMeta(AosSessionSearchMetaSchema, (raw as { _meta?: unknown } | undefined)?._meta)
+      const meta = parseMeta(
+        AosSessionSearchMetaSchema,
+        (raw as { _meta?: Record<string, unknown> } | null | undefined)?._meta
+      )
       const agentId = agentOf(meta.agentId)
       const folders = new Map<string, string | undefined>()
       const searched = await perform(

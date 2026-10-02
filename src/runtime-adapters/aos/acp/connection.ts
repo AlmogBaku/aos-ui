@@ -13,6 +13,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SendRequestOptions,
+  type SessionInfo,
   type WireStream,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
@@ -1474,7 +1475,8 @@ export function createAcpConnection(
           options
         )
       )
-      return { sessions: Array.isArray(response.sessions) ? response.sessions : [] }
+      const res = response as Record<string, unknown>
+      return { sessions: Array.isArray(res.sessions) ? (res.sessions as SessionInfo[]) : [] }
     },
 
     subscribe,

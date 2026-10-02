@@ -352,6 +352,10 @@ function createFakeConnection() {
     },
     subscribePendingRequests: () => () => {},
     close: () => record("close"),
+    async searchSessions(meta) {
+      record("searchSessions", meta)
+      return { sessions: [] }
+    },
   }
 
   return {

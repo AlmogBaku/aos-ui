@@ -95,7 +95,7 @@ export type AgentSessionHistoryProps = {
   /** Called with debounce to search sessions at the provider. */
   onSearch?: (
     query: string
-  ) => Promise<readonly Pick<WorkspaceSession, "sessionId" | "agentId" | "title" | "updatedAt">[]>
+  ) => Promise<readonly { sessionId: string; title: string; updatedAt: string }[]>
 }
 
 function normalizeSearch(value: string, locale: Locale) {
@@ -365,7 +365,7 @@ export function AgentSessionHistory({
   const normalizedQuery = normalizeSearch(query, locale)
   const [searching, setSearching] = useState(false)
   const [serverResults, setServerResults] = useState<
-    readonly Pick<WorkspaceSession, "sessionId" | "agentId" | "title" | "updatedAt">[]
+    readonly { sessionId: string; title: string; updatedAt: string }[]
   >([])
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const latestQuery = useRef<string>("")

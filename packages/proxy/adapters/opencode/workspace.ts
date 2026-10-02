@@ -340,12 +340,12 @@ export function createOpenCodeWorkspaceOperations(input: {
             .map((session) => projectSession(session, session.agent!))
             .sort(newestSessionFirst)
       const matched = all.filter((s) =>
-        s.title.toLocaleLowerCase().includes(lower)
+        s.title?.toLocaleLowerCase().includes(lower) ?? false
       )
       return SessionCatalogResponseSchema.parse({
         sessions: matched,
         total: matched.length,
-        limit: matched.length,
+        limit: Math.max(1, matched.length),
         offset: 0,
       })
     },

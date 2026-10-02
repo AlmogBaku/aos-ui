@@ -180,6 +180,7 @@ function createFakeConnection(
       return () => pendingListeners.delete(listener)
     },
     close: () => {},
+    searchSessions: async () => ({ sessions: [] }),
   }
 
   return {

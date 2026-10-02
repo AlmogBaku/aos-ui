@@ -3059,7 +3059,7 @@ describe("Hermes server adapter", () => {
     const page = await adapter.searchSessions("researcher", "research")
     expect(page.sessions).toHaveLength(1)
     expect(page.sessions[0]).toMatchObject({
-      id: "researcher/stored/1",
+      id: "stored/1",
       agentId: "researcher",
       title: "Research notes",
     })
