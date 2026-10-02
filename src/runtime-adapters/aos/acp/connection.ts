@@ -51,6 +51,7 @@ import {
   AosInitializeMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosSteerResponseSchema,
+  AosSessionSearchMetaSchema,
   type AosHistoryCursor,
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
@@ -1461,6 +1462,19 @@ export function createAcpConnection(
         sessions: response.sessions,
         ...(response.nextCursor ? { nextCursor: response.nextCursor } : {}),
       }
+    },
+
+    async searchSessions(meta) {
+      const parsed = AosSessionSearchMetaSchema.safeParse(meta)
+      if (!parsed.success) throw new Error("Invalid search meta")
+      const response = await request("short", (agent, options) =>
+        agent.request(
+          AOS_METHODS.sessions.search,
+          { _meta: { [AOS_META_KEY]: parsed.data } },
+          options
+        )
+      )
+      return { sessions: Array.isArray(response.sessions) ? response.sessions : [] }
     },
 
     subscribe,

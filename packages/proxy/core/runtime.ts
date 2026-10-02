@@ -339,6 +339,14 @@ export interface ServerRuntime {
     offset: number
   ): Promise<SessionCatalogResponse>
   /**
+   * Search sessions by query string. Absent when the runtime has no native
+   * search; the catalog falls back to listing and filtering by title.
+   */
+  searchSessions?(
+    agentId: string | undefined,
+    query: string
+  ): Promise<SessionCatalogResponse>
+  /**
    * One chronological page of history, paged backwards: `offset` counts from
    * the newest message and `nextOffset` starts the next older page. A page
    * short of the start begins at its first user message, so no turn splits;

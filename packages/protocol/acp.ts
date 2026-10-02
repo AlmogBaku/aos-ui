@@ -56,6 +56,9 @@ export const AOS_METHODS = {
     focus: "_aos/session/focus",
     part: "_aos/session/part",
   },
+  sessions: {
+    search: "_aos/sessions/search",
+  },
   agents: {
     list: "_aos/agents/list",
     update: "_aos/agents/update",
@@ -178,6 +181,13 @@ export const AosSessionNewMetaSchema = z.strictObject({
 export const AosSessionListMetaSchema = z.strictObject({
   agentId: IdentifierSchema.optional(),
 })
+
+/** `_aos/sessions/search` request `_meta.aos`. */
+export const AosSessionSearchMetaSchema = z.strictObject({
+  agentId: IdentifierSchema.optional(),
+  query: z.string().min(1).max(512),
+})
+export type AosSessionSearchMeta = z.infer<typeof AosSessionSearchMetaSchema>
 
 /**
  * `SessionInfo._meta.aos` on `session/list` entries and

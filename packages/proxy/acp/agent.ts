@@ -32,6 +32,7 @@ import {
   AosReplayBeforeSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
+  AosSessionSearchMetaSchema,
   AosSessionPartRequestSchema,
   AosSessionResumeMetaSchema,
   AosSessionUpdateRequestSchema,
@@ -865,6 +866,54 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         requestId
       )
       return {}
+    }
+  )
+
+  app.onRequest(
+    AOS_METHODS.sessions.search,
+    undecoded,
+    async ({ params: raw, requestId }) => {
+      admit(AOS_METHODS.sessions.search, "search")
+      const meta = parseMeta(AosSessionSearchMetaSchema, (raw as { _meta?: unknown } | undefined)?._meta)
+      const agentId = agentOf(meta.agentId)
+      const folders = new Map<string, string | undefined>()
+      const searched = await perform(
+        "search",
+        { ...(agentId === undefined ? {} : { agentId }), query: meta.query },
+        async ({ agentId, query }) => {
+          if (agentId !== undefined) {
+            const folder = await folderOf(agentId)
+            if (folder === undefined) throw unsupported("no working folder")
+            folders.set(agentId, folder)
+          }
+          const result = await catalog.search(agentId, query)
+          // Populate folders for any agents not yet loaded.
+          const missing = [...new Set(result.rows.map((row) => row.agentId))].filter(
+            (id) => !folders.has(id)
+          )
+          await Promise.all(
+            missing.map(async (id) => {
+              const folder = await folderOf(id).catch((cause: unknown) => {
+                const { code } = errorNotificationOf(context.publicError, cause)
+                context.logger.warn(
+                  { agentId: id, errorCode: code },
+                  "session.search.folder_read_failed"
+                )
+                return null
+              })
+              folders.set(id, folder ?? undefined)
+            })
+          )
+          sessions.remember(result.rows.filter((row) => folders.get(row.agentId) !== undefined))
+          return { rows: result.rows.filter((row) => folders.get(row.agentId) !== undefined) }
+        },
+        requestId
+      )
+      return {
+        sessions: searched.rows.map((row) =>
+          sessionInfoOf(row, folders.get(row.agentId)!)
+        ),
+      }
     }
   )
 

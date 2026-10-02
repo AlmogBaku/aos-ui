@@ -3042,6 +3042,39 @@ describe("Hermes server adapter", () => {
     })
   })
 
+
+  it("searches sessions for a single profile using the q parameter", async () => {
+    const http = vi.fn(async () => ({
+      sessions: [
+        {
+          id: "stored/1",
+          profile: "researcher",
+          title: "Research notes",
+          last_active: 1000,
+        },
+      ],
+      total: 1,
+    }))
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+    const page = await adapter.searchSessions("researcher", "research")
+    expect(page.sessions).toHaveLength(1)
+    expect(page.sessions[0]).toMatchObject({
+      id: "researcher/stored/1",
+      agentId: "researcher",
+      title: "Research notes",
+    })
+    const call = http.mock.calls[0]?.[0] as string
+    expect(call).toContain("q=research")
+    expect(call).toContain("profile=researcher")
+  })
+
+  it("returns empty search results when the dashboard is unavailable for searchSessions", async () => {
+    const adapter = new HermesServerAdapter({ request: vi.fn() })
+    await expect(
+      adapter.searchSessions("researcher", "anything")
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+  })
+
   it("reports a missing Agent separately from a Hermes outage", async () => {
     const adapter = new HermesServerAdapter({
       request: vi.fn(async () => ({ profiles: [profile()] })),
