@@ -103,6 +103,32 @@ import { isRecord, nativeId, timestampMs, trimmedText } from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
 
+/**
+ * Builds the OAuth-token fetcher wired to `dashboard`. The returned function
+ * asks Hermes for the current Bearer token Hermes holds for `name` under
+ * `profile`; 404 (no token stored or unknown server) returns `undefined`.
+ * Any other Hermes error propagates and is logged by the server cache.
+ */
+function hermesMcpOAuthToken(
+  dashboard: HermesDashboardClient
+): (
+  profile: string,
+  name: string,
+  signal?: AbortSignal
+) => Promise<string | undefined> {
+  return async (profile, name) => {
+    try {
+      const raw = await dashboard.getMcpOAuthToken(profile, name)
+      if (!isRecord(raw) || typeof raw.access_token !== "string") return undefined
+      return raw.access_token
+    } catch (error) {
+      if (error instanceof HermesHttpError && error.status === 404)
+        return undefined
+      throw error
+    }
+  }
+}
+
 export class HermesRevisionConflictError extends Error {
   constructor() {
     super("Agent revision conflict")
@@ -454,7 +480,20 @@ export class HermesServerAdapter implements ServerRuntime {
        * The proxy's own MCP client and the log of what it reaches upstream;
        * without one, no tool opens a view.
        */
-      mcp?: { client: McpAppClient; logger: Logger }
+      mcp?: {
+        client: McpAppClient
+        logger: Logger
+        /**
+         * When present, the adapter fetches OAuth tokens from Hermes for
+         * OAuth-authenticated MCP servers so they render their App views.
+         * Requires Hermes ≥ v2026.9.24 with `GET /api/mcp/servers/{name}/token`.
+         */
+        oauthToken?: (
+          profile: string,
+          name: string,
+          signal?: AbortSignal
+        ) => Promise<string | undefined>
+      }
       /** Rows per raw history read. */
       rawHistoryPage?: number
       /** Whether the media an Agent delivers becomes Artifacts; on by default. */
@@ -483,6 +522,11 @@ export class HermesServerAdapter implements ServerRuntime {
         rawHistory: (scope) => this.#rawHistory(scope),
         scanHistory: (scope, find) => this.#scanRawHistory(scope, find),
         ...options.mcp,
+        // Wire the dashboard's token endpoint so OAuth-credentialed servers
+        // render their App views. An explicit override in options.mcp takes
+        // precedence (handled by the spread above setting it first; this
+        // ?? then keeps it if present, else supplies the dashboard default).
+        oauthToken: options.mcp.oauthToken ?? hermesMcpOAuthToken(dashboard),
       })
       this.mcpApps = apps.mcpApps
       this.#mcpToolNames = apps.names

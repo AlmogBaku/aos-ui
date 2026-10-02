@@ -150,10 +150,10 @@ export function mcpToolCatalog(
   return async (key: string, fresh: boolean) =>
     Promise.all(
       (await (fresh ? servers.refresh(key) : servers.get(key))).map(
-        async ({ name, url }): Promise<McpToolCatalogEntry> => {
+        async ({ name, url, headersFactory }): Promise<McpToolCatalogEntry> => {
           if (!url) return { name }
           try {
-            const endpoint = { name, url }
+            const endpoint = { name, url, ...(headersFactory ? { headersFactory } : {}) }
             const tools = await (fresh
               ? client.refreshTools(endpoint)
               : client.tools(endpoint))

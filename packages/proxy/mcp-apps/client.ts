@@ -38,7 +38,16 @@ export type McpAppResource = Pick<
 >
 
 /** One MCP server: the name the runtime reports for it, and its Streamable HTTP URL. */
-export type McpAppEndpoint = { name: string; url: string }
+export type McpAppEndpoint = {
+  name: string
+  url: string
+  /**
+   * Called once per new connection to supply headers that cannot be stored
+   * statically, such as an OAuth Bearer token. Ignored when the operator
+   * configured static `headers` for this server via `mcpApps.fallback.servers`.
+   */
+  headersFactory?: (signal?: AbortSignal) => Promise<Readonly<Record<string, string>>>
+}
 
 /**
  * What the operator configured for one MCP server: a `url` the proxy connects
@@ -150,12 +159,18 @@ export function createMcpAppClient(
       )
   }
 
-  async function open({ name, url }: McpAppEndpoint) {
+  async function open({ name, url, headersFactory: endpointFactory }: McpAppEndpoint) {
     const override = overrides.get(name)
     const target = new URL(override?.url ?? url)
-    const headers = override?.headers
-    if (headers && !isHttpsOrLoopback(target))
+    const staticHeaders = override?.headers
+    // The endpoint's headersFactory is only used when the operator has not
+    // supplied static headers (operator config takes precedence).
+    const factory = staticHeaders === undefined ? endpointFactory : undefined
+    const needsCredentials = Boolean(staticHeaders ?? factory)
+    if (needsCredentials && !isHttpsOrLoopback(target))
       throw new McpAppConnectionRefusedError()
+    const dynamicHeaders = factory ? await factory() : undefined
+    const headers = staticHeaders ?? dynamicHeaders
     const client = new Client({ name: "aos-ui-proxy", version: "1.0.0" })
     await client.connect(
       new StreamableHTTPClientTransport(target, {

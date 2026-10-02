@@ -29,3 +29,26 @@ projection, bounded decoding, redaction, uncertain-send handling, and
 authoritative reconciliation remain in the adapter and content modules. AOS
 authenticates the socket with a `?token=` query parameter on the dial and uses no
 WebSocket ticket subprotocol.
+
+## OAuth token endpoint
+
+`HermesDashboardClient.getMcpOAuthToken` calls a route not yet in the audited
+upstream commit:
+
+```
+GET /api/mcp/servers/{name}/token?profile={profile}
+```
+
+Expected response (200):
+```json
+{ "access_token": "<bearer>", "token_type": "Bearer" }
+```
+
+Returns 404 when no OAuth token is stored for the server or when the server
+is unknown. The proxy treats 404 as "no token available" and skips the server
+rather than failing. Any other non-2xx status propagates as a `HermesHttpError`
+and is logged at warn level by the server-cache.
+
+This endpoint must be implemented in Hermes for OAuth-authenticated MCP servers
+to render their App views in AOS. Once merged upstream, update the pinned commit
+reference above.

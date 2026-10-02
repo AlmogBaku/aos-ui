@@ -146,8 +146,13 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   const folders = new Map<string, Readonly<Record<string, string>> | number>()
   /** The files a download serves the Session, by path. */
   const files = new Map<string, string>()
-  /** The profile's configured MCP servers, by name. */
+  /** The profile's configured MCP servers, by name (stdio, no URL). */
   const mcpServers: string[] = []
+  /**
+   * OAuth-authenticated MCP servers: name → { url, token }. The fake serves
+   * the token from `/api/mcp/servers/{name}/token`.
+   */
+  const oauthMcpServers = new Map<string, { url: string; token: string }>()
   /** Every dashboard request, as Hermes received it. */
   const httpRequests: { url: URL; headers: Headers }[] = []
 
@@ -447,21 +452,41 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     if (url.pathname === "/api/mcp/servers")
       return url.searchParams.get("profile") === PROFILE
         ? json(200, {
-            servers: mcpServers.map((name) => ({
-              name,
-              transport: "stdio",
-              url: null,
-              command: "synthetic-mcp",
-              args: [],
-              env: {},
-              auth: null,
-              enabled: true,
-              tools: null,
-              source: "config",
-              plugin: null,
-            })),
+            servers: [
+              ...mcpServers.map((name) => ({
+                name,
+                transport: "stdio",
+                url: null,
+                command: "synthetic-mcp",
+                args: [],
+                env: {},
+                auth: null,
+                enabled: true,
+                tools: null,
+              })),
+              ...[...oauthMcpServers.entries()].map(([name, { url: mcpUrl }]) => ({
+                name,
+                transport: "http",
+                url: mcpUrl,
+                command: null,
+                args: [],
+                env: {},
+                auth: "oauth",
+                enabled: true,
+                tools: null,
+              })),
+            ],
           })
         : json(404)
+    // OAuth token for a named MCP server, per profile.
+    const tokenMatch =
+      /^\/api\/mcp\/servers\/([^/]+)\/token$/.exec(url.pathname)
+    if (tokenMatch) {
+      const serverName = decodeURIComponent(tokenMatch[1])
+      const server = oauthMcpServers.get(serverName)
+      if (!server || url.searchParams.get("profile") !== PROFILE) return json(404)
+      return json(200, { access_token: server.token, token_type: "Bearer" })
+    }
     if (!listed) return json(404)
     // A download resolves its path in the Session's own folder and serves
     // the file whole, as an attachment (`hermes_cli/web_routers/files.py:733`).
@@ -563,9 +588,17 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       files.set(path, body)
     },
 
-    /** An MCP server the profile configures. */
+    /** An MCP server the profile configures (stdio, no URL). */
     addMcpServer(name: string) {
       mcpServers.push(name)
+    },
+
+    /**
+     * An OAuth-authenticated HTTP MCP server the profile configures. The fake
+     * serves `token` from `GET /api/mcp/servers/{name}/token`.
+     */
+    addOAuthMcpServer(name: string, mcpUrl: string, token: string) {
+      oauthMcpServers.set(name, { url: mcpUrl, token })
     },
 
     /**

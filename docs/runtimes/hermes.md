@@ -223,13 +223,18 @@ proxy reads the view itself. It lists the profile's servers through
 `GET /api/mcp/servers?profile=PROFILE` and connects to their URLs with its own
 MCP client:
 
-- It reaches only enabled Streamable HTTP servers. A stdio server, or one that
-  needs credentials the proxy does not hold, shows the tool call's textual
-  details instead.
-- For a server that needs headers, give the proxy its own copy under
+- It reaches only enabled Streamable HTTP servers. A stdio server shows the
+  tool call's textual details instead.
+- **OAuth-authenticated servers** (`auth: oauth` in Hermes config) are reached
+  automatically: the proxy fetches the current Bearer token Hermes holds via
+  `GET /api/mcp/servers/{name}/token` and passes it on every new connection, so
+  a rotated token is picked up without a proxy restart. The server's URL must be
+  `https:` or loopback.
+- For a server that uses static header auth, give the proxy its own copy under
   `mcpApps.fallback.servers.NAME.headers` in the proxy configuration
   ([MCP Apps fallback](../configuration.md#mcp-apps-fallback)). Its URL must
-  then be `https:` or loopback.
+  then be `https:` or loopback. Static headers take precedence over any
+  dynamically fetched OAuth token for the same server name.
 - When the proxy reaches a server at another address than Hermes does, set
   `mcpApps.fallback.servers.NAME.url`; the proxy connects there instead of the
   URL the profile registers.
@@ -386,6 +391,7 @@ Hermes-native routes from the proxy host:
 - `GET /api/sessions/:id/messages` — message history
 - `GET /api/fs/read-data-url` — artifact byte reads
 - `GET /api/mcp/servers?profile=` — MCP server list for tool names and MCP Apps
+- `GET /api/mcp/servers/:name/token?profile=` — OAuth Bearer token for an MCP server (used for OAuth App views; 404 when no token stored)
 - `GET /api/tools/toolsets/{stt,tts}/config` — audio configuration
 - `POST /api/audio/transcribe`, `POST /api/audio/speak` — transcription and speech
 - `GET /api/ws` (WebSocket upgrade) — gateway connection for profiles, runs, questions, and events

@@ -23,8 +23,9 @@ import { projectHermesToolCall, unwrapToolCall } from "./tool-data"
 
 /**
  * MCP Apps for Hermes, which keeps no UI resources of its own: the proxy
- * reaches a profile's MCP servers itself, and only those it can reach without
- * credentials or with headers the operator configured. Names are keyed by
+ * reaches a profile's MCP servers itself — servers that need no credentials,
+ * servers the operator configured headers for, and OAuth-authenticated servers
+ * whose token the proxy fetches from Hermes on demand. Names are keyed by
  * profile, which is the Agent id.
  */
 
@@ -33,7 +34,7 @@ const HermesMcpServerSchema = z.object({
   name: z.string().min(1),
   transport: z.string(),
   url: z.string().nullish(),
-  auth: z.unknown(),
+  auth: z.string().nullish(),
   enabled: z.boolean(),
 })
 
@@ -64,6 +65,23 @@ export function hermesMcpServers(
     }),
     credentialed
   )
+}
+
+/**
+ * Names of every server with `auth: "oauth"` in the raw Hermes server
+ * payload. Used to distinguish OAuth servers (whose tokens the proxy fetches)
+ * from header-auth servers (whose tokens the operator supplies statically).
+ */
+function oauthServerNamesFrom(payload: unknown): ReadonlySet<string> {
+  const result = HermesMcpServersSchema.safeParse(payload)
+  if (!result.success) return new Set()
+  const names = new Set<string>()
+  for (const entry of result.data.servers) {
+    const server = HermesMcpServerSchema.safeParse(entry)
+    if (server.success && server.data.auth === "oauth" && server.data.url)
+      names.add(server.data.name)
+  }
+  return names
 }
 
 /**
@@ -174,10 +192,47 @@ export function createHermesMcpApps(input: {
   ): Promise<T | undefined>
   client: McpAppClient
   logger: Logger
+  /**
+   * Fetches the current OAuth access token Hermes holds for `name` under
+   * `profile`. Present only when the Hermes deployment supports
+   * `GET /api/mcp/servers/{name}/token`. When provided, OAuth-authenticated
+   * servers become reachable: the proxy connects with the live Bearer token
+   * and re-fetches it on every reconnect so a rotated token is picked up
+   * automatically.
+   */
+  oauthToken?: (
+    profile: string,
+    name: string,
+    signal?: AbortSignal
+  ) => Promise<string | undefined>
 }): HermesMcpApps {
-  const servers = createMcpServerCache<McpAppServer>(async (profile) =>
-    hermesMcpServers(await input.servers(profile), input.client.credentialed)
-  )
+  const servers = createMcpServerCache<McpAppServer>(async (profile) => {
+    const payload = await input.servers(profile)
+    const oauthNames = input.oauthToken
+      ? oauthServerNamesFrom(payload)
+      : (new Set<string>() as ReadonlySet<string>)
+    const serverList = hermesMcpServers(
+      payload,
+      // A server is credentialed (gets a URL set) when the operator supplied
+      // static headers OR it is an OAuth server the proxy can authenticate.
+      (name) => input.client.credentialed(name) || oauthNames.has(name)
+    )
+    if (!input.oauthToken || oauthNames.size === 0) return serverList
+    // Attach a per-profile token factory to every OAuth server that got a URL.
+    return serverList.map((server) => {
+      if (!oauthNames.has(server.name) || !server.url) return server
+      const { name } = server
+      return {
+        ...server,
+        headersFactory: async (
+          signal?: AbortSignal
+        ): Promise<Readonly<Record<string, string>>> => {
+          const token = await input.oauthToken!(profile, name, signal)
+          return token ? { Authorization: `Bearer ${token}` } : {}
+        },
+      }
+    })
+  })
   const names = createMcpToolNames(
     HERMES_MCP_TOOL_NAMES,
     mcpToolCatalog(servers, input.client)

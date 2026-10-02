@@ -126,6 +126,23 @@ export class HermesDashboardClient {
     return this.http(`/api/mcp/servers?${query}`)
   }
 
+  /**
+   * The live OAuth access token for `name`. Hermes stores it after a completed
+   * OAuth flow and refreshes it automatically when it expires.
+   *
+   * Returns the raw JSON response for the caller to parse; throws
+   * `HermesHttpError(404)` when no token is stored or the server is unknown.
+   *
+   * Hermes route: `GET /api/mcp/servers/{name}/token?profile={profile}`
+   * Response: `{ "access_token": "<bearer>", "token_type": "Bearer" }`
+   */
+  getMcpOAuthToken(profile: string, name: string) {
+    const query = new URLSearchParams({ profile })
+    return this.http(
+      `/api/mcp/servers/${encodeURIComponent(name)}/token?${query}`
+    )
+  }
+
   private mutateSession(
     profile: string,
     storedId: string,

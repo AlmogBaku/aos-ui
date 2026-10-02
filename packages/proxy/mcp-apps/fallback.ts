@@ -29,6 +29,14 @@ export type McpAppServer = {
   name: string
   /** A Streamable HTTP endpoint the proxy may connect to; absent otherwise. */
   url?: string
+  /**
+   * Fetches the current auth headers for this server (e.g. an OAuth Bearer
+   * token). Called once per new MCP connection so a rotated token reaches the
+   * server on reconnect without a proxy restart. Only set when the runtime
+   * manages the credential itself (OAuth); absent for anonymous servers and for
+   * servers the operator supplied static headers for.
+   */
+  headersFactory?: (signal?: AbortSignal) => Promise<Readonly<Record<string, string>>>
 }
 
 /** A tool call as the runtime stored it in the Session's own history. */
@@ -113,9 +121,19 @@ export function createMcpAppsFallback(
       toolName,
       servers.map(({ name }) => name)
     )
-    const url = split && servers.find(({ name }) => name === split.server)?.url
+    const server = split && servers.find(({ name }) => name === split.server)
+    const url = server?.url
     return split && url
-      ? { endpoint: { name: split.server, url }, ...split }
+      ? {
+          endpoint: {
+            name: split.server,
+            url,
+            ...(server?.headersFactory
+              ? { headersFactory: server.headersFactory }
+              : {}),
+          },
+          ...split,
+        }
       : undefined
   }
 
