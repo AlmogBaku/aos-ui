@@ -619,7 +619,7 @@ describe("MCP App files", () => {
     ).toBe(status)
   })
 
-  it("refuses every argument and Session it may not serve with one empty 404, before any read", async () => {
+  it("refuses a path outside the folders with an empty 403, and every other argument and Session it may not serve with one empty 404, before any read", async () => {
     const input = {
       path: REPORT,
       outside: "/srv/other/report.pdf",
@@ -636,11 +636,12 @@ describe("MCP App files", () => {
     const file = async (argument: string) =>
       observed(await proxy.request(`${origin}${appPath()}/files/${argument}`))
 
-    // The folders refuse this one; every other refusal answers alike.
-    const refusal = await file("outside")
+    // The folders refuse this one by its written path alone, so it says so;
+    // every other refusal answers alike.
+    expect(await file("outside")).toEqual({ status: 403, ...REFUSAL })
+    const refusal = await file("missing")
     expect(refusal).toEqual({ status: 404, ...REFUSAL })
     for (const argument of [
-      "missing",
       "nested",
       "__proto__",
       "constructor",

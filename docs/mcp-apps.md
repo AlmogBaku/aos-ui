@@ -158,10 +158,12 @@ its own result. For a call from one of
 
 A file answer:
 
-- A bad pass or login answers 401. Every refusal, a missing file, and a
-  Session that is gone answer the same empty 404, and the log records only a
-  reason code, never a path or a pass. A runtime that does not answer, or
-  fails, answers 503.
+- A bad pass or login answers 401. A path the folders refuse as written
+  answers an empty 403, which the artifact view shows as not allowed. Every
+  other refusal, a missing file, and a Session that is gone answer the same
+  empty 404, so nothing the file system decides tells them apart. The log
+  records only a reason code, never a path or a pass. A runtime that does not
+  answer, or fails, answers 503.
 - One byte range answers 206 with `Content-Range`, and a range past the end
   answers 416. Of the runtime's headers, only `Content-Length`,
   `Content-Range`, and `Accept-Ranges` pass through.

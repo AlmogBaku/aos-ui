@@ -22,8 +22,9 @@ import { encodedFilename } from "./http"
  * address per argument that names a file, all under one pass, and withholds
  * from the view every argument that starts with `/`. A read is judged on every
  * request: its pass, or the listener's own login without one, then the call,
- * then the folder rules. A bad pass or login answers 401; every other refusal
- * answers one empty 404 and logs only its reason.
+ * then the folder rules. A bad pass or login answers 401, and a written path
+ * the folders refuse an empty 403; every other refusal answers one empty 404.
+ * Each logs only its reason.
  *
  * A published Artifact opens in the configured viewer the same way, with one
  * address, `path`, for its own bytes. Those are read by id as the listener's
@@ -336,9 +337,9 @@ export async function answerAppFile<Login>(input: {
   // A view reads from an opaque origin, and only a pass may answer it.
   if (pass !== null) headers.set("access-control-allow-origin", "null")
   const empty = (status: number) => new Response(null, { status, headers })
-  const refused = (reason: string) => {
+  const refused = (reason: string, status = 404) => {
     logger.info({ reason, ...target }, "app_file.refused")
-    return empty(404)
+    return empty(status)
   }
   const unavailable = (reason: string) => {
     logger.warn({ reason, ...target }, "app_file.unavailable")
@@ -386,7 +387,10 @@ export async function answerAppFile<Login>(input: {
       reader.realPath &&
         ((path) => reader.realPath!(scope, path, request.signal))
     )
-    if (!verdict.ok) return refused(verdict.reason)
+    // The folders judge the written path by the configuration alone, so their
+    // refusal says so; a refusal the file system decides stays a 404.
+    if (!verdict.ok)
+      return refused(verdict.reason, verdict.reason === "denied" ? 403 : 404)
     const range = request.headers.get("range")
     const upstream = await reader.read(scope, verdict.path, {
       ...(range !== null && SINGLE_RANGE.test(range) ? { range } : {}),

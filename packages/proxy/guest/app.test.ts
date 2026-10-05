@@ -805,7 +805,7 @@ describe("guest MCP App files", () => {
       number,
     ]
   >([
-    ["no guest folders", undefined, true, { addresses: {} }, 404],
+    ["no guest folders", undefined, true, { addresses: {} }, 403],
     [
       "a runtime that cannot report real paths",
       { guest: { agentFolder: true } },
@@ -855,12 +855,12 @@ describe("guest MCP App files", () => {
     expect((await read(files?.addresses.path)).status).toBe(200)
     // The guest folders allow it, but the operator's do not.
     const refused = await read(files?.addresses.notes)
-    expect(refused.status).toBe(404)
+    expect(refused.status).toBe(403)
     // The guest listener keeps the file route's own policy.
     expect(refused.headers.get("content-security-policy")).toBe(
       "default-src 'none'; frame-ancestors 'none'; sandbox"
     )
-    // A Session the runtime no longer holds gets the same refusal.
+    // A Session the runtime no longer holds answers as a missing file.
     subject.resolveInvitedSession.mockResolvedValueOnce(undefined)
     expect((await read(files?.addresses.path)).status).toBe(404)
     const renew = (origin: string) =>

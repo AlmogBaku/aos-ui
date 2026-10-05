@@ -39,6 +39,7 @@ export type ViewLabels = {
     view: (filename: string) => string
     loading: string
     unreachable: string
+    denied: string
     noPreview: string
     tooLarge: string
     htmlTitle: string
@@ -95,6 +96,7 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       view: (filename) => `View ${filename}`,
       loading: "Loading file…",
       unreachable: "Can't reach this file.",
+      denied: "Showing this file isn't allowed.",
       noPreview: "No preview is available for this file.",
       tooLarge: "This file is too large to preview.",
       htmlTitle: "HTML preview",
@@ -149,6 +151,7 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       view: (filename) => `הצגת ${filename}`,
       loading: "הקובץ נטען…",
       unreachable: "לא ניתן לגשת לקובץ הזה.",
+      denied: "אין הרשאה להציג את הקובץ הזה.",
       noPreview: "אין תצוגה מקדימה לקובץ הזה.",
       tooLarge: "הקובץ גדול מדי לתצוגה מקדימה.",
       htmlTitle: "תצוגה מקדימה של HTML",

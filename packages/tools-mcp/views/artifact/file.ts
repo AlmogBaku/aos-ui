@@ -14,7 +14,7 @@ export type FilePreview =
   | { kind: "none" }
 
 export type FileState =
-  | { status: "loading" | "unreachable" | "tooLarge" }
+  | { status: "loading" | "unreachable" | "denied" | "tooLarge" }
   | { status: "ready"; preview: FilePreview }
 
 export type PreviewKind = Exclude<FilePreview["kind"], "none">
@@ -212,7 +212,8 @@ export async function loadFile(
     })
     if (!response.ok) {
       discard(response.body)
-      return { status: "unreachable" }
+      // The proxy answers 403 only for a path its folders do not serve.
+      return { status: response.status === 403 ? "denied" : "unreachable" }
     }
     const type =
       knownType(file) ?? mediaType(response.headers.get("content-type"))

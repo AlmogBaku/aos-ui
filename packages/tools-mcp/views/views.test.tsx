@@ -610,6 +610,25 @@ describe("artifact view", () => {
     }
   )
 
+  it("says a file is not allowed when the proxy answers 403", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 }))
+    )
+
+    render(
+      <ArtifactView
+        {...props(notes)}
+        context={{ ...files("https://aos.test/files/notes.txt"), ...PIP }}
+      />
+    )
+
+    expect(
+      await screen.findByText("Showing this file isn't allowed.")
+    ).toBeVisible()
+    expect(screen.queryByText("Can't reach this file.")).toBeNull()
+  })
+
   it("fetches again once a renewed address follows a refused one, and links the current address", async () => {
     const [first, second, third] = ["one", "two", "three"].map(
       (pass) => `https://aos.test/files/notes.txt?pass=${pass}`
