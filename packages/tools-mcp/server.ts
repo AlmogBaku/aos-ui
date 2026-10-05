@@ -75,6 +75,18 @@ const presentArtifactSchema = z.strictObject({
 })
 
 /**
+ * The name a presented file shows by: the path's own, or its title ending in
+ * the path's extension, which the view and a download type the file by.
+ */
+function displayFilename(path: string, title: string | undefined) {
+  if (title === undefined) return posix.basename(path)
+  const extension = posix.extname(path)
+  return title.toLowerCase().endsWith(extension.toLowerCase())
+    ? title
+    : `${title}${extension}`
+}
+
+/**
  * A tool's result: its value as structured content, and again as the JSON the
  * text ends with, for a harness that forwards only text.
  */
@@ -225,7 +237,7 @@ export function createToolsServer({
     },
     ({ path, title, mimeType }) => {
       const file: PresentArtifactResult = {
-        filename: title ?? posix.basename(path),
+        filename: displayFilename(path, title),
         ...(mimeType ? { mimeType } : {}),
       }
       return presentationResult("present_artifact", file.filename, file)

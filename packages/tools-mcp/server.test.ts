@@ -301,7 +301,8 @@ describe("render_stats", () => {
 
 describe("present_artifact", () => {
   // A result reaches guests through the view, so it names the file and never
-  // its path; the proxy reads the path from the call's own arguments.
+  // its path; the proxy reads the path from the call's own arguments. A title
+  // keeps the path's extension, which the view and a download type it by.
   it.each([
     [{ path: "/workspace/out/report.pdf" }, { filename: "report.pdf" }],
     [
@@ -310,7 +311,11 @@ describe("present_artifact", () => {
         title: "Quarterly data",
         mimeType: "text/csv",
       },
-      { filename: "Quarterly data", mimeType: "text/csv" },
+      { filename: "Quarterly data.csv", mimeType: "text/csv" },
+    ],
+    [
+      { path: "/workspace/out/report.pdf", title: "Q3 report.PDF" },
+      { filename: "Q3 report.PDF" },
     ],
   ])(
     "shows %j by name, without its path or touching the filesystem",
