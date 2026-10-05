@@ -106,18 +106,20 @@ bun run proxy:serve -- --config /tmp/proxy-test.yaml
 
 Watch the startup log. A `proxy.start_failed` event means the configuration is invalid; fix `/tmp/proxy-test.yaml` and retry. When the proxy logs its ready state without errors, the configuration is valid. Interrupt it with SIGTERM.
 
-The proxy reads secret files from their original paths, so `/run/secrets` and `/etc/aos-ui/secrets` must be reachable from wherever the test command runs.
+The proxy reads secret files from their original paths, so `/run/secrets` and `/etc/aos-ui/secrets` must be reachable from wherever the test command runs. Give the test copy free `listen.port` and `guest.listen.port` values first: the live listeners hold the configured ports, so a test copy on them fails to bind however valid it is.
 
-### 3. Install and reload
+### 3. Install and restart the proxy
 
-Overwrite the live file and reload the service:
+Install the file with the owner and mode startup requires, then restart the proxy container, which reads its configuration only when it starts:
 
 ```bash
-cp /tmp/proxy-test.yaml /etc/aos-ui/proxy.yaml
-systemctl reload aos-ui
+install -o root -g root -m 0644 /tmp/proxy-test.yaml /etc/aos-ui/proxy.yaml
+docker ps --format '{{.Names}}' | grep -- '-web-1$'
+docker restart <that container>
+docker exec <that container> cat /run/aos-ui/proxy.yaml
 ```
 
-`ExecReload` rebuilds and restarts the container stack; the proxy picks up the new configuration on the next start.
+The last command must show the new file. `systemctl reload aos-ui` does not apply a configuration-only change: `ExecReload` recreates a container only when its image changed, and the proxy's single-file mount keeps showing the replaced file until the container restarts. Restart the container itself rather than running `docker compose restart` by hand, which fails without the unit's `EnvironmentFile`. When the same change also rebuilds an image, the reload recreates the container and it reads the new file.
 
 ### 4. Probe health and readiness
 
