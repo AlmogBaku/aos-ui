@@ -217,10 +217,14 @@ complete and its result once the call settles; it never receives partial
 input. A call that fails without a result, or is still open when its turn
 ends, reaches the view as cancelled instead. On OpenClaw the card draws once the Gateway reports the view with the
 result. Inline, it
-grows with its content up to 80% of the viewport height; fullscreen covers the
-viewport, and the host shows an **Exit full screen** control. Esc exits
-fullscreen only while focus is outside the view, because the view receives its
-own key presses; the control is always available.
+grows with its content up to 80% of the viewport height. Fullscreen covers the
+viewport in place, under the side panel's header: the view's name (the file it
+shows, when its result names one), the file's type, and an **Exit full screen**
+control, which takes focus. The host keeps the header and the view clear of the
+device's edges itself. Esc exits fullscreen only while focus is outside the
+view, because the view receives its own key presses; the control is always
+available. Fullscreen returns the view to where it was, its message or the side
+panel.
 
 `pip` shows the view in the side panel: in the inspector's place on a wide
 screen and in a drawer on a narrow one. The panel holds one view at a time. The
@@ -233,7 +237,8 @@ and leaving the Session return it too.
 The host context carries the theme (`light` or `dark`), the locale (`en-US`
 or `he-IL`), and the workspace's colors and font as the spec's style
 variables, plus the time zone, the tool call, pointer and hover support,
-safe-area insets in fullscreen, and a view's file addresses as `aos/files`.
+zero safe-area insets, since the host keeps every view clear of the device's
+edges, and a view's file addresses as `aos/files`.
 A view's log messages go only to the browser console. AOS sets `lang` and
 `dir` on the view's root element unless the view sets its own, so a view can
 follow Hebrew right-to-left layout.

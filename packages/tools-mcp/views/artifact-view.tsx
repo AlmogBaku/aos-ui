@@ -7,6 +7,7 @@ import {
   FileMusic,
   FileText,
   FileVideoCamera,
+  Maximize2,
   PictureInPicture2,
   RotateCw,
   type LucideIcon,
@@ -410,12 +411,21 @@ function ImageThumbnail({
   )
 }
 
+/** The kinds a browser shows itself, so a new tab opens them as they are. */
+const OPENS_IN_TAB: ReadonlySet<FileKind> = new Set([
+  "pdf",
+  "image",
+  "audio",
+  "video",
+])
+
 /**
  * The file `present_artifact` shows, read from the address the page grants in
  * `aos/files`. In its message an image shows alone, and any other file as a
- * card without its contents; the side panel previews it whole, with every
- * control. Download and Open in new
- * tab hand the page that same address.
+ * card without its contents; the side panel and full screen preview it whole,
+ * with every control. Download and Open in new tab hand the page that same
+ * address; Open is offered only for a kind the browser shows itself, since the
+ * page serves any other as plain text.
  */
 export function ArtifactView({
   value,
@@ -426,14 +436,17 @@ export function ArtifactView({
 }: ViewProps<PresentArtifactResult> & { previewLimits?: PreviewLimits }) {
   const artifact = labels.artifact
   const address = filesSchema.safeParse(context?.["aos/files"]).data?.path
-  const pip = context?.displayMode === "pip"
+  const mode = context?.displayMode
+  const pip = mode === "pip"
+  const fullscreen = mode === "fullscreen"
+  const expanded = pip || fullscreen
   const type = knownType(value)
   const kind = kindOf(type)
   // Media plays from its address, never read; in its message only an image
   // is read, since only an image shows there.
   const media = kind === "audio" || kind === "video" ? kind : undefined
   const file = useFile(
-    media === undefined && (pip || kind === "image") ? address : undefined,
+    media === undefined && (expanded || kind === "image") ? address : undefined,
     value.filename,
     value.mimeType,
     previewLimits
@@ -442,11 +455,25 @@ export function ArtifactView({
   const compact = useCompact(root)
   const box = useRef<HTMLDivElement>(null)
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
-  const room = useRoom(root, box, pip && file.state.status === "ready")
-  const offersPip = context?.availableDisplayModes?.includes("pip") === true
+  const room = useRoom(root, box, expanded && file.state.status === "ready")
+  const offered = context?.availableDisplayModes
+  const offersPip = offered?.includes("pip") === true
   const openPip = offersPip
     ? () => void app.requestDisplayMode({ mode: "pip" }).catch(ignore)
     : undefined
+  // Where the view was before full screen, which Esc returns it to.
+  const [home, setHome] = useState<"inline" | "pip">("inline")
+  const goFullscreen: MenuAction | undefined =
+    offered?.includes("fullscreen") && !fullscreen
+      ? {
+          label: artifact.fullscreen,
+          icon: <Maximize2 />,
+          onSelect: () => {
+            setHome(pip ? "pip" : "inline")
+            void app.requestDisplayMode({ mode: "fullscreen" }).catch(ignore)
+          },
+        }
+      : undefined
   const download: MenuAction | undefined =
     address === undefined
       ? undefined
@@ -470,25 +497,27 @@ export function ArtifactView({
               .catch(ignore),
         }
   const open: MenuAction | undefined =
-    address === undefined
+    address === undefined || kind === undefined || !OPENS_IN_TAB.has(kind)
       ? undefined
       : {
           label: artifact.open,
           icon: <ExternalLink />,
           onSelect: () => void app.openLink({ url: address }).catch(ignore),
         }
-  // In the side panel, Esc returns the view to its message, unless something
-  // in the view used the key first.
+  // Esc returns the view from the side panel to its message, and from full
+  // screen to where it was, unless something in the view used the key first.
   useEffect(() => {
-    if (!pip) return
+    if (!expanded) return
     const leave = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return
       event.preventDefault()
-      void app.requestDisplayMode({ mode: "inline" }).catch(ignore)
+      void app
+        .requestDisplayMode({ mode: fullscreen ? home : "inline" })
+        .catch(ignore)
     }
     window.addEventListener("keydown", leave)
     return () => window.removeEventListener("keydown", leave)
-  }, [app, pip])
+  }, [app, expanded, fullscreen, home])
 
   if (context !== undefined && address === undefined)
     return (
@@ -503,10 +532,10 @@ export function ArtifactView({
         src={address}
         label={`${artifact[media]}: ${value.filename}`}
         speedLabel={artifact.playbackSpeed}
-        fill={pip}
+        fill={expanded}
       />
     ) : null
-  if (!pip)
+  if (!expanded)
     return file.state.status === "ready" &&
       file.state.preview.kind === "image" ? (
       <div ref={root}>
@@ -525,20 +554,24 @@ export function ArtifactView({
           filename={value.filename}
           type={type}
           labels={artifact}
-          actions={[download, open].filter((action) => action !== undefined)}
+          actions={[download, goFullscreen, open].filter(
+            (action) => action !== undefined
+          )}
           onOpen={openPip}
         >
           {player}
         </FileCard>
       </div>
     )
-  // The page above the side panel names the file, so the view does not.
+  // The page names the file above the side panel and in full screen, so the
+  // view does not.
   // Media reloads from its own controls, so it has no Refresh.
   const actions = [
     media
       ? undefined
       : { label: artifact.refresh, icon: <RotateCw />, onSelect: file.refresh },
     download,
+    goFullscreen,
     open,
   ].filter((action) => action !== undefined)
   return (
@@ -560,7 +593,7 @@ export function ArtifactView({
               </IconButton>
             ))
           )}
-          {offersPip ? (
+          {pip && offersPip ? (
             <IconButton
               label={artifact.pip}
               pressed

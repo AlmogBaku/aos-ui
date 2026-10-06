@@ -478,12 +478,11 @@ describe("artifact view", () => {
     )
     expect(await screen.findByText("notes.txt")).toBeVisible()
     expect(screen.queryByRole("button", { name: "View notes.txt" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull()
     await user.click(screen.getByRole("button", { name: "Download" }))
     expect(app.downloadFile).toHaveBeenCalledWith({
       contents: [{ type: "resource_link", uri: address, name: "notes.txt" }],
     })
-    await user.click(screen.getByRole("button", { name: "Open in new tab" }))
-    expect(app.openLink).toHaveBeenCalledWith({ url: address })
 
     rerender({ ...inline, ...OFFERED })
     await user.click(screen.getByRole("button", { name: "View notes.txt" }))
@@ -522,6 +521,55 @@ describe("artifact view", () => {
     }
   )
 
+  it("goes full screen where offered, previews the file whole there, and Esc returns it where it came from", async () => {
+    const user = userEvent.setup()
+    const modes: McpUiHostContext = {
+      availableDisplayModes: ["inline", "fullscreen", "pip"],
+    }
+    const { app, rerender } = showFile(notes, "Quarterly notes", {
+      displayMode: "inline",
+      ...modes,
+    })
+    await user.click(screen.getByRole("button", { name: "Full screen" }))
+    rerender({ displayMode: "fullscreen", ...modes })
+    expect(await screen.findByText("Quarterly notes")).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull()
+    await user.keyboard("{Escape}")
+
+    rerender({ displayMode: "pip", ...modes })
+    await user.click(await screen.findByRole("button", { name: "Full screen" }))
+    rerender({ displayMode: "fullscreen", ...modes })
+    await user.keyboard("{Escape}")
+
+    expect(app.requestDisplayMode.mock.calls).toEqual([
+      [{ mode: "fullscreen" }],
+      [{ mode: "inline" }],
+      [{ mode: "fullscreen" }],
+      [{ mode: "pip" }],
+    ])
+  })
+
+  it.each([
+    ["notes.txt", false],
+    ["brief.md", false],
+    ["page.html", false],
+    ["report.pdf", true],
+    ["brief.mp3", true],
+  ])(
+    "offers Open in new tab for %s only where the browser shows it itself: %s",
+    (filename, offered) => {
+      const { app, address } = showFile({ filename }, "", {
+        displayMode: "inline",
+      })
+      const open = screen.queryByRole("button", { name: "Open in new tab" })
+      expect(open !== null).toBe(offered)
+      if (open) {
+        fireEvent.click(open)
+        expect(app.openLink).toHaveBeenCalledWith({ url: address })
+      }
+    }
+  )
+
   it("plays audio straight from the file's address, never reading it", async () => {
     const { address, rerender } = showFile({ filename: "brief.mp3" }, "", {
       displayMode: "inline",
@@ -539,11 +587,13 @@ describe("artifact view", () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it("moves Refresh, Download, and Open into a menu in a narrow side panel", async () => {
+  it("moves Refresh, Download, and Full screen into a menu in a narrow side panel", async () => {
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(390)
     try {
       const user = userEvent.setup()
-      const { app, address } = showFile(notes, "Quarterly notes")
+      const { app, address } = showFile(notes, "Quarterly notes", {
+        availableDisplayModes: ["inline", "fullscreen", "pip"],
+      })
       expect(await screen.findByText("Quarterly notes")).toBeVisible()
       expect(screen.queryByRole("button", { name: "Download" })).toBeNull()
       const choose = async (name: string) => {
@@ -556,8 +606,10 @@ describe("artifact view", () => {
       expect(app.downloadFile).toHaveBeenCalledWith({
         contents: [{ type: "resource_link", uri: address, name: "notes.txt" }],
       })
-      await choose("Open in new tab")
-      expect(app.openLink).toHaveBeenCalledWith({ url: address })
+      await choose("Full screen")
+      expect(app.requestDisplayMode).toHaveBeenCalledWith({
+        mode: "fullscreen",
+      })
       await choose("Refresh")
       await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
     } finally {
@@ -629,7 +681,7 @@ describe("artifact view", () => {
     expect(screen.queryByText("Can't reach this file.")).toBeNull()
   })
 
-  it("fetches again once a renewed address follows a refused one, and links the current address", async () => {
+  it("fetches again once a renewed address follows a refused one, and downloads from the current address", async () => {
     const [first, second, third] = ["one", "two", "three"].map(
       (pass) => `https://aos.test/files/notes.txt?pass=${pass}`
     ) as [string, string, string]
@@ -652,10 +704,10 @@ describe("artifact view", () => {
     rerender(<ArtifactView {...view} context={{ ...files(second), ...PIP }} />)
     expect(await screen.findByText("Quarterly notes")).toBeVisible()
     rerender(<ArtifactView {...view} context={{ ...files(third), ...PIP }} />)
-    await userEvent.click(
-      screen.getByRole("button", { name: "Open in new tab" })
-    )
-    expect(view.app.openLink).toHaveBeenCalledWith({ url: third })
+    await userEvent.click(screen.getByRole("button", { name: "Download" }))
+    expect(view.app.downloadFile).toHaveBeenCalledWith({
+      contents: [{ type: "resource_link", uri: third, name: "notes.txt" }],
+    })
     expect(fetched).toEqual([first, second])
 
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }))

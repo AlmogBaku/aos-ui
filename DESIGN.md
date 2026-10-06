@@ -375,8 +375,10 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   HTML, which runs its inline scripts one frame deeper with an opaque origin
   of its own and no network, frame, or form. The card follows the App's
   requested height up to 80% of the viewport. The App may ask for fullscreen,
-  which covers the viewport in place with a localized close control that
-  returns focus to the card, or for the side panel (`pip`), which shows the
+  which covers the viewport in place under the side panel's header (the
+  view's name, the shown file's type, and a localized close control that takes
+  focus and returns it to where the view came from), or for the side panel
+  (`pip`), which shows the
   view in the inspector's place on wide screens and in the focus-managed drawer
   on phones, one view at a time. The frame reloads whenever the view moves. Its
   message keeps a localized "Shown in the side panel" note with a control that

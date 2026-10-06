@@ -31,6 +31,7 @@ export type ViewLabels = {
     refresh: string
     download: string
     open: string
+    fullscreen: string
     pip: string
     more: string
     audio: string
@@ -88,6 +89,7 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       refresh: "Refresh",
       download: "Download",
       open: "Open in new tab",
+      fullscreen: "Full screen",
       pip: "Picture in picture",
       more: "More actions",
       audio: "Audio",
@@ -143,6 +145,7 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       refresh: "רענון",
       download: "הורדה",
       open: "פתיחה בכרטיסייה חדשה",
+      fullscreen: "מסך מלא",
       pip: "תמונה בתוך תמונה",
       more: "פעולות נוספות",
       audio: "שמע",

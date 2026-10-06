@@ -111,6 +111,23 @@ describe("MCP App routing", () => {
     expect(screen.getByRole("button", { name: /show_board/ })).toBeVisible()
   })
 
+  it("names a view after the file its result shows, as the side panel does", async () => {
+    const toolResult = {
+      content: [],
+      structuredContent: { value: { filename: "report.pdf" } },
+    }
+    renderHosted(
+      toolPart({
+        toolName: "present_artifact",
+        artifact: MCP_APP_TOOL_ARTIFACT,
+      }),
+      adapter(async () => ({ html: "<p>app</p>", toolResult }))
+    )
+    expect(
+      await screen.findByLabelText("report.pdf", { selector: "iframe" })
+    ).toBeInTheDocument()
+  })
+
   it("hosts a settled call that carries neither input nor result", async () => {
     // A guest receives an App call as its id, name, status, and flag alone.
     const apps = adapter()

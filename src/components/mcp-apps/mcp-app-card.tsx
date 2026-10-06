@@ -1,6 +1,6 @@
 "use client"
 
-import { Loader2Icon, XIcon } from "lucide-react"
+import { Loader2Icon } from "lucide-react"
 import {
   lazy,
   Suspense,
@@ -26,7 +26,6 @@ import {
   type ToolUiLocaleLabels,
 } from "@/components/tool-ui/locale"
 import type { RichToolPart } from "@/components/tool-ui/types"
-import { Button } from "@/components/ui/button"
 import { SystemNotice } from "@/components/ui/system-notice"
 
 import type { AppPlacement } from "./host-handlers"
@@ -38,6 +37,7 @@ import {
   type McpAppHost,
   type McpAppPip,
 } from "./mcp-app-host"
+import { ViewHeader } from "./view-header"
 import {
   isSettledMcpAppToolPart,
   mcpAppToolCancellation,
@@ -175,6 +175,7 @@ function HostedMcpApp({
     result === undefined ? mcpAppToolCancellation(part) : undefined
   const unavailable = useCallback(() => setState({ status: "failed" }), [])
   const toolName = part.toolName === toolCallId ? undefined : part.toolName
+  const file = shownFileOf(result)
 
   // While the view shows in the side panel, which mounts it afresh, its message
   // keeps its own and passes on what the call reports.
@@ -189,7 +190,7 @@ function HostedMcpApp({
         target,
         opened: { view: opened.view, openedAt: opened.openedAt },
         toolName,
-        file: shownFileOf(result),
+        file,
         input,
         result,
         cancelled,
@@ -228,7 +229,8 @@ function HostedMcpApp({
           toolName={toolName}
           target={target}
           adapter={adapter}
-          title={labels.mcpApp.frameTitle(part.toolName)}
+          title={viewTitle(labels, { file, toolName, target })}
+          detail={file?.mimeType}
           onUnavailable={unavailable}
           onMove={move}
         />
@@ -240,9 +242,10 @@ function HostedMcpApp({
   )
 }
 
-const pipTitle = (
+/** A view's name: the file it shows, else its tool's App. */
+const viewTitle = (
   labels: ToolUiLocaleLabels,
-  { file, toolName, target }: McpAppPip
+  { file, toolName, target }: Pick<McpAppPip, "file" | "toolName" | "target">
 ) =>
   file?.filename ??
   labels.mcpApp.frameTitle(
@@ -254,7 +257,7 @@ export function useMcpAppPip(locale: ToolUiLocale) {
   const host = useMcpAppHost()
   if (!host?.pip) return undefined
   const labels = locale === "he" ? heToolUiLabels : enToolUiLabels
-  return { title: pipTitle(labels, host.pip), leave: host.leavePip }
+  return { title: viewTitle(labels, host.pip), leave: host.leavePip }
 }
 
 /** Why the side panel shows no view: its file is gone, or no view opens. */
@@ -342,7 +345,7 @@ function PipPanel({
   useEffect(() => {
     closeButton.current?.focus()
   }, [])
-  const title = pipTitle(labels, pip)
+  const title = viewTitle(labels, pip)
 
   return (
     <section
@@ -359,33 +362,17 @@ function PipPanel({
         leavePip()
       }}
     >
-      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-base font-medium" dir="auto">
-            {title}
-          </h2>
-          {pip.file?.mimeType ? (
-            <p className="truncate text-sm text-muted-foreground">
-              {pip.file.mimeType}
-            </p>
-          ) : null}
-        </div>
-        <Button
-          ref={closeButton}
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={
-            "artifactId" in pip.target
-              ? labels.mcpApp.closePreview
-              : labels.mcpApp.returnToMessage
-          }
-          onClick={leavePip}
-          className="[@media(pointer:coarse)]:size-11"
-        >
-          <XIcon />
-        </Button>
-      </header>
+      <ViewHeader
+        title={title}
+        detail={pip.file?.mimeType}
+        closeLabel={
+          "artifactId" in pip.target
+            ? labels.mcpApp.closePreview
+            : labels.mcpApp.returnToMessage
+        }
+        closeRef={closeButton}
+        onClose={leavePip}
+      />
       <div className="min-h-0 flex-1">
         {state.status === "failed" ? (
           <div className="p-4">
@@ -407,6 +394,7 @@ function PipPanel({
             target={pip.target}
             adapter={adapter}
             title={title}
+            detail={pip.file?.mimeType}
             onUnavailable={unavailable}
             placement="pip"
             onMove={leavePip}

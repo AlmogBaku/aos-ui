@@ -67,20 +67,19 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
     ).toBeHidden({ timeout: 10_000 })
   }
 
-  // The artifact view frame is the inner frame inside the sandbox proxy.
-  // Use locator().last() to target the most-recently-added card when
-  // multiple present_artifact calls are in the conversation.
-  const artifactFrame = () =>
+  // The artifact view frame is the inner frame inside the sandbox proxy. The
+  // message's frame is named for its file, and comes before the side panel's.
+  const artifactFrame = (filename: string) =>
     page
-      .locator('iframe[aria-label="present_artifact app"]')
-      .last()
+      .locator(`iframe[aria-label="${filename}"]`)
+      .first()
       .contentFrame()
       .locator("iframe")
       .contentFrame()
 
   // --- report.pdf ---
   await send("Publish an artifact")
-  const pdfFrame = artifactFrame()
+  const pdfFrame = artifactFrame("report.pdf")
   // In its message the PDF is a card, without its pages.
   const card = pdfFrame.getByRole("button", { name: "View report.pdf" })
   await expect(card).toBeVisible()
@@ -119,7 +118,7 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
       page.evaluate(
         () =>
           document.activeElement?.querySelector(
-            'iframe[aria-label="present_artifact app"]'
+            'iframe[aria-label="report.pdf"]'
           ) != null
       )
     )
@@ -130,9 +129,24 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   await panel.getByRole("button", { name: "Return to the message" }).click()
   await expect(panel).toBeHidden()
 
+  // --- full screen ---
+  // The view grows over the page under a header named for its file and
+  // previews the PDF whole; the header's close control takes focus, and Esc
+  // returns the view to its message.
+  await pdfFrame.getByRole("button", { name: "Full screen" }).click()
+  const exit = page.getByRole("button", { name: "Exit full screen" })
+  await expect(exit).toBeFocused()
+  await expect(page.getByRole("heading", { name: "report.pdf" })).toBeVisible()
+  await expect(
+    pdfFrame.getByText("Synthetic fixture file for AOS UI.")
+  ).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(exit).toBeHidden()
+  await expect(card).toBeVisible()
+
   // --- preview.png ---
   await send("Show a png artifact")
-  const pngFrame = artifactFrame()
+  const pngFrame = artifactFrame("preview.png")
   // In its message the image shows alone, and opens the side panel.
   // A broken image would show its file card in its place.
   await expect(pngFrame.getByAltText("preview.png")).toBeVisible()
@@ -149,7 +163,9 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
     if (new URL(request.url()).hostname === "files.invalid")
       reached.push(request.url())
   })
-  await artifactFrame().getByRole("button", { name: "View test.html" }).click()
+  await artifactFrame("test.html")
+    .getByRole("button", { name: "View test.html" })
+    .click()
   const htmlView = page
     .getByRole("complementary", { name: "test.html" })
     .locator("iframe")

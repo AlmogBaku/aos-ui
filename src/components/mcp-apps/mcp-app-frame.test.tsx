@@ -163,15 +163,21 @@ describe("MCP App display modes", () => {
     ).toBeNull()
   })
 
-  it("returns to inline from the close control and tells the App", async () => {
+  it("heads full screen with the view's name, focuses its close control, and returns to inline from it", async () => {
     const user = userEvent.setup()
     const { bridge, requestDisplayMode } = renderFrame()
+    expect(screen.queryByRole("heading", { name: "show_board app" })).toBeNull()
     await act(async () => {
       await requestDisplayMode({ mode: "fullscreen" })
     })
     await waitFor(() => expect(latestMode(bridge)).toBe("fullscreen"))
+    expect(
+      screen.getByRole("heading", { name: "show_board app" })
+    ).toBeVisible()
+    const exit = screen.getByRole("button", { name: "Exit full screen" })
+    expect(exit).toHaveFocus()
 
-    await user.click(screen.getByRole("button", { name: "Exit full screen" }))
+    await user.click(exit)
 
     expect(
       screen.queryByRole("button", { name: "Exit full screen" })

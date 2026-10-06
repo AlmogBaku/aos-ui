@@ -74,9 +74,9 @@ An Agent shows a file with `present_artifact` from the AOS UI tools MCP server, 
 
 PDFs and images zoom with a pinch, Ctrl and the wheel or a trackpad pinch, the + and - keys (0 fits again), or the zoom controls; zoomed in, they pan by scrolling. Agent HTML zooms with Ctrl and the wheel or a trackpad pinch over its frame.
 
-The card's controls are Refresh, Download, Open in new tab, and pip, on one row with the preview's own controls; in the side panel, which names the file, the view does not repeat the name.
+The card's controls are Refresh, Download, Full screen, Open in new tab, and pip, on one row with the preview's own controls; in the side panel and in full screen, whose header names the file, the view does not repeat the name. Open in new tab appears only for a PDF, an image, audio, or video, which the browser shows itself; any other file opens there as its plain text, so read it in the card, the side panel, or full screen. Esc leaves full screen for where the view was.
 
-A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) shows Download and Open in new tab instead of a preview.
+A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) shows Download, and Open in new tab where the browser shows that kind, instead of a preview.
 
 The tool's description tells the Agent to call it again after each change so the card shows the latest version.
 
@@ -100,7 +100,7 @@ An Artifact from a `MEDIA:` line (Hermes and OpenClaw) or a trusted native deliv
 
 When an Agent calls a tool whose MCP server declares an App view, such as the AOS UI charts, maps, and stats, the view appears in the conversation, usually as soon as the call starts, and receives the call's result once it settles. It shows a loading state while the view opens, and "The app could not be shown." when the view cannot be opened. The call's request and result stay available beneath it in the compact "Used" row.
 
-An App may ask to fill the viewport; close it with the **Exit full screen** control, or with Esc while focus is outside the App. An App may send a text message into the same conversation on your behalf and may open `https` links in a new tab. It cannot navigate the workspace, open pop-ups, or submit forms. Which servers provide Apps is set in the runtime's own MCP configuration; see [MCP Apps](mcp-apps.md).
+An App may ask to fill the viewport, under a header that names it; close it with the header's **Exit full screen** control, which takes focus, or with Esc while focus is outside the App. An App may send a text message into the same conversation on your behalf and may open `https` links in a new tab. It cannot navigate the workspace, open pop-ups, or submit forms. Which servers provide Apps is set in the runtime's own MCP configuration; see [MCP Apps](mcp-apps.md).
 
 ## Rename, pin, archive, or delete a Session
 

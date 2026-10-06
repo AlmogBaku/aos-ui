@@ -4,5 +4,6 @@ import { startView } from "./view"
 
 startView("artifact", presentArtifactResultSchema, ArtifactView, [
   "inline",
+  "fullscreen",
   "pip",
 ])

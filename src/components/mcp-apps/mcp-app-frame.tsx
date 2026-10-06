@@ -12,7 +12,6 @@ import type {
   CallToolResult,
   ReadResourceResult,
 } from "@modelcontextprotocol/sdk/types.js"
-import { XIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
@@ -22,7 +21,6 @@ import {
   type McpAppView,
 } from "@aos/protocol/mcp-apps"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
-import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
@@ -46,6 +44,7 @@ import {
   sandboxProxyUrl,
 } from "./sandbox-proxy"
 import { useAppFiles, type AppConnectionStatus } from "./use-app-files"
+import { ViewHeader } from "./view-header"
 
 const HOST_INFO = { name: "AOS", version: "1.0.0" }
 
@@ -73,26 +72,6 @@ const mediaMatches = (query: string) =>
 
 type SafeAreaInsets = NonNullable<McpUiHostContext["safeAreaInsets"]>
 const NO_INSETS: SafeAreaInsets = { top: 0, right: 0, bottom: 0, left: 0 }
-
-/** The device's safe-area insets, read through a probe element's padding. */
-function viewportSafeAreaInsets(): SafeAreaInsets {
-  const probe = document.createElement("div")
-  probe.style.cssText =
-    "position:fixed;visibility:hidden;pointer-events:none;" +
-    "padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) " +
-    "env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)"
-  document.body.append(probe)
-  const computed = getComputedStyle(probe)
-  const px = (value: string) => Math.round(Number.parseFloat(value)) || 0
-  const insets = {
-    top: px(computed.paddingTop),
-    right: px(computed.paddingRight),
-    bottom: px(computed.paddingBottom),
-    left: px(computed.paddingLeft),
-  }
-  probe.remove()
-  return insets
-}
 
 /** The spec's theme variables, read from the workspace's own tokens. */
 const STYLE_TOKENS: Partial<Record<keyof McpUiStyles, string>> = {
@@ -153,7 +132,10 @@ export type McpAppFrameProps = {
   onMove?: (placement: AppPlacement) => void
   target: McpAppTarget
   adapter: McpAppAdapter
+  /** The view's name: its frame's, and its header's in full screen. */
   title: string
+  /** The type of the file the view shows, under its name in full screen. */
+  detail?: string | undefined
 }
 
 /**
@@ -175,12 +157,14 @@ export default function McpAppFrame({
   target,
   adapter,
   title,
+  detail,
   onUnavailable,
   placement = "inline",
   onMove,
 }: McpAppFrameProps) {
   const frame = useRef<HTMLIFrameElement>(null)
   const container = useRef<HTMLDivElement>(null)
+  const exitButton = useRef<HTMLButtonElement>(null)
   const bridgeRef = useRef<AppBridge | undefined>(undefined)
   const [connected, setConnected] = useState(false)
   const [initialized, setInitialized] = useState(false)
@@ -275,10 +259,9 @@ export default function McpAppFrame({
       touch: mediaMatches("(any-pointer: coarse)"),
       hover: mediaMatches("(any-hover: hover)"),
     },
-    // In its message or the side panel, the view sits clear of every device
-    // edge.
-    safeAreaInsets:
-      displayMode === "fullscreen" ? viewportSafeAreaInsets() : NO_INSETS,
+    // The view always sits clear of every device edge: in full screen the
+    // host pads the frame by the device's own insets.
+    safeAreaInsets: NO_INSETS,
     styles: { variables: styleVariables() },
     // Where the view fetches each file its call names, by argument.
     ...(files ? { "aos/files": files.addresses } : {}),
@@ -360,6 +343,8 @@ export default function McpAppFrame({
       restoreFocus.current = false
       return
     }
+    // Its close control takes focus, as the side panel's does.
+    exitButton.current?.focus()
     if (typeof element.showPopover !== "function") return
     element.popover = "manual"
     element.showPopover()
@@ -579,8 +564,10 @@ export default function McpAppFrame({
       tabIndex={-1}
       className={cn(
         "overflow-hidden outline-none",
+        // In full screen, the header and the view keep clear of the device's
+        // edges, which are physical whatever the direction.
         fullscreen
-          ? "fixed inset-0 z-50 m-0 size-auto max-h-none max-w-none border-0 bg-background p-0"
+          ? "fixed inset-0 z-50 m-0 flex size-auto max-h-none max-w-none flex-col border-0 bg-background pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]"
           : inline
             ? [
                 hugged === undefined ? "w-full" : "w-fit max-w-full",
@@ -589,6 +576,15 @@ export default function McpAppFrame({
             : "size-full"
       )}
     >
+      {fullscreen ? (
+        <ViewHeader
+          title={title}
+          detail={detail}
+          closeLabel={labels.mcpApp.exitFullscreen}
+          closeRef={exitButton}
+          onClose={exitFullscreen}
+        />
+      ) : null}
       <iframe
         ref={frame}
         // Named for assistive technology without a hover tooltip.
@@ -599,7 +595,11 @@ export default function McpAppFrame({
         src={connected ? sandboxProxyUrl(allow) : undefined}
         className={cn(
           "block w-full max-w-full border-0 bg-transparent",
-          inline ? ["max-h-[80dvh]", height === undefined && "h-40"] : "h-full"
+          inline
+            ? ["max-h-[80dvh]", height === undefined && "h-40"]
+            : fullscreen
+              ? "min-h-0 flex-1"
+              : "h-full"
         )}
         // The sandbox page takes the same scheme, so neither frame paints an
         // opaque canvas behind a transparent view.
@@ -609,18 +609,6 @@ export default function McpAppFrame({
           ...(hugged === undefined ? {} : { width: hugged }),
         }}
       />
-      {fullscreen ? (
-        <Button
-          type="button"
-          variant="secondary"
-          size="icon"
-          onClick={exitFullscreen}
-          aria-label={labels.mcpApp.exitFullscreen}
-          className="absolute end-3 top-3 shadow-sm [@media(pointer:coarse)]:size-11"
-        >
-          <XIcon />
-        </Button>
-      ) : null}
     </div>
   )
 }
