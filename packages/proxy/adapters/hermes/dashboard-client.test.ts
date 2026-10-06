@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { SPEECH_CALL_MS } from "../../core/limits"
 import { HermesDashboardClient } from "./dashboard-client"
 
 describe("Hermes dashboard client", () => {
@@ -77,7 +78,13 @@ describe("Hermes dashboard client", () => {
       ],
       [
         "/api/audio/speak?profile=research+profile",
-        { method: "POST", body: { text: "hello" }, maxResponseBytes: 456 },
+        {
+          method: "POST",
+          body: { text: "hello" },
+          maxResponseBytes: 456,
+          // Synthesis renders the whole answer before Hermes replies.
+          timeoutMs: SPEECH_CALL_MS,
+        },
       ],
     ])
   })

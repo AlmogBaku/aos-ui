@@ -28,6 +28,8 @@ export type HermesHttpInit = {
   method?: string
   body?: unknown
   maxResponseBytes?: number
+  /** This call's deadline, in place of the client's. */
+  timeoutMs?: number
 }
 
 export type HermesHttpOptions = {
@@ -176,7 +178,8 @@ export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
       const write = (init.method ?? "GET") !== "GET"
       let sent = false
       try {
-        return await new Deadline(timeoutMs).run(async (signal) => {
+        const deadline = new Deadline(init.timeoutMs ?? timeoutMs)
+        return await deadline.run(async (signal) => {
           const maxResponseBytes = responseLimit(
             init.maxResponseBytes,
             MAX_NATIVE_HTTP_RESPONSE_BYTES

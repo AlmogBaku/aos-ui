@@ -81,6 +81,13 @@ export const HANDSHAKE_BUDGET = 32
 export const ADAPTER_CALL_MS = 15_000
 
 /**
+ * How long one native speech synthesis may take, in place of ADAPTER_CALL_MS:
+ * the provider renders the whole answer before it replies, in about a quarter
+ * of the audio's length, so a minute of speech already needs 15 s.
+ */
+export const SPEECH_CALL_MS = 90_000
+
+/**
  * How long a native call waits for its link before its own deadline starts:
  * LINK_WAIT_MS + ADAPTER_CALL_MS ends inside ADMISSION_DEADLINE_MS.
  */

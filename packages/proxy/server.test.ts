@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { useFakeClock } from "../../test/support/fake-clock"
 import { createAcpService } from "./acp/service"
 import type { AcpConnectionContext } from "./acp/types"
-import { HANDSHAKE_BUDGET } from "./core/limits"
+import { HANDSHAKE_BUDGET, SPEECH_CALL_MS } from "./core/limits"
 import { startProxyServer, type ShutdownSettlement } from "./server"
 
 /** A WebSocket handshake for `url`, carrying `headers` besides. */
@@ -190,6 +190,11 @@ describe("Bun proxy server lifecycle", () => {
     expect(serve).toHaveBeenCalledWith(
       expect.objectContaining({ hostname: "127.0.0.1", port: 4100 })
     )
+    // Bun counts a working handler as idle, so a speech synthesis must fit.
+    const [{ idleTimeout }] = serve.mock.calls[0] as unknown as [
+      { idleTimeout: number },
+    ]
+    expect(idleTimeout * 1_000).toBeGreaterThan(SPEECH_CALL_MS)
     expect(stop).toHaveBeenCalledWith(false)
     expect(close).toHaveBeenCalledOnce()
   })

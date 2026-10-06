@@ -20,6 +20,13 @@ const DRAIN_POLL_MS = 10
  * limit, and automatic close when that limit is exceeded.
  */
 const WS_IDLE_TIMEOUT_S = 120
+/**
+ * How long an HTTP request may go without a byte, which Bun also counts while
+ * a handler is still working. Its default of 10 s cut every speech synthesis
+ * that took longer, so this is Bun's maximum and each handler's own deadline
+ * bounds the wait instead.
+ */
+const HTTP_IDLE_TIMEOUT_S = 255
 const WS_MAX_PAYLOAD = 1_100_000
 const WS_BACKPRESSURE_LIMIT = 16 * 1_024 * 1_024
 /** A WebSocket's `readyState` while it is open. */
@@ -110,6 +117,7 @@ type UpgradeServer = {
 type ServeOptions<Upgrade extends SocketUpgrade> = {
   hostname: string
   port: number
+  idleTimeout?: number
   fetch: FetchHandler
   websocket?: {
     idleTimeout?: number
@@ -311,6 +319,7 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
   const server = (options.serve ?? bunServe())({
     hostname: options.host,
     port: options.port,
+    idleTimeout: HTTP_IDLE_TIMEOUT_S,
     fetch,
     ...(websocket === undefined ? {} : { websocket }),
   })

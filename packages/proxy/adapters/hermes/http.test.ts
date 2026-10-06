@@ -252,6 +252,33 @@ describe("bounded Hermes HTTP", () => {
     expect(fetcher).not.toHaveBeenCalled()
   })
 
+  it("gives a call its own deadline in place of the client's", async () => {
+    const clock = useFakeClock()
+    const sent: AbortSignal[] = []
+    const { http } = createHermesHttp({
+      baseUrl: "http://hermes.test",
+      credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
+      fetcher: ((_input: string | URL | Request, init?: RequestInit) => {
+        sent.push(init!.signal!)
+        return new Promise<Response>(() => undefined)
+      }) as typeof fetch,
+      timeoutMs: 1_000,
+    })
+
+    let failure: unknown
+    http("/api/audio/speak", { method: "POST", timeoutMs: 5_000 }).catch(
+      (error: unknown) => {
+        failure = error
+      }
+    )
+    await clock.advance(1_000)
+    expect(sent[0]?.aborted).toBe(false)
+    expect(failure).toBeUndefined()
+    await clock.advance(4_000)
+    expect(sent[0]?.aborted).toBe(true)
+    expect(failure).toBeInstanceOf(Error)
+  })
+
   it("returns no body for a native DELETE or 204 response", async () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 204 }))
     const { http } = createHermesHttp({

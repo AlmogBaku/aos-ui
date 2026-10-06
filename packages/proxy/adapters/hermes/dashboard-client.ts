@@ -1,8 +1,14 @@
+import { SPEECH_CALL_MS } from "../../core/limits"
 import type { SessionPatch } from "../../core/runtime"
 
 export type HermesDashboardHttp = (
   path: string,
-  init?: { method?: string; body?: unknown; maxResponseBytes?: number }
+  init?: {
+    method?: string
+    body?: unknown
+    maxResponseBytes?: number
+    timeoutMs?: number
+  }
 ) => Promise<unknown>
 
 export type HermesNativeSessionPage = {
@@ -117,6 +123,7 @@ export class HermesDashboardClient {
       method: "POST",
       body: { text },
       maxResponseBytes,
+      timeoutMs: SPEECH_CALL_MS,
     })
   }
 
