@@ -143,26 +143,8 @@ describe("voice ownership", () => {
   })
 
   it("keeps recording when the page becomes hidden until the user stops", async () => {
-    const recorder = new (class extends EventTarget {
-      state: RecordingState = "inactive"
-      mimeType = "audio/webm"
-      start = vi.fn(() => {
-        this.state = "recording"
-      })
-      stop = vi.fn(() => {
-        this.state = "inactive"
-      })
-    })()
-    const track = {
-      stop: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }
-    const media = new VoiceMediaController({
-      getUserMedia: async () =>
-        ({ getTracks: () => [track] }) as unknown as MediaStream,
-      createRecorder: () => recorder as unknown as MediaRecorder,
-    })
+    const { recorder, track, ...microphone } = fakeMicrophone()
+    const media = new VoiceMediaController(microphone)
     media.setScope("one")
     media.setAvailability("one", {
       transcription: "ready",
@@ -184,7 +166,7 @@ describe("voice ownership", () => {
     expect(track.stop).toHaveBeenCalledOnce()
   })
 
-  it("pauses read-aloud when the page becomes hidden", async () => {
+  it("keeps reading aloud when the page becomes hidden", async () => {
     const audio = new FakeAudio()
     const media = new VoiceMediaController({
       createAudio: () => audio as unknown as HTMLAudioElement,
@@ -201,8 +183,120 @@ describe("voice ownership", () => {
 
     media.handleHidden()
 
-    expect(audio.pause).toHaveBeenCalled()
-    expect(audio.paused).toBe(true)
+    expect(audio.pause).not.toHaveBeenCalled()
+    expect(audio.paused).toBe(false)
+    media.dispose()
+  })
+
+  it("plays a silent clip inside the tap on the element a later reply plays on", async () => {
+    const created: FakeAudio[] = []
+    const media = new VoiceMediaController({
+      createAudio: () => {
+        const audio = new FakeAudio()
+        created.push(audio)
+        return audio as unknown as HTMLAudioElement
+      },
+    })
+    media.setScope("one")
+    media.setAvailability("one", { transcription: "ready", speech: "ready" })
+
+    media.unlockAudio()
+
+    // Synchronously, before the tap's handler returns.
+    expect(created).toHaveLength(1)
+    expect(created[0]!.play).toHaveBeenCalledOnce()
+    const adapters = media.createAdapters("one", {
+      transcribe: vi.fn(),
+      synthesize: async () => new Blob(["audio"]),
+      projectText: (text) => text,
+    })
+    adapters.speech.speak("The reply")
+    await vi.waitFor(() => expect(created[0]!.play).toHaveBeenCalledTimes(2))
+    expect(created).toHaveLength(1)
+    expect(created[0]!.paused).toBe(false)
+    media.dispose()
+  })
+
+  it("keeps the screen on while recording, while a voice turn waits, and until its audio plays", async () => {
+    const locks: { released: boolean; release: () => Promise<void> }[] = []
+    const held = () => locks.filter((lock) => !lock.released).length
+    let finishSynthesis!: (audio: Blob) => void
+    const media = new VoiceMediaController({
+      ...fakeMicrophone(),
+      createAudio: () => new FakeAudio() as unknown as HTMLAudioElement,
+      requestWakeLock: async () => {
+        const lock = {
+          released: false,
+          release: async () => {
+            lock.released = true
+          },
+        }
+        locks.push(lock)
+        return lock
+      },
+    })
+    media.setScope("one")
+    media.setAvailability("one", { transcription: "ready", speech: "ready" })
+    media.setSafelyIdle(true)
+    const adapters = media.createAdapters("one", {
+      transcribe: vi.fn(),
+      synthesize: () =>
+        new Promise((resolve) => {
+          finishSynthesis = resolve
+        }),
+      projectText: (text) => text,
+    })
+
+    const session = adapters.dictation.listen()
+    await vi.waitFor(() => expect(held()).toBe(1))
+    session.cancel()
+    await vi.waitFor(() => expect(held()).toBe(0))
+
+    expect(media.submitVoiceTurn(["existing"], vi.fn())).toBe(true)
+    await vi.waitFor(() => expect(held()).toBe(1))
+    media.resolveAutoRead(media.getSnapshot().autoReadRequest!, "reply")
+    media.consumeReadRequest(media.getSnapshot().readRequest!)
+    adapters.speech.speak("The reply")
+    await Promise.resolve()
+    // Handing over from the wait to the synthesis kept the same lock.
+    expect(locks).toHaveLength(2)
+    expect(held()).toBe(1)
+    // The browser drops the lock while the page is hidden.
+    locks[1]!.released = true
+    media.handleVisible()
+    await vi.waitFor(() => expect(held()).toBe(1))
+
+    finishSynthesis(new Blob(["audio"]))
+    await vi.waitFor(() =>
+      expect(media.getSnapshot().playback?.playing).toBe(true)
+    )
+    await vi.waitFor(() => expect(held()).toBe(0))
     media.dispose()
   })
 })
+
+/** A microphone that records until stopped, with spied tracks. */
+function fakeMicrophone() {
+  const recorder = new (class extends EventTarget {
+    state: RecordingState = "inactive"
+    mimeType = "audio/webm"
+    start = vi.fn(() => {
+      this.state = "recording"
+    })
+    stop = vi.fn(() => {
+      this.state = "inactive"
+    })
+  })()
+  const track = {
+    stop: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }
+  return {
+    recorder,
+    track,
+    getUserMedia: async () =>
+      ({ getTracks: () => [track] }) as unknown as MediaStream,
+    createRecorder: () => recorder as unknown as MediaRecorder,
+  }
+}

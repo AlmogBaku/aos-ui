@@ -12,6 +12,7 @@ import {
   EMPTY_MIC_LEVELS,
   type MicLevelMeterLike,
 } from "./mic-level-meter"
+import { ScreenWakeLock, type RequestWakeLock } from "./screen-wake-lock"
 import { VoicePlayback, type PlaybackState } from "./voice-playback"
 import {
   getCachedAudio,
@@ -66,11 +67,16 @@ function readMode(): VoiceMode {
   }
 }
 
+/** 12 ms of 8 kHz silence: the clip a tap plays to unlock the audio element. */
+const SILENT_CLIP =
+  "data:audio/wav;base64,UklGRogAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YWQAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA"
+
 type Options = {
   getUserMedia?: () => Promise<MediaStream>
   createRecorder?: (stream: MediaStream) => MediaRecorder
   createAudio?: () => HTMLAudioElement
   createMeter?: () => MicLevelMeterLike
+  requestWakeLock?: RequestWakeLock
 }
 
 /** One media owner per selected native integration; no messages or queues here. */
@@ -79,6 +85,7 @@ export class VoiceMediaController {
   readonly #listeners = new Set<() => void>()
   readonly #disarmListeners = new Set<() => void>()
   readonly #micLevelListeners = new Set<() => void>()
+  readonly #wakeLock: ScreenWakeLock
   #state: VoiceMediaState = {
     mode: readMode(),
     availability: LOADING,
@@ -87,9 +94,10 @@ export class VoiceMediaController {
   }
   #capture?: VoiceCapture
   #playback?: VoicePlayback
-  #pendingPlaybackOwner?: VoicePlaybackOwner
+  #pendingPlayback?: { owner: VoicePlaybackOwner; text: string }
   #previousPlaybackOwnerId?: string
   #audio?: HTMLAudioElement
+  #audioUnlocked = false
   #meter?: MicLevelMeterLike
   #meterUnsubscribe?: () => void
   #retry?: Blob
@@ -99,6 +107,7 @@ export class VoiceMediaController {
 
   constructor(options: Options = {}) {
     this.#options = options
+    this.#wakeLock = new ScreenWakeLock(options.requestWakeLock)
   }
   getSnapshot = () => this.#state
   subscribe = (listener: () => void) => {
@@ -156,14 +165,17 @@ export class VoiceMediaController {
     this.clearReadRequest()
     return true
   }
-  preparePlaybackOwner(messageId: string, messageIndex: number) {
+  /**
+   * Names the message the next `speak` reads and the answer it reads: Assistant
+   * UI hands the adapter every text part joined, mid-turn prose included.
+   */
+  preparePlaybackOwner(messageId: string, messageIndex: number, text: string) {
     const scopeId = this.#state.scopeId
     if (!scopeId || messageIndex < 0) return
-    const owner = { scopeId, messageId, messageIndex }
-    this.#pendingPlaybackOwner = owner
+    const pending = { owner: { scopeId, messageId, messageIndex }, text }
+    this.#pendingPlayback = pending
     queueMicrotask(() => {
-      if (this.#pendingPlaybackOwner === owner)
-        this.#pendingPlaybackOwner = undefined
+      if (this.#pendingPlayback === pending) this.#pendingPlayback = undefined
     })
   }
   reconcilePlaybackOwner(scopeId: string, previousId: string, nextId: string) {
@@ -296,11 +308,11 @@ export class VoiceMediaController {
             this.captureActive
           )
             throw new Error("Read aloud is unavailable")
-          const owner = this.#pendingPlaybackOwner
-          this.#pendingPlaybackOwner = undefined
+          const pending = this.#pendingPlayback
+          const owner = pending?.owner
+          this.#pendingPlayback = undefined
           this.stopSpeech()
-          this.#audio ??= this.#options.createAudio?.() ?? new Audio()
-          const projectedText = services.projectText(text)
+          const projectedText = services.projectText(pending?.text ?? text)
           const cacheKey = owner
             ? JSON.stringify([
                 "v1",
@@ -311,7 +323,7 @@ export class VoiceMediaController {
             : undefined
           const playback = new VoicePlayback({
             text: projectedText,
-            audio: this.#audio,
+            audio: this.#sharedAudio(),
             synthesize: async (speechText, signal) => {
               if (cacheKey) {
                 try {
@@ -391,7 +403,7 @@ export class VoiceMediaController {
     const playback = this.#playback
     this.#playback = undefined
     playback?.cancel()
-    this.#pendingPlaybackOwner = undefined
+    this.#pendingPlayback = undefined
     this.#previousPlaybackOwnerId = undefined
     this.#update({
       playback: undefined,
@@ -430,9 +442,39 @@ export class VoiceMediaController {
       throw error
     }
   }
+  /** Audio already playing carries on with the screen off; a waiting voice turn does not. */
   handleHidden = () => {
-    this.#playback?.pause()
     this.disarm()
+  }
+  /** Takes the wake lock back: the browser released it while the page was hidden. */
+  handleVisible = () => {
+    this.#wakeLock.hold(this.#needsScreen())
+  }
+  /**
+   * iOS starts an audio element without a tap only once that element has
+   * played inside one. Called from the tap that starts a voice turn or a read
+   * aloud, this plays a silent clip so the reply can play on the same element
+   * long after the tap.
+   */
+  unlockAudio = () => {
+    if (this.#audioUnlocked || this.#playback) return
+    this.#audioUnlocked = true
+    void this.#playSilentClip(this.#sharedAudio())
+  }
+  async #playSilentClip(audio: HTMLAudioElement) {
+    audio.src = SILENT_CLIP
+    try {
+      // Called synchronously inside the tap: the await follows the call.
+      await audio.play()
+      if (audio.src === SILENT_CLIP) audio.pause()
+    } catch (error) {
+      // A read-aloud replacing the clip mid-load still leaves the element unlocked.
+      if (error instanceof DOMException && error.name === "NotAllowedError")
+        this.#audioUnlocked = false
+    }
+  }
+  #sharedAudio() {
+    return (this.#audio ??= this.#options.createAudio?.() ?? new Audio())
   }
   authenticationLost = () => {
     this.cancelCapture()
@@ -459,8 +501,21 @@ export class VoiceMediaController {
       })
     for (const listener of this.#micLevelListeners) listener()
   }
+  /**
+   * Voice work a screen turning off would stop: a recording, a voice turn
+   * waiting for its reply, and audio still being generated, since playback can
+   * only start on a visible page. Playback itself carries on with the screen off.
+   */
+  #needsScreen() {
+    const { autoReadRequest, readRequest, playback } = this.#state
+    return (
+      this.captureActive ||
+      Boolean(autoReadRequest || readRequest || playback?.loading)
+    )
+  }
   #update(patch: Partial<VoiceMediaState>) {
     this.#state = { ...this.#state, ...patch }
+    this.#wakeLock.hold(this.#needsScreen())
     for (const listener of this.#listeners) listener()
   }
 }

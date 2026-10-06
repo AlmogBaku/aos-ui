@@ -118,14 +118,17 @@ export function VoiceComposerControl() {
   const start = () => {
     // Recheck live state at the gesture boundary, not only the last render.
     const state = aui.composer.getState()
+    const voiceTurn = media.getSnapshot().mode === "voice-turn"
     if (
-      media.getSnapshot().mode === "voice-turn" &&
+      voiceTurn &&
       (!media.getSnapshot().safelyIdle ||
         state.text.trim() ||
         state.attachments.length ||
         state.queue.length)
     )
       return
+    // The reply is read long after this tap, which iOS allows only now.
+    if (voiceTurn) media.unlockAudio()
     draft.current = state.text
     try {
       aui.composer.startDictation()

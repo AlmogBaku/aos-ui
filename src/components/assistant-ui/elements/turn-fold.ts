@@ -155,6 +155,18 @@ export function turnLayout(
 }
 
 /**
+ * The turn's answer as text: the one text part a settled turn keeps outside
+ * its fold. Copy and read-aloud take this rather than every text part, so
+ * neither picks up the mid-turn prose the fold hides.
+ */
+export function answerText(
+  parts: readonly (TurnPart & { readonly text?: string })[]
+): string {
+  const { terminalIndex } = turnLayout(parts, undefined)
+  return terminalIndex === undefined ? "" : (parts[terminalIndex]?.text ?? "")
+}
+
+/**
  * Whether the part at `index` folds: once the turn settles, every foldable part
  * but the final answer does. Search reads this too, because a closed fold
  * renders none of its text.

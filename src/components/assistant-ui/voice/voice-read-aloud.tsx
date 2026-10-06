@@ -10,6 +10,7 @@ import { SquareIcon, Volume2Icon } from "lucide-react"
 import { ReadAloud } from "../elements/read-aloud"
 import { pct } from "../elements/voice-surfaces"
 import { TooltipIconButton } from "../elements/tooltip-icon-button"
+import { answerText } from "../elements/turn-fold"
 import {
   useVoiceCaptureActive,
   useVoiceContext,
@@ -71,10 +72,7 @@ export function VoiceReplyReader() {
       (message) =>
         message.role === "assistant" &&
         message.status?.type === "complete" &&
-        Array.isArray(message.content) &&
-        message.content.some(
-          (part) => part.type === "text" && part.text.trim().length > 0
-        )
+        answerText(message.content).trim().length > 0
     )
     if (candidate) media.resolveAutoRead(autoRead, candidate.id)
     else if (
@@ -102,7 +100,8 @@ export function VoiceReplyReader() {
     try {
       media.preparePlaybackOwner(
         message.id,
-        messages.findIndex((item) => item.id === message.id)
+        messages.findIndex((item) => item.id === message.id),
+        answerText(message.content)
       )
       aui.thread.message({ id: message.id }).speak()
     } catch {
@@ -227,11 +226,14 @@ export function useVoiceMessageAction(): VoiceMessageAction | null {
         !canAttemptSpeech(media.getSnapshot().availability.speech)
       )
         return
+      media.unlockAudio()
       media.disarm()
       const messages = aui.thread.getState().messages
+      const index = messages.findIndex((message) => message.id === messageId)
       media.preparePlaybackOwner(
         messageId,
-        messages.findIndex((message) => message.id === messageId)
+        index,
+        answerText(messages[index]?.content ?? [])
       )
       void speak()
     },

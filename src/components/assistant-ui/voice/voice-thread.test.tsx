@@ -56,6 +56,12 @@ function stubBlobUrl() {
   )
 }
 
+/** The element plays the synthesized answer, not the clip a tap unlocks it with. */
+function expectReading(audio: FakeAudio) {
+  expect(audio.src).toBe("blob:audio")
+  expect(audio.paused).toBe(false)
+}
+
 /** Records a push-to-talk voice turn and presses Send once it is recording. */
 async function recordAndSend(recording: Recorder) {
   fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
@@ -226,14 +232,19 @@ describe("real Assistant UI voice composer", () => {
       { type: "text", text: "Final voice turn" },
     ])
   })
-  it("automatically reads the new completed assistant prose after a PTT send", async () => {
+  it("unlocks audio in the PTT tap, then reads the new completed assistant prose", async () => {
     stubBlobUrl()
     const h = setup({ voiceTurn: true })
-    await recordAndSend(h.recording)
+    fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
+    // iOS plays the reply later only on an element that played inside a tap.
+    expect(h.audio.play).toHaveBeenCalledOnce()
+    await waitFor(() => expect(h.recording.state).toBe("recording"))
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
     await waitFor(() => expect(h.model.run).toHaveBeenCalledOnce())
     await waitFor(() => expect(h.synthesize).toHaveBeenCalledOnce())
     expect(h.synthesize).toHaveBeenCalledWith("Done", expect.any(AbortSignal))
     expect(screen.getByRole("group", { name: "Read aloud" })).toBeVisible()
+    await waitFor(() => expectReading(h.audio))
   })
   it("disarms automatic reading when a PTT run fails without assistant prose", async () => {
     let rejectRun!: (error: Error) => void
@@ -534,7 +545,7 @@ describe("real Assistant UI voice composer", () => {
     expect(h.synthesize).toHaveBeenCalledOnce()
   })
 
-  it("reads within the owning message, preserves non-text parts, and restores prose on Stop", async () => {
+  it("reads the owning message's answer, preserves non-text parts, and restores prose on Stop", async () => {
     stubBlobUrl()
     const h = setup({
       initialMessages: [
@@ -543,6 +554,7 @@ describe("real Assistant UI voice composer", () => {
           role: "assistant",
           content: [
             { type: "reasoning", text: "Private reasoning" },
+            { type: "text", text: "Inspecting before answering." },
             {
               type: "tool-call",
               toolCallId: "tool",
@@ -568,7 +580,9 @@ describe("real Assistant UI voice composer", () => {
       .closest<HTMLElement>('[data-role="assistant"]')!
     fireEvent.mouseEnter(first)
     fireEvent.click(within(first).getByRole("button", { name: "Read aloud" }))
-    await waitFor(() => expect(h.audio.play).toHaveBeenCalledOnce())
+    // The tap unlocks the element the audio arrives on seconds later.
+    expect(h.audio.play).toHaveBeenCalledOnce()
+    await waitFor(() => expectReading(h.audio))
     expect(
       within(first).getByRole("button", { name: "Pause" })
     ).toBeInTheDocument()
@@ -602,7 +616,7 @@ describe("real Assistant UI voice composer", () => {
     fireEvent.click(within(first).getByRole("button", { name: "Pause" }))
     expect(h.audio.paused).toBe(true)
     fireEvent.click(within(first).getByRole("button", { name: "Play" }))
-    await waitFor(() => expect(h.audio.play).toHaveBeenCalledTimes(2))
+    await waitFor(() => expectReading(h.audio))
     expect(h.synthesize).toHaveBeenCalledOnce()
     window.dispatchEvent(new Event("aos:conversation-search"))
     const search = await screen.findByRole("searchbox", {
@@ -699,7 +713,8 @@ describe("real Assistant UI voice composer", () => {
         .closest<HTMLElement>('[data-role="assistant"]')!
       fireEvent.mouseEnter(live)
       fireEvent.click(within(live).getByRole("button", { name: "Read aloud" }))
-      await waitFor(() => expect(audio.play).toHaveBeenCalledOnce())
+      await waitFor(() => expectReading(audio))
+      audio.play.mockClear()
 
       messages = [
         {
@@ -721,7 +736,7 @@ describe("real Assistant UI voice composer", () => {
       if (reconciled) {
         expect(media.getSnapshot().playback).toBeDefined()
         expect(screen.getByRole("group", { name: "Read aloud" })).toBeVisible()
-        expect(audio.play).toHaveBeenCalledOnce()
+        expect(audio.play).not.toHaveBeenCalled()
         // Once the durable owner appeared, the old optimistic id is no longer
         // an alias: switching back to a different message must stop playback.
         messages = [
@@ -756,7 +771,7 @@ describe("real Assistant UI voice composer", () => {
       .closest<HTMLElement>('[data-role="assistant"]')!
     fireEvent.mouseEnter(answer)
     fireEvent.click(within(answer).getByRole("button", { name: "Read aloud" }))
-    await waitFor(() => expect(h.audio.play).toHaveBeenCalledOnce())
+    await waitFor(() => expectReading(h.audio))
     act(() => h.runtime.thread.composer.setText("Start another turn"))
     fireEvent.click(screen.getByRole("button", { name: "Send message" }))
     await waitFor(() =>
@@ -793,7 +808,7 @@ describe("read aloud from the message context menu", () => {
     const menu = await openMessageMenu(answer)
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Read aloud" }))
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
-    await waitFor(() => expect(h.audio.play).toHaveBeenCalledOnce())
+    await waitFor(() => expectReading(h.audio))
 
     const playing = await openMessageMenu(answer)
     expect(

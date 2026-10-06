@@ -60,7 +60,7 @@ AOS requests mono 16 kHz capture with echo cancellation, noise suppression, auto
 
 ## Send a voice turn
 
-Hold the microphone for 450 ms, then choose **Voice turn**. With keyboard focus on the microphone, Arrow Down or Shift+F10 opens the same menu; Escape closes it and restores focus.
+Hold the microphone for 450 ms to switch between **Transcription** and **Voice turn**; the microphone's icon and label name the current mode. With keyboard focus on the microphone, hold Space or Enter the same way, or press and release it to record.
 
 Voice turn requires:
 
@@ -69,13 +69,13 @@ Voice turn requires:
 - an empty draft, attachment list, and queue; and
 - both native STT and TTS.
 
-Record and choose **Send**. AOS transcribes, submits once through the ordinary composer, then arms automatic reading for that exact turn. It reads only the newest completed assistant prose after the submitted user message. Reasoning, tool payloads, and tool-only results are excluded.
+Record and choose **Send**. AOS transcribes, submits once through the ordinary composer, then arms automatic reading for that exact turn. It reads only the answer of the newest completed assistant turn after the submitted user message: the prose the turn's **Worked for** fold leaves visible. Reasoning, prose written between tool calls, tool payloads, and tool-only results are excluded.
 
 A second submission, reconnect, interruption, failure, ambiguous message activity, scope change, authentication loss, or hidden page disarms automatic reading. AOS never retries a possibly accepted chat submission.
 
 ## Read a response aloud
 
-Choose the speaker action beside an assistant response. Read-aloud replaces that message's prose while tools, reasoning, attachments, and actions remain inspectable. Stop restores ordinary Markdown and does not stop the Agent.
+Choose the speaker action beside an assistant response. It reads the same answer a voice turn would, and **Copy** copies that answer too. Read-aloud replaces that message's prose while tools, reasoning, attachments, and actions remain inspectable. Stop restores ordinary Markdown and does not stop the Agent.
 
 Pause and Play reuse the generated audio. Successful synthesis is also cached for one hour in browser IndexedDB, so reading the same unchanged message again within that hour does not make another synthesis request. The cache belongs to one browser profile and origin; it is not shared across devices, browsers, developers, or differently hosted AOS instances. Edited projected text gets a new entry, while playback speed does not affect cache identity. Playback speed cycles through 1×, 1.25×, 1.5×, and 2×. Starting another response replaces playback; starting a recording stops it. If autoplay is blocked, choose Play explicitly.
 
@@ -89,7 +89,9 @@ Scope changes, authentication loss, or unmounting release microphone tracks, act
 
 **Data flow.** With `mode: "override"`, recordings and read-aloud text are sent only to the configured proxy provider. With `mode: "fallback"`, they are sent to the runtime first and to the configured proxy provider when the runtime's native call fails — even when the runtime advertises native speech capability.
 
-Switching browser tabs or windows does not stop active capture; use Finish, Send, or Discard. Hiding the page pauses audio and disarms pending automatic reading.
+Switching browser tabs or windows does not stop active capture; use Finish, Send, or Discard. Hiding the page disarms pending automatic reading; audio that is already playing carries on.
+
+Where the browser supports the Screen Wake Lock API, AOS keeps the screen on while it records, while a voice turn waits for its reply, and while read-aloud audio is generated, because each stops when the screen turns off. Once the audio plays, the screen may turn off and playback continues. iOS starts audio only from a tap, so the tap that starts a voice turn or a read-aloud also unlocks playback for the reply that follows.
 
 ## Troubleshoot voice
 
@@ -101,7 +103,7 @@ Switching browser tabs or windows does not stop active capture; use Finish, Send
 - **Guest audio rate-limited (503):** guest conversations are budgeted at 2 concurrent in-flight audio operations and 60 audio operations per 10 minutes per conversation, shared across all tabs and devices on the same invitation link. A guest exceeding this budget receives `503`; the limit resets automatically.
 - **Redirects refused:** the proxy refuses upstream redirects from the configured `baseUrl`. Point `baseUrl` directly at the serving endpoint.
 - **Upload rejected (body size):** The transcription route (`POST /api/aos/v1/agents/:agentId/audio/transcribe`) accepts a 7 500 000-byte JSON body. The speech route (`POST /api/aos/v1/agents/:agentId/audio/speak`) accepts a 40 000-byte body. The 8 MiB Hermes WebSocket frame guard is a separate upstream limit. Check your reverse proxy for a smaller limit on either route.
-- **Long response is incomplete:** the current integration uses the provider's complete-audio response rather than streaming or chunking. Test the configured provider's limit before release.
+- **Long response is incomplete or fails:** the current integration uses the provider's complete-audio response rather than streaming or chunking, and the proxy waits up to 90 seconds for Hermes to synthesize it. A provider renders roughly four seconds of speech per second, so a very long answer can exceed that and fail with `503`. Test the configured provider's limit before release.
 
 See [Troubleshooting](troubleshooting.md) for authentication, WebSocket, and container issues.
 

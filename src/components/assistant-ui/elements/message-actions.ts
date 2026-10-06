@@ -4,13 +4,14 @@ import {
   useActionBarReload,
 } from "@assistant-ui/core/react"
 import { useAui, useAuiState } from "@assistant-ui/react"
-import { useCallback } from "react"
+import { useCallback, useMemo } from "react"
 
 import { usePendingInteractionGate } from "@/components/runtime-interactions/pending-interaction-context"
 import { copyMarkdownToClipboard } from "@/lib/clipboard"
 
 import { useVoiceContext } from "../voice/voice-context"
 import type { MessageRewind } from "./thread.aui"
+import { answerText } from "./turn-fold"
 
 /*
  * What a message action is, and whether this turn can carry it out right now.
@@ -18,11 +19,25 @@ import type { MessageRewind } from "./thread.aui"
  * surfaces cannot offer the same action in two different states.
  */
 
-/** Copies through the clipboard helper that survives a denied Clipboard API. */
-const COPY_OPTIONS = { copyToClipboard: copyMarkdownToClipboard }
-
+/**
+ * Copies through the clipboard helper that survives a denied Clipboard API.
+ * Assistant UI hands over every text part of the message joined; an assistant
+ * turn copies only its answer, the prose its fold leaves visible.
+ */
 export function useMessageCopy(): { copy: () => void; disabled: boolean } {
-  const { copy, disabled } = useActionBarCopy(COPY_OPTIONS)
+  const aui = useAui()
+  const options = useMemo(
+    () => ({
+      copyToClipboard: (text: string) => {
+        const message = aui.message.getState()
+        return copyMarkdownToClipboard(
+          message.role === "assistant" ? answerText(message.content) : text
+        )
+      },
+    }),
+    [aui]
+  )
+  const { copy, disabled } = useActionBarCopy(options)
   return { copy, disabled }
 }
 

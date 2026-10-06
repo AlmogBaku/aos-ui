@@ -25,12 +25,13 @@ export function VoiceMediaProvider({
   children,
 }: PropsWithChildren<{ media: VoiceMediaController; locale: Locale }>) {
   useEffect(() => {
-    const hidden = () => {
+    const visibility = () => {
       if (document.visibilityState === "hidden") media.handleHidden()
+      else media.handleVisible()
     }
-    document.addEventListener("visibilitychange", hidden)
+    document.addEventListener("visibilitychange", visibility)
     return () => {
-      document.removeEventListener("visibilitychange", hidden)
+      document.removeEventListener("visibilitychange", visibility)
       media.dispose()
     }
   }, [media])

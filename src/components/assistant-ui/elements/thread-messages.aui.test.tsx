@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest"
 import { createComposerHistorySelector } from "./thread.aui"
 import { AosToolPresentation } from "@/components/tool-ui"
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
@@ -349,6 +349,42 @@ describe("message context menu", () => {
     expect(within(menu).getByRole("menuitem", { name: "Copy" })).toBeVisible()
     expect(within(menu).getByRole("menuitem", { name: "Edit" })).toBeVisible()
     expect(within(menu).queryByRole("menuitem", { name: "Refresh" })).toBeNull()
+  })
+
+  it("copies an assistant turn's answer without the prose its fold hides", async () => {
+    vi.stubGlobal("isSecureContext", true)
+    onTestFinished(() => {
+      vi.unstubAllGlobals()
+    })
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "answered",
+            role: "assistant",
+            content: [
+              { type: "text", text: "Checking the notes first." },
+              {
+                type: "tool-call",
+                toolCallId: "read",
+                toolName: "read_file",
+                args: { path: "notes.md" },
+                result: "notes",
+              },
+              { type: "text", text: "The notes are ready." },
+            ],
+          },
+        ]}
+      />
+    )
+
+    const menu = await openMessageMenu("The notes are ready.")
+    await user.click(within(menu).getByRole("menuitem", { name: "Copy" }))
+
+    await waitFor(async () =>
+      expect(await navigator.clipboard.readText()).toBe("The notes are ready.")
+    )
   })
 
   it("drops retry and edit where the provider cannot rewind", async () => {
