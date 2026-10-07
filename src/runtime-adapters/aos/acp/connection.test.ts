@@ -933,20 +933,20 @@ describe("ACP connection", () => {
       },
     })
     // The proxy forgot this connection's presence when the transport dropped, so
-    // the report arrives again before the rejoin it would otherwise contradict.
-    const reports = proxy.calls.flatMap((call, index) =>
-      call.method === AOS_METHODS.session.focus ? [{ ...call, index }] : []
+    // the report goes out again ahead of the rejoin it would otherwise
+    // contradict. The wire order is the browser's to keep; the order the agent
+    // runs its handlers in is not.
+    expect(proxy.callsOf(AOS_METHODS.session.focus)).toEqual([
+      { sessionId: SESSION_ID, foreground: true, idle: true },
+      { sessionId: SESSION_ID, foreground: true, idle: true },
+    ])
+    const sent = pipe.sockets[1]!.sent.map((frame) =>
+      "method" in frame ? frame.method : undefined
     )
-    expect(reports).toHaveLength(2)
-    expect(reports[1]?.params).toEqual({
-      sessionId: SESSION_ID,
-      foreground: true,
-      idle: true,
-    })
-    const replays = proxy.calls.flatMap((call, index) =>
-      call.method === methods.agent.session.resume ? [index] : []
+    expect(sent.indexOf(AOS_METHODS.session.focus)).toBeGreaterThan(-1)
+    expect(sent.indexOf(AOS_METHODS.session.focus)).toBeLessThan(
+      sent.indexOf(methods.agent.session.resume)
     )
-    expect(reports[1]!.index).toBeLessThan(replays[1]!)
     expect(connection.status).toBe("ready")
     expect(pipe.sockets).toHaveLength(2)
     connection.close()

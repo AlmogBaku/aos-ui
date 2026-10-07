@@ -20,6 +20,8 @@ const CLOSED = 3
  */
 export class PipedSocket extends EventTarget {
   readyState = CONNECTING
+  /** The browser's frames as they reach the agent, in wire order. */
+  readonly sent: AnyWireMessage[] = []
   readonly #inbound?: WritableStreamDefaultWriter<AnyWireMessage>
   readonly #outbound?: ReadableStreamDefaultReader<AnyWireMessage>
   #halfOpen = false
@@ -63,12 +65,15 @@ export class PipedSocket extends EventTarget {
   send(data: string) {
     if (this.readyState !== OPEN || this.#halfOpen) return
     if (this.#held) this.#held.push(data)
-    else if (this.#inbound)
+    else if (this.#inbound) {
+      const frame = JSON.parse(data) as AnyWireMessage
+      this.sent.push(frame)
       this.#inbound
-        .write(JSON.parse(data) as AnyWireMessage)
+        .write(frame)
         .catch((err: unknown) =>
           socketLog().warn({ err }, "socket.write_failed")
         )
+    }
   }
 
   close(code = 1000, reason = "") {
