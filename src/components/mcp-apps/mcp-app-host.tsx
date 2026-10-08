@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react"
 
-import type { McpAppView } from "@aos/protocol/mcp-apps"
+import type { McpAppView } from "@harness-gw/sdk/protocol"
 import type { ShownFile } from "@/artifacts/artifacts"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 

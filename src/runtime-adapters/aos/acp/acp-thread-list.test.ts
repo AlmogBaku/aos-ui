@@ -25,7 +25,7 @@ function sessionInfo({
     cwd: "/workspaces/demo",
     ...(title === undefined ? {} : { title }),
     ...(updatedAt === undefined ? {} : { updatedAt }),
-    _meta: { aos: { agentId, status: "idle", archived } },
+    _meta: { hgw: { agentId, status: "idle", archived } },
   }
 }
 

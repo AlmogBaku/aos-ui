@@ -3,7 +3,7 @@
  * is testable without a sandboxed frame.
  */
 
-import type { McpAppFiles } from "@aos/protocol/mcp-apps"
+import type { McpAppFiles } from "@harness-gw/sdk/protocol"
 import { presentationViews } from "@shared/presentation/views"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 

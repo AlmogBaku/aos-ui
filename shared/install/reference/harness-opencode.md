@@ -40,5 +40,5 @@ the creator to the launcher, which writes its fixed definition.
 OpenCode reads configuration at start-up, so the operator restarts the server
 afterwards. The pinned OpenCode session engine does not yet expose MCP tools,
 so the `aos-ui` tools are registered but not callable through AOS on OpenCode.
-When they are, the AOS proxy reads their chart, map, and stats views from the
-registered URL, so it must be one the proxy can reach too.
+When they are, the harness-gw gateway reads their chart, map, and stats views from the
+registered URL, so it must be one the gateway can reach too.

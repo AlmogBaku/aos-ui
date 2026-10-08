@@ -16,10 +16,10 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import {
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AOS_META_KEY,
-} from "@aos/protocol/acp"
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HGW_META_KEY,
+} from "@harness-gw/sdk/protocol"
 
 import { AosUiWorkspace } from "../../components/aos-ui-workspace"
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
@@ -112,6 +112,9 @@ function createProxyAgent() {
   const history = new Map<string, SessionUpdate[]>()
   const memberships = new Set<string>()
   const busy = new Set<string>()
+  const created: string[] = []
+  /** How many next `session/new` requests the provider refuses as unavailable. */
+  const unavailable = { creates: 0 }
 
   function push(sessionId: string, update: SessionUpdate) {
     history.set(sessionId, [...(history.get(sessionId) ?? []), update])
@@ -124,7 +127,7 @@ function createProxyAgent() {
       sessionUpdate: "agent_message",
       messageId: "history-1",
       content: [{ type: "text", text: "Ready" }],
-      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
+      _meta: { [HGW_META_KEY]: { turnId: "run-0", sequence: 0 } },
     },
   ])
 
@@ -133,7 +136,7 @@ function createProxyAgent() {
       sessionUpdate: "agent_message",
       messageId: "history-4",
       content: [{ type: "text", text: "Bookmarked answer" }],
-      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
+      _meta: { [HGW_META_KEY]: { turnId: "run-0", sequence: 0 } },
     },
   ])
 
@@ -142,22 +145,22 @@ function createProxyAgent() {
       sessionUpdate: "user_message",
       messageId: "history-2",
       content: [{ type: "text", text: "Draft the plan" }],
-      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
+      _meta: { [HGW_META_KEY]: { turnId: "run-0", sequence: 0 } },
     },
     {
       sessionUpdate: "agent_message",
       messageId: "history-3",
       content: [{ type: "text", text: "First answer" }],
-      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 1 } },
+      _meta: { [HGW_META_KEY]: { turnId: "run-0", sequence: 1 } },
     },
   ])
 
   const app = agent({ name: "fake-aos-proxy" })
     .onRequest(methods.agent.initialize, () => ({
       protocolVersion: 2,
-      info: { name: "aos-proxy", version: "1" },
+      info: { name: "harness-gw", version: "1" },
       _meta: {
-        [AOS_META_KEY]: {
+        [HGW_META_KEY]: {
           version: 1,
           role: "operator",
           extensions: {
@@ -188,7 +191,7 @@ function createProxyAgent() {
             sessionId === BOOKMARKED_SESSION_ID
               ? BOOKMARKED_UPDATED_AT
               : UPDATED_AT,
-          _meta: { [AOS_META_KEY]: sessionInfo },
+          _meta: { [HGW_META_KEY]: sessionInfo },
         })),
         ...(page + 1 < CATALOG_PAGES.length
           ? { nextCursor: String(page + 1) }
@@ -213,11 +216,11 @@ function createProxyAgent() {
           {
             sessionUpdate: "available_commands_update",
             availableCommands: [],
-            _meta: { [AOS_META_KEY]: { capabilities: capabilities() } },
+            _meta: { [HGW_META_KEY]: { capabilities: capabilities() } },
           },
           {
             sessionUpdate: "session_info_update",
-            _meta: { [AOS_META_KEY]: sessionInfo },
+            _meta: { [HGW_META_KEY]: sessionInfo },
           },
         ] satisfies SessionUpdate[])
           void peer?.notify(methods.client.session.update, {
@@ -225,13 +228,27 @@ function createProxyAgent() {
             update,
           })
       }, 0)
-      return { _meta: { [AOS_META_KEY]: {} } }
+      return { _meta: { [HGW_META_KEY]: {} } }
+    })
+    .onRequest(methods.agent.session.new, ({ params }) => {
+      if (unavailable.creates > 0) {
+        unavailable.creates -= 1
+        throw new RequestError(
+          HGW_JSONRPC_ERRORS.temporarilyUnavailable,
+          "provider_unavailable"
+        )
+      }
+      const { agentId } = (params._meta?.[HGW_META_KEY] ?? {}) as {
+        agentId?: string
+      }
+      created.push(agentId ?? "")
+      return { sessionId: `created-${created.length}` }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
       // Exactly what the proxy refuses a prompt with while a Session is not idle.
       if (busy.has(params.sessionId))
         throw new RequestError(
-          AOS_JSONRPC_ERRORS.turnInProgress,
+          HGW_JSONRPC_ERRORS.turnInProgress,
           "turn_in_progress"
         )
       prompts.push(params)
@@ -241,18 +258,18 @@ function createProxyAgent() {
           sessionUpdate: "user_message",
           messageId,
           content: params.prompt,
-          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 1 } },
+          _meta: { [HGW_META_KEY]: { turnId: "run-1", sequence: 1 } },
         })
         push(params.sessionId, {
           sessionUpdate: "agent_message",
           messageId: `answer-${prompts.length}`,
           content: [{ type: "text", text: "Shipping it" }],
-          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 2 } },
+          _meta: { [HGW_META_KEY]: { turnId: "run-1", sequence: 2 } },
         })
       })
       return { messageId }
     })
-    .onRequest(AOS_METHODS.agents.list, z.unknown().optional(), () => ({
+    .onRequest(HGW_METHODS.agents.list, z.unknown().optional(), () => ({
       revision: "revision-1",
       agents: [
         {
@@ -268,7 +285,7 @@ function createProxyAgent() {
     .onNotification(methods.agent.session.cancel, ({ params }) => {
       cancelled.push(params.sessionId)
     })
-    .onNotification(AOS_METHODS.session.focus, z.unknown(), () => undefined)
+    .onNotification(HGW_METHODS.session.focus, z.unknown(), () => undefined)
     .onConnect((connection) => {
       peer = connection.client
     })
@@ -279,6 +296,8 @@ function createProxyAgent() {
     resumed,
     push,
     busy,
+    created,
+    unavailable,
     /** One question request, exactly as the proxy issues it. */
     ask: (sessionId: string, requestId: string) =>
       peer?.request(methods.client.elicitation.create, {
@@ -291,7 +310,7 @@ function createProxyAgent() {
           properties: { q0: { type: "string", enum: ["Yes", "No"] } },
         },
         _meta: {
-          [AOS_META_KEY]: {
+          [HGW_META_KEY]: {
             requestId,
             questions: [
               {
@@ -419,7 +438,7 @@ describe("provider-neutral AOS runtime composition", () => {
         sessionUpdate: "agent_message",
         messageId: "history-5",
         content: [{ type: "text", text: "Still here" }],
-        _meta: { [AOS_META_KEY]: { turnId: "run-2", sequence: 1 } },
+        _meta: { [HGW_META_KEY]: { turnId: "run-2", sequence: 1 } },
       })
     })
     await act(async () => {
@@ -449,7 +468,7 @@ describe("provider-neutral AOS runtime composition", () => {
       proxy.push(SESSION_ID, {
         sessionUpdate: "state_update",
         state: "running",
-        _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 3 } },
+        _meta: { [HGW_META_KEY]: { turnId: "run-1", sequence: 3 } },
       })
     })
     await waitFor(() =>
@@ -481,6 +500,45 @@ describe("provider-neutral AOS runtime composition", () => {
     expect(supplied.interactions?.getPending(SESSION_ID)).toMatchObject({
       requestId: "interrupt-1",
     })
+  })
+
+  it("keeps a refused draft's turn in the composer and opens the next draft empty", async () => {
+    const { proxy, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    const thread = () => runtime()!.assistantRuntime.thread
+    const send = async (text: string) => {
+      await act(async () => {
+        thread().composer.setText(text)
+        thread().composer.send()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    }
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+    proxy.unavailable.creates = 1
+
+    await send("Ship it")
+
+    expect(
+      await screen.findByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+    ).toBeVisible()
+    expect(thread().composer.getState().text).toBe("Ship it")
+    expect(proxy.created).toEqual([])
+
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+
+    expect(
+      screen.queryByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+    ).not.toBeInTheDocument()
+    expect(thread().getState().messages).toEqual([])
+    expect(thread().composer.getState().text).toBe("")
+
+    await send("Ship it")
+    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    expect(proxy.created).toEqual([AGENT_ID])
   })
 })
 

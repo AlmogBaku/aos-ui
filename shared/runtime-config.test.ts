@@ -51,12 +51,8 @@ describe("browser runtime configuration", () => {
     expect(
       parsePublicApplicationConfiguration({
         surface: "guest",
-        basePath: "/api/guest/v1/",
+        buildId: "build-1",
       })
-    ).toEqual({
-      status: "ready",
-      surface: "guest",
-      basePath: "/api/guest/v1",
-    })
+    ).toEqual({ status: "ready", surface: "guest" })
   })
 })

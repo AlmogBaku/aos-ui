@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import {
-  OPEN_ACK_MESSAGE_TYPE,
-  OPEN_MESSAGE_TYPE,
-  type PushRegistration,
-} from "@aos/protocol/push"
+import { OPEN_ACK_MESSAGE_TYPE, OPEN_MESSAGE_TYPE } from "@/sw/open-messages"
+import type { PushRegistration } from "@harness-gw/sdk/protocol"
 import { defaultBrowserPreferences } from "./policy"
 import {
   createBrowserPushPlatform,

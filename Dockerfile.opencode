@@ -9,8 +9,7 @@ RUN bun install --frozen-lockfile --production --ignore-scripts
 COPY scripts/opencode-config.ts scripts/opencode-serve.ts scripts/opencode-agent-definition.ts \
      scripts/opencode-creator-template.ts scripts/opencode-creator-skill.generated.ts \
      scripts/opencode-creator-reference.generated.ts \
-     scripts/opencode-invite-link.generated.ts ./scripts/
-COPY packages/proxy/secrets.ts ./packages/proxy/secrets.ts
+     scripts/opencode-invite-link.generated.ts scripts/secret-file.ts ./scripts/
 RUN bun build scripts/opencode-serve.ts --target=bun --outfile=opencode-serve.js
 
 FROM ghcr.io/anomalyco/opencode:1.18.29

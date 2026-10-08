@@ -117,3 +117,18 @@ it("excludes the Stately inspector from production chunks", () => {
     ).not.toContain(INSPECTOR_MARKER)
   }
 })
+
+// Lifecycle keeps each owner's transition track in module scope, so the
+// client that carries it must load once: a second copy, from another resolved
+// path or a linked checkout's sources, would split that state in two.
+it("bundles the client, and the lifecycle inside it, once", () => {
+  const moduleIds = chunks.flatMap((chunk) => chunk.moduleIds)
+  expect(
+    moduleIds.filter((id) =>
+      /@harness-gw\/sdk\/dist\/client\/index\.js$/u.test(id)
+    )
+  ).toHaveLength(1)
+  expect(moduleIds.filter((id) => /\/lifecycle\/[^/]+\.ts$/u.test(id))).toEqual(
+    []
+  )
+})

@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react"
 
-import type { McpAppView } from "@aos/protocol/mcp-apps"
+import type { McpAppView } from "@harness-gw/sdk/protocol"
 import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
 import { shownFileOf } from "@/artifacts/artifacts"
 import { AosToolFallback } from "@/components/tool-ui/aos-tool-fallback"

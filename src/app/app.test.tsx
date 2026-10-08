@@ -32,18 +32,8 @@ vi.mock("@/components/theme-provider", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => children,
 }))
 vi.mock("@/runtime-adapters/aos", () => ({
-  GuestAosSurface: ({
-    inviteToken,
-    config,
-  }: {
-    inviteToken?: string
-    config: { basePath: string }
-  }) => (
-    <div
-      data-invite-token={inviteToken}
-      data-base-path={config.basePath}
-      data-testid="guest-app"
-    >
+  GuestAosSurface: ({ inviteToken }: { inviteToken?: string }) => (
+    <div data-invite-token={inviteToken} data-testid="guest-app">
       guest
     </div>
   ),
@@ -100,23 +90,13 @@ describe("App", () => {
 
   it("loads the provider-neutral guest surface without a runtime configuration", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          surface: "guest",
-          basePath: "/api/guest/v1",
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }
-      )
+      new Response(JSON.stringify({ surface: "guest" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
     )
     render(<App />)
     expect(await screen.findByTestId("guest-app")).toBeVisible()
-    expect(screen.getByTestId("guest-app")).toHaveAttribute(
-      "data-base-path",
-      "/api/guest/v1"
-    )
     expect(screen.queryByTestId("fixture-app")).not.toBeInTheDocument()
   })
 
@@ -133,16 +113,10 @@ describe("App", () => {
 
     expect(window.location.hash).toBe("#invite=early-secret")
     resolveConfiguration(
-      new Response(
-        JSON.stringify({
-          surface: "guest",
-          basePath: "/api/guest/v1",
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }
-      )
+      new Response(JSON.stringify({ surface: "guest" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
     )
     expect(await screen.findByTestId("guest-app")).toHaveAttribute(
       "data-invite-token",

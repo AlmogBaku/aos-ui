@@ -1,0 +1,42 @@
+# Host networking, added after a harness overlay. Compose ignores published
+# ports here, so every listener binds loopback itself: Caddy keeps the
+# Caddyfile's own 127.0.0.1 default on 18080 (and 18081 for guests), and its
+# upstreams move from the Compose service names to the loopback ports. The
+# gateway's listeners come from its own configuration file, which must list
+# 127.0.0.1 too. A host whose exit-node routes capture the Docker bridge
+# subnets needs this shape, because a bridged, published port is unreachable.
+services:
+  caddy:
+    network_mode: host
+    ports: !reset []
+    environment:
+      AOS_UI_CADDY_BIND: 127.0.0.1
+      AOS_UI_GATEWAY_UPSTREAM: 127.0.0.1:4100
+      AOS_UI_GATEWAY_GUEST_UPSTREAM: 127.0.0.1:4101
+      AOS_UI_WEB_UPSTREAM: 127.0.0.1:4200
+      AOS_UI_WEB_GUEST_UPSTREAM: 127.0.0.1:4201
+
+  web:
+    network_mode: host
+    expose: !reset []
+    environment:
+      AOS_UI_WEB_HOST: 127.0.0.1
+      AOS_UI_GUEST_WEB_HOST: 127.0.0.1
+
+  gateway:
+    network_mode: host
+    expose: !reset []
+    extra_hosts: !reset []
+
+  tools-mcp:
+    network_mode: host
+    ports: !reset []
+    command:
+      - bun
+      - run
+      - packages/tools-mcp/cli.ts
+      - --http
+      - --host
+      - 127.0.0.1
+      - --port
+      - "4110"

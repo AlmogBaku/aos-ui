@@ -1,0 +1,12 @@
+# The guest lane, beside the operator site in ../Caddyfile and under the same
+# rules: its own names only, /api/v1 to the gateway's guest listener, and
+# everything else to the aos-ui server's guest listener.
+http://:18081 {
+	bind {$AOS_UI_CADDY_BIND:127.0.0.1}
+	route {
+		@foreign not host {$AOS_UI_GUEST_PUBLIC_HOST} 127.0.0.1 localhost
+		respond @foreign 421
+		reverse_proxy /api/v1/* {$AOS_UI_GATEWAY_GUEST_UPSTREAM:gateway:4101}
+		reverse_proxy {$AOS_UI_WEB_GUEST_UPSTREAM:web:4201}
+	}
+}

@@ -1,12 +1,12 @@
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import { buildWorkspacePathname } from "@/lib/workspace-routing"
+import type { OPEN_MESSAGE_TYPE as PROTOCOL_OPEN_MESSAGE_TYPE } from "@/sw/open-messages"
 import type {
-  OPEN_MESSAGE_TYPE as PROTOCOL_OPEN_MESSAGE_TYPE,
   PushCategory,
   PushLocale,
   PushMessage,
-} from "@aos/protocol/push"
+} from "@harness-gw/sdk/protocol"
 
 // A literal typed against the protocol's constant: the worker must not import
 // the protocol module at runtime (it would pull zod into the bundle).

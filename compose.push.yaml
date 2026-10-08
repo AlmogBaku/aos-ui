@@ -1,20 +1,20 @@
-# Add this overlay to enable Web Push. It sets the proxy's push environment
-# variables, mounts the push state directory, and mounts the VAPID private key
-# used by the Web Push implementation; the required variables follow the same
-# operator-owned pattern as the other secret mounts. The private proxy
-# configuration file needs no push section.
+# Add this overlay to a harness overlay to enable Web Push. It sets the
+# gateway's push environment variables, mounts the push state directory, and
+# mounts the VAPID private key used by the Web Push implementation; the
+# required variables follow the same operator-owned pattern as the other secret
+# mounts. The private gateway configuration file needs no push section.
 services:
-  web:
+  gateway:
     environment:
-      AOS_UI_PROXY_PUSH_STATE_DIR: /var/lib/aos-ui/push
-      AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE: /run/secrets/vapid-private-key
-      AOS_UI_PROXY_PUSH_VAPID_SUBJECT: "${AOS_UI_PUSH_VAPID_SUBJECT:?Set AOS_UI_PUSH_VAPID_SUBJECT to the VAPID contact (mailto: or https:)}"
+      HARNESS_GW_PUSH_STATE_DIR: /var/lib/harness-gw/push
+      HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE: /run/secrets/vapid-private-key
+      HARNESS_GW_PUSH_VAPID_SUBJECT: "${HARNESS_GW_PUSH_VAPID_SUBJECT:?Set HARNESS_GW_PUSH_VAPID_SUBJECT to the VAPID contact (mailto: or https:)}"
     volumes:
       # Bind-mount rather than a named volume: a named volume is initially
-      # root-owned, but the proxy runs as the host UID.
+      # root-owned, but the gateway runs as the host UID.
       - type: bind
-        source: ${AOS_UI_PUSH_STATE_DIR:?set AOS_UI_PUSH_STATE_DIR to an operator-owned directory}
-        target: /var/lib/aos-ui/push
+        source: ${HARNESS_GW_PUSH_STATE_DIR:?set HARNESS_GW_PUSH_STATE_DIR to an operator-owned directory}
+        target: /var/lib/harness-gw/push
     secrets:
       - source: vapid-private-key
         target: vapid-private-key
@@ -24,4 +24,4 @@ services:
 
 secrets:
   vapid-private-key:
-    file: ${AOS_UI_VAPID_PRIVATE_KEY_FILE:?set AOS_UI_VAPID_PRIVATE_KEY_FILE to the VAPID private key file}
+    file: ${HARNESS_GW_VAPID_PRIVATE_KEY_FILE:?set HARNESS_GW_VAPID_PRIVATE_KEY_FILE to the VAPID private key file}

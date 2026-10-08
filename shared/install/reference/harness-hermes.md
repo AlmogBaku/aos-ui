@@ -14,9 +14,9 @@ hermes -p <profile> mcp test aos-ui
 ```
 
 `hermes mcp add` is interactive, so prefer `config set`. The tools reach the
-model as `mcp__aos_ui__render_chart` and so on. The AOS proxy reads the chart,
-map, and stats views from the same URL, so it must be one the proxy can reach
-too; ask the operator when the proxy runs in a container. In a Session that is already
+model as `mcp__aos_ui__render_chart` and so on. The harness-gw gateway reads the chart,
+map, and stats views from the same URL, so it must be one the gateway can reach
+too; ask the operator when the gateway runs in a container. In a Session that is already
 open, `/reload-mcp` picks them up; a new Session loads them on its own.
 
 ## Install the skills
@@ -29,7 +29,7 @@ ln -s <checkout>/shared/invite-link <profile-home>/skills/aos-invite-link
 ```
 
 `<profile-home>` is `~/.hermes` for the default profile. For
-`aos-invite-link`, set `AOS_RUNTIME_PROXY_URL` to the operator proxy origin in
+`aos-invite-link`, set `AOS_RUNTIME_PROXY_URL` to the operator gateway origin in
 the profile's environment. A running `hermes serve` caches the skills index:
 ask the operator to restart it, then check with
 `hermes -p <profile> skills list`.

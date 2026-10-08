@@ -20,7 +20,7 @@ import {
 import {
   MCP_APP_SANDBOX_CSP,
   MCP_APP_SANDBOX_PATH,
-} from "./packages/protocol/mcp-apps.ts"
+} from "@harness-gw/sdk/protocol"
 import {
   DEFAULT_RUNTIME_MODE,
   getRuntimeEntrypoint,
@@ -155,7 +155,7 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
 /**
  * Adds `Access-Control-Allow-Origin: null` to the synthetic fixture
  * files the artifact view fetches from an opaque-origin sandbox frame. Mirrors
- * what `packages/proxy/static.ts` does in production.
+ * what `server/static.ts` does in production.
  */
 function fixtureMcpAppFilesPlugin(): Plugin {
   const paths = new Set(FIXTURE_MCP_APP_FILE_PATHS)
@@ -173,7 +173,7 @@ function fixtureMcpAppFilesPlugin(): Plugin {
   }
 }
 
-/** The MCP App sandbox page carries the policy the proxy serves it with. */
+/** The MCP App sandbox page carries the policy the web server serves it with. */
 function mcpAppSandboxPlugin(): Plugin {
   const secure = (server: ViteDevServer | PreviewServer) => {
     server.middlewares.use((request, response, next) => {
@@ -204,7 +204,7 @@ async function recordToolsServer() {
  * its views are built and its `tools/list` and `resources/read` answers
  * recorded at `FIXTURE_AOS_UI_MCP_PATH`. The dev server records on first
  * request and again after a view or schema changes; the build writes the file
- * into `dist`, where preview and the Bun proxy serve it.
+ * into `dist`, where preview and the web server serve it.
  */
 function fixtureToolsServerPlugin(): Plugin {
   const sources = [
@@ -254,8 +254,8 @@ function fixtureToolsServerPlugin(): Plugin {
 
 /**
  * The build id is the entry chunk's content hash, which changes with every
- * chunk the page can load. The build writes it to `dist/build-id`, where the
- * proxy reads it for `initialize`, and compiles it in as `__AOS_BUILD_ID__`;
+ * chunk the page can load. The build writes it to `dist/build-id`, which the
+ * web server adds to `/runtime-config.json`, and compiles it in as `__AOS_BUILD_ID__`;
  * the dev server has none. The entry is hashed before the value is compiled
  * in, so the build writes a placeholder and swaps it once the hash is known.
  */
@@ -289,7 +289,7 @@ function buildIdPlugin(): Plugin {
 
 /**
  * Writes `.br` and `.gz` beside every text asset in the client build, which
- * `packages/proxy/static.ts` serves to clients that accept them. It runs after
+ * `server/static.ts` serves to clients that accept them. It runs after
  * every other plugin's `closeBundle`, `VitePWA`'s `sw.js` included, so no copy
  * can describe a file that is still being written.
  */
@@ -358,9 +358,9 @@ export default defineConfig(({ mode }) => {
     ?.split(",")
     .map((host) => host.trim())
     .filter(Boolean)
-  const aosProxy = {
-    "/api/aos/v1": {
-      target: environment.AOS_UI_PROXY_TARGET ?? "http://127.0.0.1:4100",
+  const gatewayProxy = {
+    "/api/v1": {
+      target: environment.AOS_UI_GATEWAY_TARGET ?? "http://127.0.0.1:4100",
       changeOrigin: false,
       ws: true,
     },
@@ -440,26 +440,6 @@ export default defineConfig(({ mode }) => {
       alias: {
         "@": path.resolve(import.meta.dirname, "src"),
         "@shared": path.resolve(import.meta.dirname, "shared"),
-        "@aos/protocol/acp": path.resolve(
-          import.meta.dirname,
-          "packages/protocol/acp.ts"
-        ),
-        "@aos/protocol/push": path.resolve(
-          import.meta.dirname,
-          "packages/protocol/push.ts"
-        ),
-        "@aos/protocol/mcp-apps": path.resolve(
-          import.meta.dirname,
-          "packages/protocol/mcp-apps.ts"
-        ),
-        "@aos/protocol": path.resolve(
-          import.meta.dirname,
-          "packages/protocol/index.ts"
-        ),
-        "@aos/lifecycle": path.resolve(
-          import.meta.dirname,
-          "packages/lifecycle/index.ts"
-        ),
       },
     },
     optimizeDeps: {
@@ -470,11 +450,11 @@ export default defineConfig(({ mode }) => {
       host: "127.0.0.1",
       port: 3000,
       allowedHosts,
-      proxy: aosProxy,
+      proxy: gatewayProxy,
     },
     preview: {
       allowedHosts,
-      proxy: aosProxy,
+      proxy: gatewayProxy,
       // Playwright starts a fresh preview for every runtime matrix. Avoid a
       // browser retaining an obsolete hashed chunk between those servers.
       headers: {

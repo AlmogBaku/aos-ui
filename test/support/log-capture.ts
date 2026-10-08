@@ -1,6 +1,6 @@
 import { pino } from "pino"
 
-import type { LogFields, Logger, OwnerKind } from "../../packages/lifecycle"
+import type { LogFields, Logger, OwnerKind } from "@harness-gw/sdk"
 
 /** One line a captured logger wrote, its bindings merged into its fields. */
 export type LogRecord = {

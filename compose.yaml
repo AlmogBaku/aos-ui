@@ -1,22 +1,52 @@
 name: aos-ui
 
 services:
+  # The only lane listener on the host: Caddy joins the app and, under a
+  # harness overlay, the gateway on one origin per lane (deploy/Caddyfile).
+  caddy:
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    environment:
+      # Docker forwards a published port to the container's interface, so
+      # Caddy listens on it here; the published ports below stay on loopback.
+      AOS_UI_CADDY_BIND: 0.0.0.0
+      AOS_UI_PUBLIC_HOST: ${AOS_UI_PUBLIC_HOST:-}
+    ports:
+      - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_WEB_PUBLISHED_PORT:-3000}:18080
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+        mode: 0444
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --output-document=/dev/null
+        - http://127.0.0.1:18080/healthz
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    init: true
+
+  # The app's own server: the built pages, runtime-config.json with the served
+  # build id, and the guest page policy. Reached only through Caddy.
   web:
     build:
       context: .
       dockerfile: Dockerfile
-      target: proxy
+      target: web
     environment:
       AOS_UI_STATIC_ROOT: /app/dist
       AOS_UI_RUNTIME_CONFIG_FILE: /run/aos-ui/runtime-config.json
       AOS_UI_WEB_HOST: 0.0.0.0
-      AOS_UI_WEB_PORT: "3000"
-    command:
-      - bun
-      - run
-      - static:serve
-    ports:
-      - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_WEB_PUBLISHED_PORT:-3000}:3000
+      AOS_UI_WEB_PORT: "4200"
+      AOS_UI_WEB_EXPOSURE: private-container
+    expose:
+      - "4200"
     configs:
       - source: runtime-config
         target: /run/aos-ui/runtime-config.json
@@ -24,10 +54,9 @@ services:
     healthcheck:
       test:
         - CMD
-        - wget
-        - --quiet
-        - --output-document=/dev/null
-        - http://127.0.0.1:3000/api/health
+        - bun
+        - -e
+        - fetch('http://127.0.0.1:4200/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
       interval: 5s
       timeout: 3s
       retries: 20
@@ -66,5 +95,7 @@ services:
     init: true
 
 configs:
+  caddyfile:
+    file: ./deploy/Caddyfile
   runtime-config:
     file: ${AOS_UI_RUNTIME_CONFIG_FILE:-./deploy/runtime-config.json}

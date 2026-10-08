@@ -17,25 +17,25 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
-import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
-  AOS_AUTH_METHOD_INVITE,
-  AOS_META_KEY,
-  AOS_METHODS,
-  AosPromptMetaSchema,
-  AosSteerRequestSchema,
-} from "@aos/protocol/acp"
+  INTERACTION_PROTOCOL,
+  HGW_AUTH_METHOD_INVITE,
+  HGW_META_KEY,
+  HGW_METHODS,
+  HgwPromptMetaSchema,
+  HgwSteerRequestSchema,
+} from "@harness-gw/sdk/protocol"
+import { pipedSockets } from "@/runtime-adapters/aos/acp/test-socket"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 
-import { pipedSockets } from "./acp/test-socket"
 import { fetchGuestRuntimeContext, GuestAosSurface } from "./guest-composition"
 import { sessionCapabilities } from "./test-capabilities"
 
 const AGENT_ID = "researcher"
 const REF = "guest_ref"
 const TOKEN = "invitation.token"
-const BASE_PATH = "/api/guest/v1"
+const BASE_PATH = "/api/v1"
 
 const steeringAvailable = {
   status: "available",
@@ -91,7 +91,7 @@ function guestRuntimeContext() {
   }
 }
 
-/** The `_aos/composer_prefill` params the guest lane sends after a run. */
+/** The `_hgw/composer_prefill` params the guest lane sends after a run. */
 const prefillParams = (text: string) => ({
   sessionId: REF,
   turnId: "run-1",
@@ -123,13 +123,13 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
       sessionUpdate: "user_message",
       messageId: "history-0",
       content: [{ type: "text", text: "Earlier guest question" }],
-      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
+      _meta: { [HGW_META_KEY]: { turnId: "run-0", sequence: 0 } },
     },
     {
       sessionUpdate: "agent_message",
       messageId: "history-1",
       content: [{ type: "text", text: "Earlier guest answer" }],
-      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 1 } },
+      _meta: { [HGW_META_KEY]: { turnId: "run-0", sequence: 1 } },
     },
   ]
   let resumed = false
@@ -152,17 +152,17 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
       calls.push("initialize")
       return {
         protocolVersion: 2,
-        info: { name: "aos-proxy", version: "1" },
+        info: { name: "harness-gw", version: "1" },
         capabilities: { session: { prompt: { image: {} } } },
         authMethods: [
           {
             type: "agent" as const,
-            methodId: AOS_AUTH_METHOD_INVITE,
+            methodId: HGW_AUTH_METHOD_INVITE,
             name: "Invitation",
           },
         ],
         _meta: {
-          [AOS_META_KEY]: {
+          [HGW_META_KEY]: {
             version: 1,
             role: "guest",
             extensions: {
@@ -183,12 +183,12 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
     })
     .onRequest(methods.agent.auth.login, ({ params }) => {
       calls.push(methods.agent.auth.login)
-      const meta = params._meta?.[AOS_META_KEY]
+      const meta = params._meta?.[HGW_META_KEY]
       const token =
         typeof meta === "object" && meta !== null && "token" in meta
           ? meta.token
           : undefined
-      if (params.methodId !== AOS_AUTH_METHOD_INVITE || token !== accepted)
+      if (params.methodId !== HGW_AUTH_METHOD_INVITE || token !== accepted)
         throw authenticationRequired()
       redeemed = true
       return {}
@@ -203,7 +203,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
           {
             sessionUpdate: "available_commands_update",
             availableCommands: [],
-            _meta: { [AOS_META_KEY]: { capabilities: capabilities(options) } },
+            _meta: { [HGW_META_KEY]: { capabilities: capabilities(options) } },
           } satisfies SessionUpdate,
           ...waiting.splice(0),
         ])
@@ -212,7 +212,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
             update,
           })
       })
-      return { _meta: { [AOS_META_KEY]: {} } }
+      return { _meta: { [HGW_META_KEY]: {} } }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
       calls.push(methods.agent.session.prompt)
@@ -223,13 +223,13 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
         push({
           sessionUpdate: "state_update",
           state: "running",
-          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 0 } },
+          _meta: { [HGW_META_KEY]: { turnId: "run-1", sequence: 0 } },
         })
         push({
           sessionUpdate: "user_message",
           messageId,
           content: params.prompt,
-          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 1 } },
+          _meta: { [HGW_META_KEY]: { turnId: "run-1", sequence: 1 } },
         })
         // The guest lane allowlists its output: reasoning and tool calls are
         // dropped server-side, so only prose reaches this surface.
@@ -237,13 +237,13 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
           sessionUpdate: "agent_message",
           messageId: `answer-${prompts.length}`,
           content: [{ type: "text", text: "Guest-visible answer" }],
-          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 2 } },
+          _meta: { [HGW_META_KEY]: { turnId: "run-1", sequence: 2 } },
         })
         if (!options.holdRuns) finishRun()
       })
       return { messageId }
     })
-    .onRequest(AOS_METHODS.session.steer, z.unknown(), ({ params }) => {
+    .onRequest(HGW_METHODS.session.steer, z.unknown(), ({ params }) => {
       steers.push(params)
       return { status: "steered" as const }
     })
@@ -259,7 +259,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
       sessionUpdate: "state_update",
       state: "idle",
       stopReason: "end_turn",
-      _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 3 } },
+      _meta: { [HGW_META_KEY]: { turnId: "run-1", sequence: 3 } },
     })
   }
 
@@ -271,7 +271,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
     finishRun,
     /** The provider's suggested next turn for the invited composer. */
     suggestPrefill(text: string) {
-      void peer?.notify(AOS_METHODS.notify.composerPrefill, prefillParams(text))
+      void peer?.notify(HGW_METHODS.notify.composerPrefill, prefillParams(text))
     },
     /**
      * A question raised inside a tool call the guest lane dropped, so the
@@ -288,7 +288,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
           properties: { q0: { type: "string", enum: ["Yes", "No"] } },
         },
         _meta: {
-          [AOS_META_KEY]: {
+          [HGW_META_KEY]: {
             requestId: "question-1",
             questions: [
               {
@@ -340,17 +340,7 @@ function mount({
     return new Response(null, { status: 404 })
   })
   vi.stubGlobal("fetch", fetcher)
-  render(
-    <GuestAosSurface
-      config={{
-        status: "ready",
-        surface: "guest",
-        basePath: BASE_PATH,
-      }}
-      inviteToken={inviteToken ?? TOKEN}
-      locale="en"
-    />
-  )
+  render(<GuestAosSurface inviteToken={inviteToken ?? TOKEN} locale="en" />)
   return { proxy, fetcher }
 }
 
@@ -363,9 +353,7 @@ describe("AOS guest browser composition", () => {
   it("uses the gateway-verified context rather than decoded invitation claims", async () => {
     const fetcher = vi.fn(async () => Response.json(guestRuntimeContext()))
 
-    await expect(
-      fetchGuestRuntimeContext(fetcher, BASE_PATH, TOKEN)
-    ).resolves.toEqual({
+    await expect(fetchGuestRuntimeContext(fetcher, TOKEN)).resolves.toEqual({
       agentId: AGENT_ID,
       conversationRef: REF,
       ui: {
@@ -440,7 +428,7 @@ describe("AOS guest browser composition", () => {
     })
     // The invitation's first-turn instruction is applied by the proxy, so the
     // browser sends nothing beyond what the guest wrote.
-    expect(proxy.prompts[0]?._meta).toMatchObject({ [AOS_META_KEY]: {} })
+    expect(proxy.prompts[0]?._meta).toMatchObject({ [HGW_META_KEY]: {} })
     // A guest-safe run carries no execution history, so the invited
     // conversation discloses neither reasoning nor a tool timeline.
     expect(
@@ -529,10 +517,10 @@ describe("AOS guest browser composition", () => {
     expect(proxy.prompts[0]).toMatchObject({
       sessionId: REF,
       prompt: [{ type: "text", text: "A better question" }],
-      _meta: { [AOS_META_KEY]: { rewindSourceId: "history-0" } },
+      _meta: { [HGW_META_KEY]: { rewindSourceId: "history-0" } },
     })
     expect(
-      AosPromptMetaSchema.safeParse(proxy.prompts[0]?._meta?.[AOS_META_KEY])
+      HgwPromptMetaSchema.safeParse(proxy.prompts[0]?._meta?.[HGW_META_KEY])
         .success
     ).toBe(true)
   })
@@ -557,9 +545,9 @@ describe("AOS guest browser composition", () => {
         String(input).endsWith(`/sessions/${REF}/attachments/stage`)
       )
     ).toBe(true)
-    const meta = proxy.prompts[0]?._meta?.[AOS_META_KEY]
+    const meta = proxy.prompts[0]?._meta?.[HGW_META_KEY]
     expect(meta).toMatchObject({ attachmentStageId: "stage-1" })
-    expect(AosPromptMetaSchema.safeParse(meta).success).toBe(true)
+    expect(HgwPromptMetaSchema.safeParse(meta).success).toBe(true)
   })
 
   it("steers the running turn when the invited Session allows steering", async () => {
@@ -584,7 +572,7 @@ describe("AOS guest browser composition", () => {
         },
       ])
     )
-    expect(AosSteerRequestSchema.safeParse(proxy.steers[0]).success).toBe(true)
+    expect(HgwSteerRequestSchema.safeParse(proxy.steers[0]).success).toBe(true)
     expect(proxy.prompts).toHaveLength(1)
   })
 

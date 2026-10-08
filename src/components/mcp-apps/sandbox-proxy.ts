@@ -1,4 +1,4 @@
-import { MCP_APP_SANDBOX_PATH } from "@aos/protocol/mcp-apps"
+import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
 
 /**
  * MCP Apps render behind a double iframe. The outer sandbox proxy is a static

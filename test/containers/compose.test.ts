@@ -3,40 +3,34 @@
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { parse } from "yaml"
 import { describe, expect, it } from "vitest"
 
-import { parseProxyConfig } from "../../packages/proxy/config"
+type Port = { host_ip?: string; published?: string; target: number }
+
+type Service = {
+  build?: { target?: string }
+  command?: string[]
+  depends_on?: Record<string, { condition: string }>
+  healthcheck?: { test?: string[] }
+  environment?: Record<string, string>
+  expose?: string[]
+  network_mode?: string
+  ports?: Port[]
+  user?: string
+  secrets?: Array<{
+    source: string
+    target: string
+    mode?: string
+    uid?: string
+    gid?: string
+  }>
+  volumes?: Array<{ source: string; target: string; type: string }>
+}
 
 type ComposeConfig = {
   configs?: Record<string, { file?: string }>
-  secrets?: Record<
-    string,
-    { file?: string; mode?: string; uid?: string; gid?: string }
-  >
-  services: Record<
-    string,
-    {
-      build?: { target?: string }
-      command?: string[]
-      depends_on?: Record<string, { condition: string }>
-      healthcheck?: { test?: string[] }
-      environment?: Record<string, string>
-      expose?: string[]
-      extra_hosts?: string[]
-      ports?: Array<{ host_ip?: string; published?: string; target: number }>
-      user?: string
-      configs?: Array<{ source: string; target: string; mode?: string }>
-      secrets?: Array<{
-        source: string
-        target: string
-        mode?: string
-        uid?: string
-        gid?: string
-      }>
-      volumes?: Array<{ source: string; target: string; type: string }>
-    }
-  >
+  secrets?: Record<string, { file?: string }>
+  services: Record<string, Service>
 }
 
 const root = resolve(import.meta.dirname, "../..")
@@ -80,6 +74,71 @@ function renderComposeConfig(
   ) as ComposeConfig
 }
 
+/** Any existing file stands in for a private config or secret file. */
+const PLACEHOLDER_FILE = resolve(root, ".env.example")
+
+/** The variables a harness overlay requires, every file a placeholder. */
+function harnessEnvironment(
+  runtime: "hermes" | "openclaw" | "opencode",
+  extra: Record<string, string> = {}
+) {
+  const files = {
+    hermes: ["HARNESS_GW_HERMES_TOKEN_FILE"],
+    openclaw: [
+      "HARNESS_GW_OPENCLAW_DEVICE_IDENTITY_FILE",
+      "HARNESS_GW_OPENCLAW_DEVICE_TOKEN_FILE",
+    ],
+    opencode: ["HARNESS_GW_OPENCODE_PASSWORD_FILE"],
+  }[runtime]
+  return {
+    AOS_UI_RUNTIME_CONFIG_FILE: resolve(
+      root,
+      `deploy/runtime-config.${runtime}.json`
+    ),
+    HARNESS_GW_CONFIG_FILE: PLACEHOLDER_FILE,
+    HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE: PLACEHOLDER_FILE,
+    ...Object.fromEntries(files.map((name) => [name, PLACEHOLDER_FILE])),
+    AOS_UI_HOST_UID: "1234",
+    AOS_UI_HOST_GID: "2345",
+    ...extra,
+  }
+}
+
+/** A secret mounted at /run/secrets/<name>, readable by the host user only. */
+const ownedSecret = (name: string) =>
+  expect.objectContaining({
+    source: name,
+    target: name,
+    mode: "0400",
+    uid: "1234",
+    gid: "2345",
+  })
+
+/** Every published port in the composition, by service. */
+function publishedPorts(config: ComposeConfig) {
+  return Object.fromEntries(
+    Object.entries(config.services)
+      .filter(([, service]) => service.ports?.length)
+      .map(([name, service]) => [name, service.ports])
+  )
+}
+
+const loopbackPort = (published: string, target: number) =>
+  expect.objectContaining({ host_ip: "127.0.0.1", published, target })
+
+/** The body of one Caddy site block, by its address. */
+function caddySite(source: string, address: string) {
+  const start = source.indexOf(`${address} {`)
+  expect(start).toBeGreaterThanOrEqual(0)
+  let depth = 0
+  for (let index = source.indexOf("{", start); index < source.length; index++) {
+    if (source[index] === "{") depth++
+    if (source[index] === "}" && --depth === 0)
+      return source.slice(start, index + 1)
+  }
+  throw new Error(`unterminated site ${address}`)
+}
+
 describe("container orchestration", () => {
   it("keeps the Hermes browser configuration credential-free", () => {
     const runtime = JSON.parse(
@@ -104,347 +163,221 @@ describe("container orchestration", () => {
     }
   )
 
-  it.each([
-    "proxy.hermes.example.yaml",
-    "proxy.openclaw.example.yaml",
-    "proxy.opencode.example.yaml",
-  ])("ships %s as a loadable proxy configuration without push", (filename) => {
-    const proxy: unknown = parse(
-      readFileSync(resolve(root, "deploy", filename), "utf8")
-    )
-    expect(() => parseProxyConfig(proxy)).not.toThrow()
-    expect(proxy).not.toHaveProperty("push")
-  })
-
-  it("points the Hermes proxy example at the mounted credentials", () => {
-    const proxy = parse(
-      readFileSync(resolve(root, "deploy/proxy.hermes.example.yaml"), "utf8")
-    ) as {
-      runtime: { tokenFile: string }
-      guest: { invitations: { keys: Array<{ secretFile: string }> } }
-      mcpApps: unknown
-    }
-    expect(proxy.runtime.tokenFile).toBe("/run/secrets/hermes-token")
-    expect(proxy.guest.invitations.keys[0]!.secretFile).toBe(
-      "/run/secrets/guest-invite-signing-key"
-    )
-    // Hermes registers the host's loopback URL; the container overrides it.
-    expect(proxy.mcpApps).toEqual({
-      fallback: { servers: { "aos-ui": { url: "http://tools-mcp:4110/mcp" } } },
-    })
-  })
-
-  it("keeps the base composition web plus tools MCP and loopback-only", () => {
+  it("publishes only Caddy and the tools MCP server, on loopback", () => {
     const config = composeConfig(["compose.yaml"])
 
-    expect(Object.keys(config.services).sort()).toEqual(["tools-mcp", "web"])
-    expect(config.services.web.ports).toContainEqual(
-      expect.objectContaining({
-        host_ip: "127.0.0.1",
-        published: "3000",
-        target: 3000,
-      })
-    )
+    expect(Object.keys(config.services).sort()).toEqual([
+      "caddy",
+      "tools-mcp",
+      "web",
+    ])
+    expect(publishedPorts(config)).toEqual({
+      caddy: [loopbackPort("3000", 18080)],
+      "tools-mcp": [loopbackPort("4110", 4110)],
+    })
+    // Docker forwards a published port to the container's interface, so
+    // Caddy listens there; the host side above stays on loopback.
+    expect(config.services.caddy.environment?.AOS_UI_CADDY_BIND).toBe("0.0.0.0")
+    expect(config.services.web.build?.target).toBe("web")
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.json")
     )
   })
 
-  it("publishes the tools MCP server on loopback only, with a health check", () => {
-    const toolsMcp = composeConfig(["compose.yaml"]).services["tools-mcp"]!
+  it("keeps the tools MCP server on loopback whatever the bind address", () => {
+    const toolsMcp = composeConfig(["compose.yaml"], {
+      AOS_UI_BIND_ADDRESS: "0.0.0.0",
+      AOS_UI_TOOLS_MCP_PORT: "4999",
+    }).services["tools-mcp"]!
 
-    expect(toolsMcp.build?.target).toBe("tools-mcp")
-    expect(toolsMcp.ports).toEqual([
-      expect.objectContaining({
-        host_ip: "127.0.0.1",
-        published: "4110",
-        target: 4110,
-      }),
-    ])
+    expect(toolsMcp.ports).toEqual([loopbackPort("4999", 4110)])
     expect(toolsMcp.healthcheck?.test?.join(" ")).toContain(
       "http://127.0.0.1:4110/health"
     )
-    expect(
-      composeConfig(["compose.yaml"], {
-        AOS_UI_BIND_ADDRESS: "0.0.0.0",
-        AOS_UI_TOOLS_MCP_PORT: "4999",
-      }).services["tools-mcp"]!.ports
-    ).toEqual([
-      expect.objectContaining({
-        host_ip: "127.0.0.1",
-        published: "4999",
-        target: 4110,
-      }),
-    ])
   })
 
-  it("adds OpenCode only through the explicit engine overlay", () => {
-    const config = composeConfig(["compose.yaml", "compose.opencode.yaml"], {
-      AOS_UI_RUNTIME_CONFIG_FILE: resolve(
-        root,
-        "deploy/runtime-config.opencode.json"
-      ),
-      AOS_UI_PROXY_CONFIG_FILE: resolve(
-        root,
-        "deploy/proxy.opencode.example.yaml"
-      ),
-      AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
-      AOS_UI_OPENCODE_PASSWORD_FILE: resolve(root, ".env.example"),
-      AOS_UI_HOST_UID: "1234",
-      AOS_UI_HOST_GID: "2345",
-    })
+  it("wires each Caddy site to its own lane, on loopback, without a log", () => {
+    const operator = readFileSync(resolve(root, "deploy/Caddyfile"), "utf8")
+    const guest = readFileSync(
+      resolve(root, "deploy/caddy/guest.caddy"),
+      "utf8"
+    )
+    const directives = (source: string) =>
+      source.replace(/#.*$/gmu, "").split(/\s+/u)
+
+    for (const [site, host, gateway, web] of [
+      [
+        caddySite(operator, "http://:18080"),
+        "AOS_UI_PUBLIC_HOST",
+        "AOS_UI_GATEWAY_UPSTREAM:gateway:4100",
+        "AOS_UI_WEB_UPSTREAM:web:4200",
+      ],
+      [
+        caddySite(guest, "http://:18081"),
+        "AOS_UI_GUEST_PUBLIC_HOST",
+        "AOS_UI_GATEWAY_GUEST_UPSTREAM:gateway:4101",
+        "AOS_UI_WEB_GUEST_UPSTREAM:web:4201",
+      ],
+    ] as const) {
+      expect(site).toContain("bind {$AOS_UI_CADDY_BIND:127.0.0.1}")
+      expect(site).toContain(
+        `@foreign not host {$${host}} 127.0.0.1 localhost\n\t\trespond @foreign 421`
+      )
+      expect(site).toContain(`reverse_proxy /api/v1/* {$${gateway}}`)
+      expect(site).toContain(`reverse_proxy {$${web}}`)
+    }
+    for (const source of [operator, guest])
+      expect(directives(source)).not.toContain("log")
+    expect(operator).toMatch(/^\s*admin off$/mu)
+    expect(operator).toMatch(/^\s*auto_https off$/mu)
+  })
+
+  it("runs the Hermes gateway beside the web server and opens the guest lane", () => {
+    const config = composeConfig(
+      ["compose.yaml", "compose.hermes.yaml"],
+      harnessEnvironment("hermes")
+    )
+    const gateway = config.services.gateway!
 
     expect(Object.keys(config.services).sort()).toEqual([
+      "caddy",
+      "gateway",
+      "tools-mcp",
+      "web",
+    ])
+    expect(publishedPorts(config)).toEqual({
+      caddy: [loopbackPort("3000", 18080), loopbackPort("3001", 18081)],
+      "tools-mcp": [loopbackPort("4110", 4110)],
+    })
+    expect(gateway.user).toBe("1234:2345")
+    expect(gateway.environment).toEqual({
+      HARNESS_GW_CONFIG_FILE: "/run/harness-gw/config.yaml",
+    })
+    // The paths harness-gw's own example configuration test pins.
+    expect(gateway.secrets).toEqual([
+      ownedSecret("hermes-token"),
+      ownedSecret("guest-invite-signing-key"),
+    ])
+    expect(gateway.healthcheck?.test?.join(" ")).toContain(
+      "http://127.0.0.1:4100/api/v1/healthz"
+    )
+    expect(config.services.web.environment).toMatchObject({
+      AOS_UI_GUEST_WEB_PORT: "4201",
+    })
+    expect(JSON.stringify(config.services.web)).not.toMatch(
+      /HERMES|TOKEN|SECRET|HARNESS_GW/u
+    )
+  })
+
+  it("runs OpenClaw through the gateway with its device credentials", () => {
+    const config = composeConfig(
+      ["compose.yaml", "compose.openclaw.yaml"],
+      harnessEnvironment("openclaw")
+    )
+
+    expect(config.services.gateway!.secrets).toEqual([
+      ownedSecret("openclaw-device-identity"),
+      ownedSecret("openclaw-device-token"),
+      ownedSecret("guest-invite-signing-key"),
+    ])
+    expect(publishedPorts(config)).toEqual({
+      caddy: [loopbackPort("3000", 18080), loopbackPort("3001", 18081)],
+      "tools-mcp": [loopbackPort("4110", 4110)],
+    })
+  })
+
+  it("adds OpenCode only through its overlay, reachable from the gateway alone", () => {
+    const config = composeConfig(
+      ["compose.yaml", "compose.opencode.yaml"],
+      harnessEnvironment("opencode")
+    )
+    const opencode = config.services.opencode!
+
+    expect(Object.keys(config.services).sort()).toEqual([
+      "caddy",
+      "gateway",
       "opencode",
       "tools-mcp",
       "web",
     ])
-    expect(config.services.web.depends_on?.opencode.condition).toBe(
+    expect(config.services.gateway!.depends_on?.opencode.condition).toBe(
       "service_healthy"
     )
-    expect(config.services.web.user).toBe("1234:2345")
-    expect(config.services.web.secrets).toEqual([
-      expect.objectContaining({
-        source: "opencode-password",
-        target: "opencode-password",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
-      expect.objectContaining({
-        source: "guest-invite-signing-key",
-        target: "guest-invite-signing-key",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
+    expect(config.services.gateway!.secrets).toEqual([
+      ownedSecret("opencode-password"),
+      ownedSecret("guest-invite-signing-key"),
     ])
-    expect(config.services.opencode.depends_on?.["tools-mcp"]?.condition).toBe(
+    expect(opencode.secrets).toEqual([ownedSecret("opencode-password")])
+    expect(opencode.depends_on?.["tools-mcp"]?.condition).toBe(
       "service_healthy"
     )
-    expect(config.services.opencode.expose).toEqual(["4096"])
-    expect(config.services.opencode.ports).toBeUndefined()
-    expect(config.services.opencode.environment).not.toHaveProperty(
-      "AOS_UI_OPENCODE_CORS_ORIGINS"
-    )
-    expect(config.services.opencode.environment).not.toHaveProperty(
-      "AOS_UI_OPENCODE_PUBLISHED_PORT"
-    )
-    expect(config.services.opencode.secrets).toEqual([
-      expect.objectContaining({
-        source: "opencode-password",
-        target: "opencode-password",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
-    ])
-    const proxy = parse(
-      readFileSync(resolve(root, "deploy/proxy.opencode.example.yaml"), "utf8")
-    ) as { runtime: Record<string, unknown> }
-    expect(proxy.runtime.passwordFile).toBe("/run/secrets/opencode-password")
-    expect(JSON.stringify(config)).not.toContain("AOS_GATEWAY_")
+    expect(opencode.expose).toEqual(["4096"])
+    expect(opencode.ports).toBeUndefined()
   })
 
-  it("runs the private AOS proxy as the web service for Hermes", () => {
-    const config = composeConfig(["compose.yaml", "compose.hermes.yaml"], {
-      AOS_UI_RUNTIME_CONFIG_FILE: resolve(
-        root,
-        "deploy/runtime-config.hermes.json"
-      ),
-      AOS_UI_PROXY_CONFIG_FILE: resolve(
-        root,
-        "deploy/proxy.hermes.example.yaml"
-      ),
-      AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
-      AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
-      AOS_UI_HOST_UID: "1234",
-      AOS_UI_HOST_GID: "2345",
-    })
-
-    expect(Object.keys(config.services).sort()).toEqual(["tools-mcp", "web"])
-    expect(config.services.web.user).toBe("1234:2345")
-    expect(config.services.web.build?.target).toBe("proxy")
-    expect(config.services.web.ports).toContainEqual(
-      expect.objectContaining({
-        host_ip: "127.0.0.1",
-        published: "3001",
-        target: 3001,
-      })
-    )
-    expect(config.services.web.secrets).toEqual([
-      expect.objectContaining({
-        source: "hermes-token",
-        target: "hermes-token",
-        uid: "1234",
-        gid: "2345",
-      }),
-      expect.objectContaining({
-        source: "guest-invite-signing-key",
-        target: "guest-invite-signing-key",
-        uid: "1234",
-        gid: "2345",
-      }),
-    ])
-    expect(Object.keys(config.secrets ?? {}).sort()).toEqual([
-      "guest-invite-signing-key",
-      "hermes-token",
-    ])
-    expect(JSON.stringify(config.services.web.environment)).not.toMatch(
-      /HERMES|TOKEN|OIDC|SECRET/u
-    )
-  })
-
-  it("runs OpenClaw through the private AOS proxy", () => {
-    const config = composeConfig(["compose.yaml", "compose.openclaw.yaml"], {
-      AOS_UI_RUNTIME_CONFIG_FILE: resolve(
-        root,
-        "deploy/runtime-config.openclaw.json"
-      ),
-      AOS_UI_PROXY_CONFIG_FILE: resolve(
-        root,
-        "deploy/proxy.openclaw.example.yaml"
-      ),
-      AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
-      AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE: resolve(root, ".env.example"),
-      AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE: resolve(root, ".env.example"),
-      AOS_UI_HOST_UID: "1234",
-      AOS_UI_HOST_GID: "2345",
-    })
-
-    expect(Object.keys(config.services).sort()).toEqual(["tools-mcp", "web"])
-    expect(config.services.web.user).toBe("1234:2345")
-    expect(config.services.web.secrets).toEqual([
-      expect.objectContaining({
-        source: "openclaw-device-identity",
-        target: "openclaw-device-identity",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
-      expect.objectContaining({
-        source: "openclaw-device-token",
-        target: "openclaw-device-token",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
-      expect.objectContaining({
-        source: "guest-invite-signing-key",
-        target: "guest-invite-signing-key",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
-    ])
-    const proxy = parse(
-      readFileSync(resolve(root, "deploy/proxy.openclaw.example.yaml"), "utf8")
-    ) as { runtime: Record<string, unknown> }
-    expect(proxy.runtime).toMatchObject({
-      deviceIdentityFile: "/run/secrets/openclaw-device-identity",
-      deviceTokenFile: "/run/secrets/openclaw-device-token",
-    })
-    expect(config.services.web.environment).not.toHaveProperty(
-      "AOS_UI_OPENCLAW_HOST"
-    )
-    expect(config.services.web.environment).not.toHaveProperty(
-      "AOS_UI_OPENCLAW_PORT"
-    )
-    expect(config.services.web.environment).not.toHaveProperty(
-      "AOS_GATEWAY_OPENCLAW_TOKEN"
-    )
-    expect(config.services.web.environment).not.toHaveProperty(
-      "AOS_UI_OPENCLAW_DEVICE_TOKEN"
-    )
-  })
-
-  it("mounts push state and VAPID secret when the push overlay is added", () => {
-    const config = composeConfig(
+  it("mounts push state and the VAPID secret on the gateway only with the push overlay", () => {
+    const push = composeConfig(
       ["compose.yaml", "compose.hermes.yaml", "compose.push.yaml"],
-      {
-        AOS_UI_RUNTIME_CONFIG_FILE: resolve(
-          root,
-          "deploy/runtime-config.hermes.json"
-        ),
-        AOS_UI_PROXY_CONFIG_FILE: resolve(
-          root,
-          "deploy/proxy.hermes.example.yaml"
-        ),
-        AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
-        AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
-        AOS_UI_PUSH_STATE_DIR: root,
-        AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
-        AOS_UI_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
-        AOS_UI_HOST_UID: "1234",
-        AOS_UI_HOST_GID: "2345",
-      }
-    )
+      harnessEnvironment("hermes", {
+        HARNESS_GW_PUSH_STATE_DIR: root,
+        HARNESS_GW_VAPID_PRIVATE_KEY_FILE: PLACEHOLDER_FILE,
+        HARNESS_GW_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
+      })
+    ).services.gateway!
 
-    expect(config.services.web.volumes).toContainEqual(
+    expect(push.volumes).toContainEqual(
       expect.objectContaining({
         type: "bind",
         source: root,
-        target: "/var/lib/aos-ui/push",
+        target: "/var/lib/harness-gw/push",
       })
     )
-    expect(config.services.web.secrets).toContainEqual(
-      expect.objectContaining({
-        source: "vapid-private-key",
-        target: "vapid-private-key",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      })
-    )
-    expect(config.services.web.environment).toMatchObject({
-      AOS_UI_PROXY_PUSH_STATE_DIR: "/var/lib/aos-ui/push",
-      AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE:
-        "/run/secrets/vapid-private-key",
-      AOS_UI_PROXY_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
+    expect(push.secrets).toContainEqual(ownedSecret("vapid-private-key"))
+    expect(push.environment).toMatchObject({
+      HARNESS_GW_PUSH_STATE_DIR: "/var/lib/harness-gw/push",
+      HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE: "/run/secrets/vapid-private-key",
+      HARNESS_GW_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
     })
-    for (const [key, value] of Object.entries(
-      config.services.web.environment ?? {}
-    )) {
-      if (!key.startsWith("AOS_UI_PROXY_")) continue
-      expect(value).toMatch(/^(?:\/|mailto:|https:)/u)
+
+    // Without the overlay the push variables are not required at all.
+    const plain = composeConfig(
+      ["compose.yaml", "compose.hermes.yaml"],
+      harnessEnvironment("hermes")
+    )
+    expect(plain.secrets).not.toHaveProperty("vapid-private-key")
+    expect(plain.services.gateway!.volumes).toBeUndefined()
+    expect(Object.keys(plain.services.gateway!.environment ?? {})).toEqual([
+      "HARNESS_GW_CONFIG_FILE",
+    ])
+  })
+
+  it("keeps every listener on loopback under host networking", () => {
+    const config = composeConfig(
+      ["compose.yaml", "compose.hermes.yaml", "deploy/compose.host.yaml"],
+      harnessEnvironment("hermes")
+    )
+    const { caddy, web, gateway, "tools-mcp": toolsMcp } = config.services
+
+    for (const service of [caddy, web, gateway, toolsMcp]) {
+      expect(service!.network_mode).toBe("host")
+      expect(service!.ports ?? []).toEqual([])
     }
-  })
-
-  it("does not require push variables and carries no push state without the push overlay", () => {
-    // Push vars must be absent from the override map to prove they are not required.
-    const config = composeConfig(["compose.yaml", "compose.hermes.yaml"], {
-      AOS_UI_RUNTIME_CONFIG_FILE: resolve(
-        root,
-        "deploy/runtime-config.hermes.json"
-      ),
-      AOS_UI_PROXY_CONFIG_FILE: resolve(
-        root,
-        "deploy/proxy.hermes.example.yaml"
-      ),
-      AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
-      AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
-      AOS_UI_HOST_UID: "1234",
-      AOS_UI_HOST_GID: "2345",
+    expect(caddy!.environment).toMatchObject({
+      AOS_UI_CADDY_BIND: "127.0.0.1",
+      AOS_UI_GATEWAY_UPSTREAM: "127.0.0.1:4100",
+      AOS_UI_GATEWAY_GUEST_UPSTREAM: "127.0.0.1:4101",
+      AOS_UI_WEB_UPSTREAM: "127.0.0.1:4200",
+      AOS_UI_WEB_GUEST_UPSTREAM: "127.0.0.1:4201",
     })
-
-    expect(config.secrets).not.toHaveProperty("vapid-private-key")
-    expect(config.services.web.volumes ?? []).not.toContainEqual(
-      expect.objectContaining({ target: "/var/lib/aos-ui/push" })
-    )
-    expect(config.services.web.environment).not.toHaveProperty(
-      "AOS_UI_PROXY_PUSH_STATE_DIR"
-    )
-    expect(config.services.web.environment).not.toHaveProperty(
-      "AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE"
-    )
-    expect(config.services.web.environment).not.toHaveProperty(
-      "AOS_UI_PROXY_PUSH_VAPID_SUBJECT"
-    )
+    expect(web!.environment).toMatchObject({
+      AOS_UI_WEB_HOST: "127.0.0.1",
+      AOS_UI_GUEST_WEB_HOST: "127.0.0.1",
+    })
+    expect(toolsMcp!.command?.join(" ")).toContain("--host 127.0.0.1")
   })
 
-  it("uses the Vite development target and source mount", () => {
-    const config = composeConfig(["compose.yaml", "compose.dev.yaml"])
-    const web = config.services.web
+  it("uses the Vite development target and source mount behind Caddy", () => {
+    const web = composeConfig(["compose.yaml", "compose.dev.yaml"]).services.web
 
     expect(web.command).toEqual([
       "bun",
@@ -453,6 +386,8 @@ describe("container orchestration", () => {
       "--",
       "--host",
       "0.0.0.0",
+      "--port",
+      "4200",
     ])
     expect(web.volumes).toEqual(
       expect.arrayContaining([
@@ -465,12 +400,14 @@ describe("container orchestration", () => {
     )
     expect(web.environment).toMatchObject({
       AOS_UI_RUNTIME_CONFIG_FILE: "/run/aos-ui/runtime-config.json",
+      AOS_UI_GATEWAY_TARGET: "http://gateway:4100",
     })
   })
 
-  it("runs the Bun proxy image as a non-root user", () => {
+  it("runs the web server image as a non-root user", () => {
     const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
+    const web = dockerfile.slice(dockerfile.indexOf("AS web"))
 
-    expect(dockerfile).toContain("USER bun")
+    expect(web).toContain("USER bun")
   })
 })

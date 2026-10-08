@@ -5,7 +5,7 @@
 #
 #   sudo bash deploy/setup-push.sh \
 #     --key-file  /etc/aos-ui/secrets/vapid-private-key \
-#     --state-dir /var/lib/aos-ui/push \
+#     --state-dir /var/lib/harness-gw/push \
 #     --env-file  /etc/aos-ui/aos-ui.env \
 #     --subject   "mailto:you@example.com" \
 #     --uid       1002 \
@@ -17,8 +17,8 @@
 #
 #   systemctl daemon-reload && systemctl reload aos-ui
 #
-# The overlay passes the push settings to the proxy as container environment
-# variables; the private proxy configuration file needs no push section.
+# The overlay passes the push settings to the gateway as container environment
+# variables; the private gateway configuration file needs no push section.
 #
 # The script is idempotent: it skips steps that are already done.
 set -euo pipefail
@@ -100,9 +100,9 @@ append_env() {
   fi
 }
 
-append_env AOS_UI_PUSH_STATE_DIR "$STATE_DIR"
-append_env AOS_UI_VAPID_PRIVATE_KEY_FILE "$KEY_FILE"
-append_env AOS_UI_PUSH_VAPID_SUBJECT "$SUBJECT"
+append_env HARNESS_GW_PUSH_STATE_DIR "$STATE_DIR"
+append_env HARNESS_GW_VAPID_PRIVATE_KEY_FILE "$KEY_FILE"
+append_env HARNESS_GW_PUSH_VAPID_SUBJECT "$SUBJECT"
 append_env AOS_UI_HOST_UID "$HOST_UID"
 append_env AOS_UI_HOST_GID "$HOST_GID"
 

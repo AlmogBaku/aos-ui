@@ -1,9 +1,0 @@
-{
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "lib": ["ES2023", "ESNext.Disposable"],
-    "types": []
-  },
-  "include": ["packages/lifecycle/**/*.ts"],
-  "exclude": ["packages/lifecycle/**/*.test.ts"]
-}

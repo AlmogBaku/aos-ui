@@ -10,6 +10,7 @@
     "shared/**/*.ts",
     "shared/**/*.tsx",
     "scripts/**/*.ts",
+    "server/**/*.ts",
     "test/**/*.ts",
     "e2e/**/*.ts",
     "*.config.ts",

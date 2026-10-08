@@ -10,10 +10,10 @@ Before you change anything, establish with the operator:
 - which harness to configure, and which of its Agents should get the tools;
 - where this AOS UI checkout lives (its `shared/` directory holds the skills);
 - the tools MCP URL the harness can reach (default
-  `http://127.0.0.1:4110/mcp`); on Hermes and OpenCode the AOS proxy must
+  `http://127.0.0.1:4110/mcp`); on Hermes and OpenCode the harness-gw gateway must
   reach it too, because it reads the chart, map, and stats views itself;
 - whether to install the hidden Agent creator behind AOS's **New Agent**;
-- the operator proxy origin, if Agents should issue guest invitations.
+- the operator gateway origin, if Agents should issue guest invitations.
 
 Then:
 

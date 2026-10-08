@@ -1,3 +1,4 @@
+import { AgentUpdateError as ClientAgentUpdateError } from "@harness-gw/sdk"
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
@@ -113,8 +114,9 @@ describe("useAvatarAllocation", () => {
   })
 
   it("after an unsupported rejection nothing else is attempted", async () => {
+    // The workspace client throws its own class: the save must recognize it.
     const { update, rerender } = renderAllocation(async () => {
-      throw new AgentUpdateError("unsupported", "Avatars are not stored")
+      throw new ClientAgentUpdateError("unsupported", "Avatars are not stored")
     })
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
 

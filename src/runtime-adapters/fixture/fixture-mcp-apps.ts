@@ -1,6 +1,6 @@
 import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js"
 
-import { viewerFileResult, type McpAppView } from "@aos/protocol/mcp-apps"
+import { viewerFileResult, type McpAppView } from "@harness-gw/sdk/protocol"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
   FIXTURE_MCP_APP_FILES_PATH,

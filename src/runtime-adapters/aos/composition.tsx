@@ -24,12 +24,20 @@ import type {
   RuntimeAdapterDefinition,
   RuntimeAdapterProps,
 } from "../definition"
-import { createAcpApprovals } from "./acp/acp-approvals"
-import { createAcpInteractions } from "./acp/acp-interactions"
+import {
+  createAcpApprovals,
+  createAcpInteractions,
+  createAcpWorkspaceClient,
+  createAcpConnection,
+  acpSocketUrl,
+} from "@harness-gw/sdk"
+import { HGW_ACP_PATH } from "@harness-gw/sdk/protocol"
+import {
+  tabAcpLogger,
+  tabConnectionOptions,
+  watchTabBuild,
+} from "@/runtime-adapters/aos/acp/tab"
 import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
-import { createAcpWorkspaceClient } from "./acp/acp-workspace-client"
-import { createAcpConnection } from "./acp/connection"
-import { tabAcpLogger } from "./acp/log"
 
 // Lazy logger for background error reporting in this module.
 let _compositionLog: ReturnType<typeof tabAcpLogger> | undefined
@@ -45,7 +53,6 @@ import {
   useAosComposerFeatures,
   useAosSessionCapabilities,
 } from "./aos-composer-features"
-import { AosRemoteClient } from "./aos-client"
 import {
   createBrowserPushPlatform,
   createPushSubscriptionManager,
@@ -56,6 +63,7 @@ import {
   applyComposerPrefill,
   rewindSource,
 } from "./conversation-controls"
+import { createGatewayClient } from "./gateway-client"
 import { useConnectionOutage } from "./use-connection-outage"
 
 /**
@@ -80,7 +88,7 @@ function ReadyAosRuntimeProvider({
   config,
   locale,
 }: RuntimeAdapterProps<"aos">) {
-  const rest = useMemo(() => new AosRemoteClient(), [])
+  const rest = useMemo(() => createGatewayClient(), [])
   // Only an operator workspace with the real proxy client can subscribe this
   // device; every other surface simply has no manager.
   const push = useMemo(
@@ -95,10 +103,9 @@ function ReadyAosRuntimeProvider({
   const connection = useMemo(
     () =>
       createAcpConnection({
+        url: acpSocketUrl(HGW_ACP_PATH, globalThis.location.href),
         clientInfo: CLIENT_INFO,
-        logger: tabAcpLogger(),
-        reload: () => globalThis.location.reload(),
-        storage: globalThis.sessionStorage,
+        ...tabConnectionOptions(),
       }),
     []
   )
@@ -109,8 +116,10 @@ function ReadyAosRuntimeProvider({
   useEffect(() => {
     connectionMounted.current = true
     connection.start()
+    const unwatchBuild = watchTabBuild(connection)
     return () => {
       connectionMounted.current = false
+      unwatchBuild()
       // Strict Mode immediately replays effects while preserving hook state.
       // Dispose only if this instance is still unmounted after that replay.
       queueMicrotask(() => {

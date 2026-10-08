@@ -5,9 +5,9 @@ import {
   type PushInfo,
   type PushLocale,
   type PushRegistration,
-} from "@aos/protocol/push"
+} from "@harness-gw/sdk/protocol"
+import { OPEN_ACK_MESSAGE_TYPE, OPEN_MESSAGE_TYPE } from "@/sw/open-messages"
 
-import { OPEN_ACK_MESSAGE_TYPE, OPEN_MESSAGE_TYPE } from "@aos/protocol/push"
 import type { BrowserPermission, BrowserPreferences } from "./policy"
 
 /**

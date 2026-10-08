@@ -4,13 +4,13 @@ import { describe, expect, it, vi } from "vitest"
 import {
   INTERACTION_PROTOCOL,
   type SessionModelUpdateResponse,
-} from "@aos/protocol"
-
+} from "@harness-gw/sdk/protocol"
 import type {
-  AosContext,
-  AosModelChoices,
-  AosWorkspaceCapabilities,
-} from "./aos-client"
+  HgwContext,
+  HgwModelChoices,
+  HgwWorkspaceCapabilities,
+} from "@harness-gw/sdk"
+
 import {
   useAosComposerFeatures,
   useAosSessionCapabilities,
@@ -18,7 +18,7 @@ import {
 } from "./aos-composer-features"
 import { sessionCapabilities } from "./test-capabilities"
 
-function capabilities(): AosWorkspaceCapabilities {
+function capabilities(): HgwWorkspaceCapabilities {
   return sessionCapabilities({
     workspace: {
       slashCommands: {
@@ -93,7 +93,7 @@ const CAPABILITIES = capabilities()
 
 const EFFORTS = [{ id: "low" }, { id: "medium" }, { id: "high" }]
 
-const CHOICES: AosModelChoices = {
+const CHOICES: HgwModelChoices = {
   selectedId: "a",
   effortId: "medium",
   options: [
@@ -103,9 +103,9 @@ const CHOICES: AosModelChoices = {
 }
 
 type Projection = {
-  capabilities?: AosWorkspaceCapabilities
-  models?: Record<string, AosModelChoices>
-  context?: AosContext
+  capabilities?: HgwWorkspaceCapabilities
+  models?: Record<string, HgwModelChoices>
+  context?: HgwContext
 }
 
 type Write = {

@@ -1,3 +1,6 @@
+# Runs the Vite dev server in place of the web server, behind the same Caddy
+# site. It serves the operator surface only, so a harness overlay's guest lane
+# answers 502 here; use the production web target to try the guest page.
 services:
   web:
     build:
@@ -9,8 +12,12 @@ services:
       - --
       - --host
       - 0.0.0.0
+      - --port
+      - "4200"
     environment:
       AOS_UI_RUNTIME_CONFIG_FILE: /run/aos-ui/runtime-config.json
+      # Only a harness overlay runs the gateway; fixture mode never calls it.
+      AOS_UI_GATEWAY_TARGET: http://gateway:4100
     configs:
       - source: runtime-config
         target: /run/aos-ui/runtime-config.json

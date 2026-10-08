@@ -61,10 +61,7 @@ it("starts the operator workspace import while the selected runtime import is pe
 it.each([
   {
     name: "guest",
-    configuration: {
-      surface: "guest",
-      basePath: "/api/guest/v1",
-    },
+    configuration: { surface: "guest" },
   },
   { name: "unavailable", configuration: { mode: "unsupported" } },
 ])(

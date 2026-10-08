@@ -9,18 +9,19 @@ import type { MessageStatus, ThreadMessageLike } from "@assistant-ui/core"
 import type { z } from "zod"
 
 import {
-  AOS_PLAN_ID,
-  AOS_STOP_REASONS,
-  AosArtifactDescriptorSchema,
-  AosChunkMetaSchema,
-  AosMessageMetaSchema,
-  AosNoticeMetaSchema,
-  AosPlanMetaSchema,
-  AosStateMetaSchema,
-  AosToolCallMetaSchema,
-  AosTurnMetaSchema,
+  HGW_PLAN_ID,
+  HGW_STOP_REASONS,
+  HgwArtifactDescriptorSchema,
+  HgwChunkMetaSchema,
+  HgwMessageMetaSchema,
+  HgwNoticeMetaSchema,
+  HgwPlanMetaSchema,
+  HgwStateMetaSchema,
+  HgwToolCallMetaSchema,
+  HgwTurnMetaSchema,
   parseArtifactUri,
-} from "@aos/protocol/acp"
+} from "@harness-gw/sdk/protocol"
+import { isSettledApproval, type AcpApproval } from "@harness-gw/sdk"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import {
@@ -31,7 +32,6 @@ import {
 } from "@/lib/message-parts"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
-import { isSettledApproval, type AcpApproval } from "./acp-approvals"
 import {
   appendBlock,
   appendData,
@@ -303,7 +303,7 @@ const isHostedStatus = (part: ProjectedMessage["parts"][number]) =>
  * call it opened in an earlier run segment — the answered question is the one
  * that waits longest — and the update naming that turn is the one thing it can
  * no longer name. Its id is enough, so the owner is resolved first, and nothing
- * arrives twice under two titles. `_meta.aos` places a call this transcript has
+ * arrives twice under two titles. `_meta.hgw` places a call this transcript has
  * not seen yet; without it, the latest turn.
  */
 function applyToolCall(
@@ -313,7 +313,7 @@ function applyToolCall(
 ): ProjectorState {
   const patch = toolPatch(update)
   if (!patch) return state
-  const parsed = AosToolCallMetaSchema.safeParse(meta)
+  const parsed = HgwToolCallMetaSchema.safeParse(meta)
   const aos = parsed.success ? parsed.data : undefined
   const toolMeta = toolMetaPatch(aos)
   const owner = toolCallOwner(state.messages, patch.toolCallId)
@@ -331,7 +331,7 @@ function applyToolCall(
   )
 }
 
-type ToolMeta = z.infer<typeof AosToolCallMetaSchema>
+type ToolMeta = z.infer<typeof HgwToolCallMetaSchema>
 
 function toolMetaPatch(aos: ToolMeta | undefined): ToolMetaPatch {
   if (!aos) return {}
@@ -510,7 +510,7 @@ function applyCompaction(
     return onMessage(state, placed.id, placed.role, (message) =>
       replaceData(message, matches, data)
     )
-  const parsed = AosTurnMetaSchema.safeParse(meta)
+  const parsed = HgwTurnMetaSchema.safeParse(meta)
   const turnId = parsed.success ? parsed.data.turnId : state.execution.turnId
   const id =
     activeAssistantId(state) ??
@@ -566,7 +566,7 @@ function applyNotice(
   if (!title) return state
   const severity = noticeSeverity(text(update.severity))
   const description = text(update.description)
-  const parsed = AosNoticeMetaSchema.safeParse(meta)
+  const parsed = HgwNoticeMetaSchema.safeParse(meta)
   const kind = parsed.success ? parsed.data.kind : undefined
   const data: AosNotice = {
     severity,
@@ -665,8 +665,8 @@ function applyIdle(
   const reported = reportedFailure(state, carried.turnId)
   const failed =
     reported !== undefined ||
-    stopReason === AOS_STOP_REASONS.error ||
-    stopReason === AOS_STOP_REASONS.uncertain
+    stopReason === HGW_STOP_REASONS.error ||
+    stopReason === HGW_STOP_REASONS.uncertain
   const error = reported ?? (failed ? errorFrom(aos) : undefined)
   const execution: ProjectorExecution = {
     status: failed ? "failed" : "idle",
@@ -757,7 +757,7 @@ function announced(before: ProjectorState, running: ProjectorState) {
 function noteStreamedTurn(state: ProjectorState, meta: unknown) {
   const { status } = state.execution
   if (status === "running" || status === "waiting-for-input") return state
-  const parsed = AosTurnMetaSchema.safeParse(meta)
+  const parsed = HgwTurnMetaSchema.safeParse(meta)
   const turnId = parsed.success ? parsed.data.turnId : undefined
   return turnId === undefined || turnId === state.streamedTurnId
     ? state
@@ -769,7 +769,7 @@ function applyState(
   update: UpdatePayload,
   meta: unknown
 ): ProjectorState {
-  const parsed = AosStateMetaSchema.safeParse(meta)
+  const parsed = HgwStateMetaSchema.safeParse(meta)
   const aos = parsed.success ? parsed.data : undefined
   const turnId = aos?.turnId ?? state.execution.turnId
   const carried = turnId === undefined ? {} : { turnId }
@@ -904,15 +904,15 @@ function merged(
   }
 }
 
-/** Only the Session's own plan is projected, and `_meta.aos` carries it. */
+/** Only the Session's own plan is projected, and `_meta.hgw` carries it. */
 function applyPlan(
   state: ProjectorState,
   update: UpdatePayload,
   meta: unknown
 ): ProjectorState {
   const plan = isRecord(update.plan) ? update.plan : undefined
-  if (plan?.planId !== AOS_PLAN_ID) return state
-  const parsed = AosPlanMetaSchema.safeParse(meta)
+  if (plan?.planId !== HGW_PLAN_ID) return state
+  const parsed = HgwPlanMetaSchema.safeParse(meta)
   return parsed.success ? { ...state, todos: parsed.data.todos } : state
 }
 
@@ -927,7 +927,7 @@ type UpdatePayload = Record<string, unknown>
  * what started it, once however often the replay restates it.
  */
 function openingTurn(message: ProjectedMessage, meta: unknown) {
-  const parsed = AosMessageMetaSchema.safeParse(meta)
+  const parsed = HgwMessageMetaSchema.safeParse(meta)
   if (!parsed.success) return message
   const { notice } = parsed.data
   const opened: ProjectedMessage = { ...message, opensTurn: true }
@@ -979,7 +979,7 @@ function linkedArtifact(block: ContentBlock) {
     return undefined
   const id = parseArtifactUri(block.uri)
   if (id === undefined) return undefined
-  const artifact = AosArtifactDescriptorSchema.safeParse({
+  const artifact = HgwArtifactDescriptorSchema.safeParse({
     id,
     filename: block.name,
     ...(block.mimeType == null ? {} : { mimeType: block.mimeType }),
@@ -998,7 +998,7 @@ function applyChunk(
   const named = text(update.messageId)
   const block = update.content
   if (named === undefined || !isContentBlock(block)) return state
-  const aos = AosChunkMetaSchema.safeParse(meta)
+  const aos = HgwChunkMetaSchema.safeParse(meta)
   if (aos.success && aos.data.subagentId !== undefined)
     return applyChild(state, { update, meta }, aos.data, named, (message) =>
       appendBlock(message, sourceOf(kind), block)
@@ -1075,7 +1075,7 @@ function applyTitle(
   return title === null ? { ...state, title: undefined } : { ...state, title }
 }
 
-/** `meta` is the update's `_meta.aos`; unknown kinds and payloads are ignored. */
+/** `meta` is the update's `_meta.hgw`; unknown kinds and payloads are ignored. */
 export function applyUpdate(
   state: ProjectorState,
   update: SessionUpdate,
@@ -1274,7 +1274,7 @@ export function failSession(
   state: ProjectorState,
   error: TurnFailure
 ): ProjectorState {
-  const ended = applyIdle(state, {}, AOS_STOP_REASONS.error, error)
+  const ended = applyIdle(state, {}, HGW_STOP_REASONS.error, error)
   return activeAssistantId(state) === undefined
     ? failLatestTurn(ended, error)
     : ended

@@ -4,12 +4,14 @@ import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice
 import type { ArtifactMessage } from "@/artifacts/artifacts"
 import type {
   CallToolResult,
+  ReadResourceResult,
+} from "@modelcontextprotocol/sdk/types.js"
+import type {
   McpAppFiles,
   McpAppView,
-  ReadResourceResult,
-} from "@aos/protocol/mcp-apps"
+  SessionPlatform,
+} from "@harness-gw/sdk/protocol"
 import type { PushSubscriptionManager } from "@/lib/notifications/push-subscription"
-import type { SessionPlatform } from "@aos/protocol"
 export type { RuntimeMode } from "@shared/runtime-modes"
 
 export type AgentStatus =
@@ -53,16 +55,10 @@ export type AgentUpdate = {
   avatar?: string | null
 }
 
-/** Actionable Agent update refusals; all other failures remain ordinary Errors. */
-export class AgentUpdateError extends Error {
-  constructor(
-    readonly code: "unsupported" | "conflict",
-    message: string
-  ) {
-    super(message)
-    this.name = "AgentUpdateError"
-  }
-}
+// Actionable Agent update refusals; all other failures remain ordinary Errors.
+// The client defines the one class every Agent update failure is an instance
+// of, so the avatar save's `instanceof` holds across the package boundary.
+export { AgentUpdateError } from "@harness-gw/sdk"
 
 export type SessionStatus =
   "idle" | "running" | "waiting-for-input" | "failed" | "unknown"

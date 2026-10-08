@@ -5,7 +5,7 @@ import globals from "globals"
 import tseslint from "typescript-eslint"
 import runtimeBoundaries from "./scripts/eslint-runtime-boundaries.mjs"
 
-/** The UI-owned MCP tool server runs beside the harness, not in the browser or proxy. */
+/** The UI-owned MCP tool server runs beside the harness, not in the browser. */
 const toolsMcpImports = [
   "packages/tools-mcp",
   "packages/tools-mcp/**",
@@ -24,18 +24,10 @@ const browserRestrictedImports = [
   "@assistant-ui/*/src/**",
 ]
 
-/** The proxy too, for production browser code; tests may compose both sides. */
-const productionBrowserRestrictedImports = [
-  ...browserRestrictedImports,
-  "packages/proxy/*",
-  "packages/proxy/**",
-  "../**/packages/proxy/**",
-]
-
 const productionBrowserPattern = {
-  group: productionBrowserRestrictedImports,
+  group: browserRestrictedImports,
   message:
-    "Browser code must not import the proxy, native implementations, or private Assistant UI internals.",
+    "Browser code must not import native implementations or private Assistant UI internals.",
 }
 
 /** The UI the browser ACP client serves, which it must never depend on. */
@@ -64,11 +56,6 @@ export default defineConfig([
     ".hermes/**",
     ".impeccable/**",
     ".worktrees/**",
-    // Upstream-verbatim files are ignored; AOS-authored files in the same
-    // directory (gateway-events.ts, snapshot.test.ts, UPSTREAM.md) are not.
-    "packages/proxy/adapters/hermes/vendor/**/json-rpc-gateway.ts",
-    "packages/proxy/adapters/hermes/vendor/**/json-rpc-channel.ts",
-    "packages/proxy/adapters/hermes/vendor/**/reconnect-backoff.ts",
   ]),
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -132,59 +119,6 @@ export default defineConfig([
     },
   },
   {
-    files: ["packages/proxy/**/*.ts"],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            {
-              group: toolsMcpImports,
-              message:
-                "The proxy must not import the tools MCP server; harnesses reach it over MCP.",
-            },
-            {
-              group: ["@aos/lifecycle", "@aos/lifecycle/*"],
-              message:
-                "The proxy imports the lifecycle package by relative path; the server image resolves no aliases.",
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
-    files: ["packages/lifecycle/**/*.ts"],
-    rules: {
-      "no-console": "error",
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            {
-              group: [
-                "node:*",
-                "bun",
-                "bun:*",
-                "@/*",
-                "src/*",
-                "src/**",
-                "../**/src/**",
-                "packages/proxy",
-                "packages/proxy/**",
-                "../proxy",
-                "../proxy/**",
-                "../**/packages/proxy/**",
-              ],
-              message:
-                "The lifecycle package stays pure: no Node, Bun, browser or proxy imports.",
-            },
-          ],
-        },
-      ],
-    },
-  },
-  {
     files: ["packages/tools-mcp/views/**/*.{ts,tsx}"],
     ignores: ["packages/tools-mcp/views/build.ts"],
     languageOptions: { globals: { ...globals.browser } },
@@ -197,19 +131,9 @@ export default defineConfig([
         {
           patterns: [
             {
-              group: [
-                "@/*",
-                "src/*",
-                "src/**",
-                "../**/src/**",
-                "packages/proxy",
-                "packages/proxy/**",
-                "../proxy",
-                "../proxy/**",
-                "../**/packages/proxy/**",
-              ],
+              group: ["@/*", "src/*", "src/**", "../**/src/**"],
               message:
-                "The tools MCP server and its views depend only on shared contracts, never on browser or proxy code.",
+                "The tools MCP server and its views depend only on shared contracts, never on browser code.",
             },
           ],
         },
@@ -304,25 +228,16 @@ export default defineConfig([
     },
   },
   {
-    // Type-aware promise rules for the proxy, lifecycle, and browser ACP adapter.
-    files: [
-      "packages/proxy/**/*.{ts,tsx}",
-      "packages/lifecycle/**/*.{ts,tsx}",
-      "src/runtime-adapters/**/*.{ts,tsx}",
-    ],
+    // Type-aware promise rules for the web server and the browser runtime adapters.
+    files: ["server/**/*.ts", "src/runtime-adapters/**/*.{ts,tsx}"],
     ignores: ["**/*.test.{ts,tsx}", "**/*.bun-spec.ts"],
     languageOptions: {
       parserOptions: {
         projectService: {
           // allowDefaultProject covers the virtual lintText paths used in the
           // architecture test that do not exist on disk. Real source files are
-          // discoverable through packages/proxy/tsconfig.json,
-          // packages/lifecycle/tsconfig.json, and the root tsconfig.json.
+          // discoverable through the root tsconfig.json.
           allowDefaultProject: [
-            "packages/proxy/example.ts",
-            "packages/proxy/acp/example.ts",
-            "packages/proxy/core/example.ts",
-            "packages/lifecycle/example.ts",
             "src/components/example.tsx",
             "src/components/example.test.tsx",
             "src/runtime-adapters/fixture/example.ts",

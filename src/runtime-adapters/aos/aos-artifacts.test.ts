@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
 
 import { AosArtifactAdapter } from "./aos-artifacts"
-import { AosClientError, AosRemoteClient } from "./aos-client"
+import { HgwClientError, HgwRemoteClient } from "@harness-gw/sdk"
 
 describe("AOS artifact resolver", () => {
   it("resolves the history-bound artifact reference directly in its selected Session", async () => {
@@ -51,7 +51,7 @@ describe("AOS artifact resolver", () => {
   })
 
   it("presents bytes the provider pruned apart from a provider outage", async () => {
-    const resolveWith = (error: AosClientError) =>
+    const resolveWith = (error: HgwClientError) =>
       new AosArtifactAdapter({
         readArtifact: vi.fn(async () => {
           throw error
@@ -69,11 +69,11 @@ describe("AOS artifact resolver", () => {
       })
 
     await expect(
-      resolveWith(new AosClientError("artifact-missing", "Artifact not found"))
+      resolveWith(new HgwClientError("artifact-missing", "Artifact not found"))
     ).rejects.toBeInstanceOf(ArtifactMissingError)
     await expect(
-      resolveWith(new AosClientError("provider-unavailable"))
-    ).rejects.toBeInstanceOf(AosClientError)
+      resolveWith(new HgwClientError("provider-unavailable"))
+    ).rejects.toBeInstanceOf(HgwClientError)
   })
 
   describe("reading a linked artifact through the lane's own client", () => {
@@ -91,7 +91,7 @@ describe("AOS artifact resolver", () => {
             headers: { "content-type": "text/markdown" },
           })
       )
-    const resolve = (client: AosRemoteClient, sessionId: string) =>
+    const resolve = (client: HgwRemoteClient, sessionId: string) =>
       new AosArtifactAdapter(client).resolve({
         artifact: linked,
         agentId: "researcher",
@@ -101,13 +101,13 @@ describe("AOS artifact resolver", () => {
 
     it("reads an operator's artifact from its Session with same-origin credentials", async () => {
       const fetch = fetcher()
-      const client = new AosRemoteClient({ fetcher: fetch })
+      const client = new HgwRemoteClient({ fetcher: fetch })
       client.adoptSessionOwnership("session-1", "researcher")
 
       await expect(resolve(client, "session-1")).resolves.toBeInstanceOf(Blob)
       const [input, init] = fetch.mock.calls[0]!
       expect(String(input)).toBe(
-        "/api/aos/v1/agents/researcher/sessions/session-1/artifacts/art-1"
+        "/api/v1/agents/researcher/sessions/session-1/artifacts/art-1"
       )
       expect(init?.credentials).toBe("same-origin")
       expect(new Headers(init?.headers).has("authorization")).toBe(false)

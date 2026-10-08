@@ -24,7 +24,7 @@ const domTests = [
   "src/lib/notifications/browser-platform.test.ts",
   "src/lib/notifications/push-subscription.test.ts",
   "src/lib/notifications/sound.test.ts",
-  "src/runtime-adapters/aos/acp/connection.test.ts",
+  "src/runtime-adapters/aos/gateway-client.test.ts",
   "src/runtime-adapters/aos/use-connection-outage.test.ts",
 ]
 
@@ -46,26 +46,6 @@ export default defineConfig({
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
-      "@aos/protocol/acp": path.resolve(
-        import.meta.dirname,
-        "packages/protocol/acp.ts"
-      ),
-      "@aos/protocol/push": path.resolve(
-        import.meta.dirname,
-        "packages/protocol/push.ts"
-      ),
-      "@aos/protocol/mcp-apps": path.resolve(
-        import.meta.dirname,
-        "packages/protocol/mcp-apps.ts"
-      ),
-      "@aos/protocol": path.resolve(
-        import.meta.dirname,
-        "packages/protocol/index.ts"
-      ),
-      "@aos/lifecycle": path.resolve(
-        import.meta.dirname,
-        "packages/lifecycle/index.ts"
-      ),
     },
   },
   // Every setting here, plugins and aliases included, is inherited by both

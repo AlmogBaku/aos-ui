@@ -52,20 +52,23 @@ import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import type { Locale } from "@/lib/i18n/config"
 import { runErrorMessage } from "@/lib/i18n/run-errors"
-import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
 import {
-  AOS_ACP_GUEST_PATH,
-  AosAvailableCommandsMetaSchema,
-} from "@aos/protocol/acp"
-import { createAcpApprovals } from "./acp/acp-approvals"
-import { createAcpInteractions } from "./acp/acp-interactions"
+  HGW_ACP_PATH,
+  HGW_API_PREFIX,
+  HgwAvailableCommandsMetaSchema,
+} from "@harness-gw/sdk/protocol"
 import {
+  createAcpApprovals,
+  createAcpInteractions,
   acpSocketUrl,
   createAcpConnection,
   isAuthenticationRequired,
-} from "./acp/connection"
-import { tabAcpLogger } from "./acp/log"
-import type { AcpConnection } from "./acp/types"
+  type AcpConnection,
+} from "@harness-gw/sdk"
+import {
+  tabConnectionOptions,
+  watchTabBuild,
+} from "@/runtime-adapters/aos/acp/tab"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -73,12 +76,12 @@ import {
 } from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
 import { AosMcpAppAdapter } from "./aos-mcp-apps"
-import { AosRemoteClient } from "./aos-client"
 import {
   aosMessageRewind,
   applyComposerPrefill,
   rewindSource,
 } from "./conversation-controls"
+import { createGatewayClient } from "./gateway-client"
 import {
   type ConnectionNotice,
   useConnectionOutage,
@@ -97,7 +100,7 @@ const CLIENT_INFO = { name: "aos-ui-guest", version: "1" }
 
 /** What the invited Session reports it supports, beside its commands. */
 type GuestSessionCapabilities = z.infer<
-  typeof AosAvailableCommandsMetaSchema
+  typeof HgwAvailableCommandsMetaSchema
 >["capabilities"]
 
 /**
@@ -142,10 +145,9 @@ function failureOf(cause: unknown): GuestFailure {
 /** The gateway, not decoded bearer claims, selects the guest's public scope. */
 export async function fetchGuestRuntimeContext(
   fetcher: typeof fetch,
-  basePath: string,
   inviteToken: string
 ): Promise<GuestRuntimeContext> {
-  const response = await fetcher(`${basePath}/runtime`, {
+  const response = await fetcher(`${HGW_API_PREFIX}/runtime`, {
     credentials: "same-origin",
     headers: {
       accept: "application/json",
@@ -362,13 +364,11 @@ function GuestVoiceState({
 }
 
 function ReadyGuestAosSurface({
-  config,
   connection,
   context,
   inviteToken,
   locale,
 }: {
-  config: GuestSurfaceConfiguration
   connection: AcpConnection
   context: GuestRuntimeContext
   inviteToken: string
@@ -381,14 +381,13 @@ function ReadyGuestAosSurface({
   const brandName = context.ui?.name ?? "AOS"
   const logoUrl = context.ui?.logoUrl ?? "/logo-adaptive.svg"
   const rest = useMemo(() => {
-    const client = new AosRemoteClient({
-      basePath: config.basePath,
+    const client = createGatewayClient({
       authorization: `Bearer ${inviteToken}`,
     })
     // REST authorizes byte reads per Agent; the invitation names the owner.
     client.adoptSessionOwnership(sessionId, agentId)
     return client
-  }, [agentId, config.basePath, inviteToken, sessionId])
+  }, [agentId, inviteToken, sessionId])
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
   const artifacts = useMemo(() => new AosArtifactAdapter(rest), [rest])
   const mcpApps = useMemo(() => new AosMcpAppAdapter(rest), [rest])
@@ -408,7 +407,7 @@ function ReadyGuestAosSurface({
       connection.subscribe(sessionId, {
         update: (update, meta) => {
           if (!SessionUpdate.isAvailableCommandsUpdate(update)) return
-          const reported = AosAvailableCommandsMetaSchema.safeParse(meta)
+          const reported = HgwAvailableCommandsMetaSchema.safeParse(meta)
           if (reported.success) setCapabilities(reported.data.capabilities)
         },
       }),
@@ -575,15 +574,13 @@ type GuestAttempt = { key: string } & (
 )
 
 export function GuestAosSurface({
-  config,
   inviteToken,
   locale,
 }: {
-  config: GuestSurfaceConfiguration
   inviteToken?: string
   locale: Locale
 }) {
-  const contextKey = `${config.basePath}\u0000${inviteToken ?? ""}`
+  const contextKey = inviteToken ?? ""
   const [attempt, setAttempt] = useState(0)
   const [loaded, setLoaded] = useState<GuestAttempt>(() =>
     inviteToken
@@ -595,21 +592,16 @@ export function GuestAosSurface({
     if (!inviteToken) return
     let disposed = false
     const connection = createAcpConnection({
-      url: acpSocketUrl(AOS_ACP_GUEST_PATH),
+      url: acpSocketUrl(HGW_ACP_PATH, globalThis.location.href),
       clientInfo: CLIENT_INFO,
-      logger: tabAcpLogger(),
-      reload: () => globalThis.location.reload(),
-      storage: globalThis.sessionStorage,
+      ...tabConnectionOptions(),
     })
     connection.start()
+    const unwatchBuild = watchTabBuild(connection)
     // The verified presentation context and the redeemed invitation together
     // make the conversation reachable; neither alone opens it.
     const open = async () => {
-      const resolved = await fetchGuestRuntimeContext(
-        fetch,
-        config.basePath,
-        inviteToken
-      )
+      const resolved = await fetchGuestRuntimeContext(fetch, inviteToken)
       await connection.initialized
       await connection.login(inviteToken)
       return resolved
@@ -636,9 +628,10 @@ export function GuestAosSurface({
     )
     return () => {
       disposed = true
+      unwatchBuild()
       connection.close()
     }
-  }, [attempt, config.basePath, contextKey, inviteToken])
+  }, [attempt, contextKey, inviteToken])
 
   if (!inviteToken) return <GuestNotice locale={locale} failure="inactive" />
   const current = loaded.key === contextKey ? loaded : undefined
@@ -664,7 +657,6 @@ export function GuestAosSurface({
     )
   return (
     <ReadyGuestAosSurface
-      config={config}
       connection={current.connection}
       context={current.context}
       inviteToken={inviteToken}

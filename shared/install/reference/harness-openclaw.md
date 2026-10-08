@@ -16,8 +16,8 @@ openclaw config validate
 openclaw mcp show aos-ui --json
 ```
 
-The AOS proxy turns the server on for each Session it runs, which requires the
-proxy's device to hold `operator.admin`. Charts, maps, and stats are MCP App
+The harness-gw gateway turns the server on for each Session it runs, which requires the
+gateway's device to hold `operator.admin`. Charts, maps, and stats are MCP App
 views, which the Gateway serves only with MCP Apps on; with the operator's
 go-ahead, run `openclaw config set mcp.apps.enabled true` and
 `openclaw config validate`. The Gateway picks up the new server
@@ -34,7 +34,7 @@ cp -R <checkout>/shared/invite-link <workspace>/skills/aos-invite-link
 openclaw skills list --agent <agent> --json
 ```
 
-For `aos-invite-link`, set `AOS_RUNTIME_PROXY_URL` to the operator proxy
+For `aos-invite-link`, set `AOS_RUNTIME_PROXY_URL` to the operator gateway
 origin in the Gateway's environment.
 
 ## Install the creator (only if asked)

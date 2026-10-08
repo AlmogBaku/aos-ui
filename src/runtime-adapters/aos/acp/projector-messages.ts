@@ -11,7 +11,8 @@ import {
   type ToolCallTiming,
 } from "@assistant-ui/core"
 
-import type { AosSubagent } from "@aos/protocol/acp"
+import type { HgwSubagent } from "@harness-gw/sdk/protocol"
+import type { AcpApproval } from "@harness-gw/sdk"
 
 import {
   permissionProviderMetadata,
@@ -22,7 +23,6 @@ import {
   type AosToolArtifact,
 } from "@/lib/tool-artifact"
 
-import type { AcpApproval } from "./acp-approvals"
 import type { ProjectedTerminal } from "./projector-terminals"
 
 /**
@@ -57,7 +57,7 @@ export type ProjectedToolCall = {
   readonly completedAt?: number
   readonly durationMs?: number
   /** The subagent this call spawned, patched by id. */
-  readonly subagent?: AosSubagent
+  readonly subagent?: HgwSubagent
   /** The subagent's own turns, keyed by its id. */
   readonly messages?: readonly ProjectedMessage[]
   /** The terminals the call's content names, as the projector last saw them. */
@@ -78,14 +78,14 @@ export type ToolCallPatch = {
   readonly rawOutput?: unknown
 }
 
-/** What `_meta.aos` adds to a call beyond its ACP fields. */
+/** What `_meta.hgw` adds to a call beyond its ACP fields. */
 export type ToolMetaPatch = {
   readonly argsText?: string
   readonly argsTextDelta?: string
   readonly startedAt?: number
   readonly completedAt?: number
   readonly durationMs?: number
-  readonly subagent?: AosSubagent
+  readonly subagent?: HgwSubagent
   readonly app?: true
 }
 
@@ -335,8 +335,8 @@ export function countChunk(message: ProjectedMessage): ProjectedMessage {
 
 /** A later report restates only what changed about the same subagent. */
 function mergeSubagent(
-  current: AosSubagent | undefined,
-  next: AosSubagent | undefined
+  current: HgwSubagent | undefined,
+  next: HgwSubagent | undefined
 ) {
   if (next === undefined) return current
   return current?.id === next.id ? { ...current, ...next } : next

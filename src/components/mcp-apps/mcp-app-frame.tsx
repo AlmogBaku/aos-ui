@@ -19,7 +19,7 @@ import {
   McpAppResourceReadRequestSchema,
   McpAppToolCallRequestSchema,
   type McpAppView,
-} from "@aos/protocol/mcp-apps"
+} from "@harness-gw/sdk/protocol"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 import { cn } from "@/lib/utils"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"

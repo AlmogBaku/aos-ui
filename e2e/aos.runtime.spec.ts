@@ -11,7 +11,7 @@ import { expect, test, type Page } from "./test"
 const AGENT_ID = "research"
 const SESSION_ID = "session-1"
 const TURN_ID = "run-1"
-const ACP_PATH = "/api/aos/v1/acp"
+const ACP_PATH = "/api/v1/acp"
 /** A prompt the scripted provider leaves running until it is cancelled. */
 const PENDING_PROMPT = "Keep running until I stop it"
 /** A prompt the scripted provider answers with `vocabularyTurn`. */
@@ -66,7 +66,7 @@ const slashCommands = Array.from({ length: 30 }, (_, index) => ({
   description: `Command ${index}`,
 }))
 
-/** What `available_commands_update` carries as `_meta.aos.capabilities`. */
+/** What `available_commands_update` carries as `_meta.hgw.capabilities`. */
 const sessionCapabilities = {
   workspace: {
     slashCommands: {
@@ -158,12 +158,12 @@ const TOOL_CLOCK = Date.parse("2026-09-12T00:00:00.000Z")
 /** An instant `ms` after the scripted tools started. */
 const toolTime = (ms: number) => new Date(TOOL_CLOCK + ms).toISOString()
 /** Tool updates hang off the answer the turn is writing. */
-const onAnswer = (aos: Record<string, unknown> = {}) => ({
-  aos: { messageId: VOCABULARY_ANSWER_ID, ...aos },
+const onAnswer = (hgw: Record<string, unknown> = {}) => ({
+  hgw: { messageId: VOCABULARY_ANSWER_ID, ...hgw },
 })
 
 /**
- * One turn in the wire shapes `packages/proxy/acp/translate/turn-events.ts`
+ * One turn in the wire shapes harness-gw's `src/acp/translate/turn-events.ts`
  * emits: an edit with its location and diff, a command with a live terminal, a
  * compaction, a subagent with its own Session, a provider model switch, and a
  * length stop that reports its usage and cost.
@@ -306,13 +306,13 @@ const vocabularyTurn = [
       totalTokens: 15_400,
       cachedReadTokens: 6_000,
     },
-    _meta: { aos: { cost: { amount: 0.25, currency: "USD" } } },
+    _meta: { hgw: { cost: { amount: 0.25, currency: "USD" } } },
   },
 ]
 
 /**
  * `session/request_permission` params in the shape `permissionOutbound` in
- * `packages/proxy/acp/translate/requests.ts` builds: the schema title names the
+ * harness-gw's `src/acp/translate/requests.ts` builds: the schema title names the
  * operation, the message explains it, and a request that knows its tool call
  * names it as the subject.
  */
@@ -335,7 +335,7 @@ function permissionRequest(requestId: string, toolCallId?: string) {
       { optionId: "once", name: "Allow once", kind: "allow_once" },
       { optionId: "deny", name: "Deny", kind: "reject_once" },
     ],
-    _meta: { aos: { requestId, message } },
+    _meta: { hgw: { requestId, message } },
   }
 }
 
@@ -361,9 +361,9 @@ const script = {
   },
   guardedPermission: permissionRequest("permission-1", GUARDED_TOOL_CALL_ID),
   standalonePermission: permissionRequest("permission-2"),
-  /** `InitializeResponse._meta.aos` for the operator role. */
+  /** `InitializeResponse._meta.hgw` for the operator role. */
   initializeMeta: {
-    // The AOS extension's own version, not ACP's `protocolVersion`.
+    // The hgw extension's own version, not ACP's `protocolVersion`.
     version: 1,
     role: "operator",
     extensions: {
@@ -404,7 +404,7 @@ const script = {
       title: "Research",
       updatedAt: "2026-09-12T00:00:00.000Z",
       _meta: {
-        aos: {
+        hgw: {
           agentId: AGENT_ID,
           status: "idle",
           archived: false,
@@ -446,7 +446,7 @@ const script = {
   ],
   /**
    * A history too long for one replay: a from-start resume sends only its
-   * newest page, and each `_aos/before` read sends the page before its cursor,
+   * newest page, and each `_hgw/before` read sends the page before its cursor,
    * held until the test calls `__acpStub.releasePage()`.
    */
   pagedHistory: null as PagedHistory | null,
@@ -461,12 +461,12 @@ const script = {
   },
   reply: ["Streamed by AOS.", "Both chunks arrived."],
   // 42k of a 200k window, attributed the way a provider reports it: the counts
-  // are ACP's own fields, the attribution is the AOS extension's meta.
+  // are ACP's own fields, the attribution is the hgw extension's meta.
   usage: {
     used: 42_000,
     size: 200_000,
     _meta: {
-      aos: {
+      hgw: {
         source: "provider-usage",
         breakdown: {
           systemTokens: 8_000,
@@ -488,7 +488,7 @@ type AcpReply = { method: string; result?: unknown; error?: unknown }
 type ResumeParams = {
   sessionId: string
   replayFrom?: { type: string }
-  _meta?: { aos?: { agentId?: string; after?: number; turnId?: string } }
+  _meta?: { hgw?: { agentId?: string; after?: number; turnId?: string } }
 }
 
 declare global {
@@ -500,14 +500,14 @@ declare global {
       replies: AcpReply[]
       /** How many transports the browser has opened. */
       connections: number
-      /** The newest `_meta.aos.sequence` the stub has emitted. */
+      /** The newest `_meta.hgw.sequence` the stub has emitted. */
       sequence: number
       /**
        * Closes the live transport with a close code: 1006 by default, as a
        * proxy restart would, or 1013 as a proxy at capacity would.
        */
       dropSocket: (code?: number) => void
-      /** Sends the held `_aos/before` page, if one is waiting. */
+      /** Sends the held `_hgw/before` page, if one is waiting. */
       releasePage: () => void
       /** Answers the held positioned resume, if one is waiting. */
       releaseRejoin: () => void
@@ -657,11 +657,11 @@ function installAcpStub(script: AcpScript) {
     /** One run-stream `session/update`, carrying its position in the run. */
     run(update: Record<string, unknown>) {
       stub.sequence += 1
-      const aos = asRecord(asRecord(update._meta).aos)
+      const hgw = asRecord(asRecord(update._meta).hgw)
       this.update({
         ...update,
         _meta: {
-          aos: { ...aos, sequence: stub.sequence, turnId: script.turnId },
+          hgw: { ...hgw, sequence: stub.sequence, turnId: script.turnId },
         },
       })
     }
@@ -674,7 +674,7 @@ function installAcpStub(script: AcpScript) {
       const { session, capabilities } = script.restated
       this.update({
         sessionUpdate: "session_info_update",
-        _meta: { aos: session },
+        _meta: { hgw: session },
       })
       this.update({
         sessionUpdate: "config_option_update",
@@ -683,7 +683,7 @@ function installAcpStub(script: AcpScript) {
       this.update({
         sessionUpdate: "available_commands_update",
         availableCommands: capabilities.workspace.slashCommands.commands,
-        _meta: { aos: { capabilities } },
+        _meta: { hgw: { capabilities } },
       })
     }
 
@@ -697,7 +697,7 @@ function installAcpStub(script: AcpScript) {
         sessionUpdate: role === "user" ? "user_message" : "agent_message",
         messageId,
         content: [{ type: "text", text }],
-        ...(meta ? { _meta: { aos: meta } } : {}),
+        ...(meta ? { _meta: { hgw: meta } } : {}),
       })
     }
 
@@ -721,29 +721,29 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("initialize", (_params, id) =>
         this.respond(id, {
           protocolVersion: 2,
-          info: { name: "aos-proxy-stub", version: "1" },
+          info: { name: "harness-gw-stub", version: "1" },
           capabilities: {},
           authMethods: [],
-          _meta: { aos: script.initializeMeta },
+          _meta: { hgw: script.initializeMeta },
         })
       )
-      this.handlers.set("_aos/agents/list", (_params, id) =>
+      this.handlers.set("_hgw/agents/list", (_params, id) =>
         this.respond(id, script.agentCatalog)
       )
       this.handlers.set("session/list", (_params, id) =>
         this.respond(id, { sessions: script.sessions })
       )
       // A resume from the start replays the stored turns; a resume positioned
-      // by `_meta.aos.after` reports only what the dropped transport missed.
+      // by `_meta.hgw.after` reports only what the dropped transport missed.
       this.handlers.set("session/resume", (params, id) => {
         // A subagent's own Session opens with nothing stored.
         if (params.sessionId !== script.sessionId)
-          return this.respond(id, { _meta: { aos: {} } })
+          return this.respond(id, { _meta: { hgw: {} } })
         const replayFrom = asRecord(params.replayFrom)
         const paged = script.pagedHistory
         // An older page is its own read: tagged updates and a cursor, with no
         // resume, so neither the configuration nor the window is restated.
-        if (paged && replayFrom.type === "_aos/before") {
+        if (paged && replayFrom.type === "_hgw/before") {
           const cursor = String(replayFrom.cursor)
           const offset = Number(cursor.replace("offset-", ""))
           stub.releasePage = () => {
@@ -751,13 +751,13 @@ function installAcpStub(script: AcpScript) {
             const history = this.historyPage(paged, offset, {
               historyPage: { cursor },
             })
-            this.respond(id, { _meta: { aos: { history } } })
+            this.respond(id, { _meta: { hgw: { history } } })
           }
           return
         }
         if (paged && replayFrom.type === "start") {
           const history = this.historyPage(paged, 0)
-          this.respond(id, { _meta: { aos: { history } } })
+          this.respond(id, { _meta: { hgw: { history } } })
           this.restate()
           return
         }
@@ -771,7 +771,7 @@ function installAcpStub(script: AcpScript) {
               script.recovered.messageId,
               script.recovered.text
             )
-          this.respond(id, { _meta: { aos: {} } })
+          this.respond(id, { _meta: { hgw: {} } })
           this.restate()
           this.update({ sessionUpdate: "usage_update", ...script.usage })
         }
@@ -821,7 +821,7 @@ function installAcpStub(script: AcpScript) {
         // `requiresActionOutbound` does: the wait, then the request.
         if (promptText(params).includes(script.guardedPermissionPrompt)) {
           const call = script.guardedToolCall
-          this.run({ ...call, _meta: { aos: { messageId: answerId } } })
+          this.run({ ...call, _meta: { hgw: { messageId: answerId } } })
           this.run({ sessionUpdate: "state_update", state: "requires_action" })
           this.request(
             "session/request_permission",
@@ -832,7 +832,7 @@ function installAcpStub(script: AcpScript) {
                 toolCallId: call.toolCallId,
                 status: "completed",
                 rawOutput: "removed",
-                _meta: { aos: { messageId: answerId } },
+                _meta: { hgw: { messageId: answerId } },
               })
               settle()
             }
@@ -885,8 +885,8 @@ function installAcpStub(script: AcpScript) {
         busy = false
         this.respond(id, {})
       })
-      // _aos/session/part detaches this connection only; work continues.
-      this.handlers.set("_aos/session/part", (_params, id) =>
+      // _hgw/session/part detaches this connection only; work continues.
+      this.handlers.set("_hgw/session/part", (_params, id) =>
         this.respond(id, {})
       )
       this.handlers.set("session/set_config_option", (params, id) => {
@@ -899,24 +899,24 @@ function installAcpStub(script: AcpScript) {
         this.respond(id, { configOptions })
         this.update({ sessionUpdate: "config_option_update", configOptions })
       })
-      this.handlers.set("_aos/session/update", (_params, id) =>
+      this.handlers.set("_hgw/session/update", (_params, id) =>
         this.respond(id, {})
       )
       // Focus is a request; the browser waits for an acknowledgement.
-      this.handlers.set("_aos/session/focus", (_params, id) =>
+      this.handlers.set("_hgw/session/focus", (_params, id) =>
         this.respond(id, {})
       )
       // A new Session's answer carries only its id; the row arrives as
       // session_info_update so the workspace sees it without a resume.
       this.handlers.set("session/new", (params, id) => {
         const newSessionId = crypto.randomUUID()
-        const aosMeta =
+        const hgwMeta =
           typeof params._meta === "object" && params._meta !== null
-            ? (params._meta as Record<string, unknown>).aos
+            ? (params._meta as Record<string, unknown>).hgw
             : undefined
         const agentId =
-          typeof aosMeta === "object" && aosMeta !== null
-            ? String((aosMeta as Record<string, unknown>).agentId ?? AGENT_ID)
+          typeof hgwMeta === "object" && hgwMeta !== null
+            ? String((hgwMeta as Record<string, unknown>).agentId ?? AGENT_ID)
             : AGENT_ID
         this.respond(id, { sessionId: newSessionId })
         this.notify("session/update", {
@@ -924,7 +924,7 @@ function installAcpStub(script: AcpScript) {
           update: {
             sessionUpdate: "session_info_update",
             _meta: {
-              aos: { agentId, status: "idle", archived: false, unread: false },
+              hgw: { agentId, status: "idle", archived: false, unread: false },
             },
           },
         })
@@ -950,7 +950,7 @@ async function serveAcp(page: Page, overrides: Partial<AcpScript> = {}) {
   )
   // The runtime read and the push status probe are the only REST routes this
   // journey needs; the real proxy answers the probe even without push set up.
-  await page.route("**/api/aos/v1/**", (route) => {
+  await page.route("**/api/v1/**", (route) => {
     const { pathname } = new URL(route.request().url())
     if (pathname.endsWith("/runtime")) return route.fulfill({ json: runtime })
     if (pathname.endsWith("/push"))
@@ -1039,9 +1039,9 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   // The exposed Session is reported to the proxy, which owns read state, along
   // with this connection's presence for push delivery.
   await expect
-    .poll(() => recorded(page, "_aos/session/focus"))
+    .poll(() => recorded(page, "_hgw/session/focus"))
     .toContainEqual({
-      method: "_aos/session/focus",
+      method: "_hgw/session/focus",
       params: { sessionId: SESSION_ID, foreground: true, idle: false },
     })
 
@@ -1055,7 +1055,7 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
     .poll(async () => (await recorded(page, "initialize")).length)
     .toBe(2)
   await expect
-    .poll(async () => (await resumes(page)).at(-1)?._meta?.aos)
+    .poll(async () => (await resumes(page)).at(-1)?._meta?.hgw)
     .toEqual({ agentId: AGENT_ID, after: sequence, turnId: TURN_ID })
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
 })
@@ -1155,7 +1155,7 @@ test("AOS proxy loads a long Session's earlier messages as the reader scrolls up
 
   const pageReads = async () =>
     (await resumes(page)).filter(
-      (call) => call.replayFrom?.type === "_aos/before"
+      (call) => call.replayFrom?.type === "_hgw/before"
     ).length
   // The message nearest the top of the thread that the reader can see whole.
   const firstInView = () =>
@@ -1211,7 +1211,7 @@ test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, st
         title: "Pricing page check",
         updatedAt: "2026-09-11T00:00:00.000Z",
         _meta: {
-          aos: {
+          hgw: {
             agentId: AGENT_ID,
             status: "idle",
             archived: false,

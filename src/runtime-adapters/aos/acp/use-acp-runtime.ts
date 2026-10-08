@@ -30,14 +30,21 @@ import {
 import type { z } from "zod"
 
 import {
-  AOS_ATTACHMENT_URI_SCHEME,
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AosComposerPrefillNotificationSchema,
-  AosErrorNotificationSchema,
-  type AosHistoryCursor,
-  type AosPromptMetaSchema,
-} from "@aos/protocol/acp"
+  HGW_ATTACHMENT_URI_SCHEME,
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HgwComposerPrefillNotificationSchema,
+  HgwErrorNotificationSchema,
+  type HgwHistoryCursor,
+  type HgwPromptMetaSchema,
+} from "@harness-gw/sdk/protocol"
+import {
+  type Logger,
+  type AcpApprovals,
+  subscribeHgwNotification,
+  type AcpConnection,
+} from "@harness-gw/sdk"
+import { tabAcpLogger } from "@/runtime-adapters/aos/acp/tab"
 
 import type { TodoItem } from "@/runtime-adapters/contracts"
 import {
@@ -49,16 +56,11 @@ import {
   type ThreadHistoryState,
 } from "@/runtime-adapters/thread-history"
 
-import type { Logger } from "@aos/lifecycle"
-import { tabAcpLogger } from "./log"
-import type { AcpApprovals } from "./acp-approvals"
 import { createQueue, isBusyRefusal } from "./acp-message-queue"
 
 // Lazy logger for background error reporting.
 let _runtimeLog: Logger | undefined
 const runtimeLog = () => (_runtimeLog ??= tabAcpLogger())
-import { subscribeAosNotification } from "./aos-notification"
-import type { AcpConnection } from "./types"
 import {
   applyApprovals,
   applyUpdate,
@@ -87,7 +89,7 @@ import {
  * turn performs.
  */
 
-type PromptMeta = z.infer<typeof AosPromptMetaSchema>
+type PromptMeta = z.infer<typeof HgwPromptMetaSchema>
 
 export type AcpRuntimeExtras = {
   readonly execution: ProjectorExecution
@@ -178,7 +180,7 @@ function promptBlocks(
   if (stage === undefined) return text
   const links = stage.attachments.map((attachment) => ({
     type: "resource_link" as const,
-    uri: `${AOS_ATTACHMENT_URI_SCHEME}${stage.stageId}/${attachment.id}`,
+    uri: `${HGW_ATTACHMENT_URI_SCHEME}${stage.stageId}/${attachment.id}`,
     name: attachment.name,
     ...(attachment.contentType === undefined
       ? {}
@@ -204,8 +206,8 @@ function rewound(
 
 /** The normalized failure behind a refusal the operator can act on. */
 const REFUSAL_CODES: Readonly<Record<number, string>> = {
-  [AOS_JSONRPC_ERRORS.turnInProgress]: "AOS_SESSION_BUSY",
-  [AOS_JSONRPC_ERRORS.temporarilyUnavailable]: "AOS_PROVIDER_UNAVAILABLE",
+  [HGW_JSONRPC_ERRORS.turnInProgress]: "AOS_SESSION_BUSY",
+  [HGW_JSONRPC_ERRORS.temporarilyUnavailable]: "AOS_PROVIDER_UNAVAILABLE",
 }
 
 /** How a resume ended: replayed, refused for good, or left behind by a rebinding. */
@@ -281,7 +283,7 @@ function createAcpController({
    * under another one is dropped. A page waits for any replay under way.
    */
   let pagesEnabled = false
-  let cursor: AosHistoryCursor | undefined
+  let cursor: HgwHistoryCursor | undefined
   /** An accepted rewind moved the provider's history under the cursor. */
   let cursorStale = false
   let olderLoading = false
@@ -334,7 +336,7 @@ function createAcpController({
 
   /** The provider's suggested next turn, for the bound Session's composer. */
   const observePrefill = (params: unknown) => {
-    const parsed = AosComposerPrefillNotificationSchema.safeParse(params)
+    const parsed = HgwComposerPrefillNotificationSchema.safeParse(params)
     if (!parsed.success || parsed.data.sessionId !== bound) return
     callbacks.onComposerPrefill?.(parsed.data.text)
   }
@@ -467,14 +469,14 @@ function createAcpController({
         },
       }),
       connection.subscribeNotification(
-        AOS_METHODS.notify.composerPrefill,
+        HGW_METHODS.notify.composerPrefill,
         observePrefill
       ),
       // The provider no longer holds the Session, so nothing runs in it again.
-      subscribeAosNotification(
+      subscribeHgwNotification(
         connection,
-        AOS_METHODS.notify.error,
-        AosErrorNotificationSchema,
+        HGW_METHODS.notify.error,
+        HgwErrorNotificationSchema,
         ({ sessionId, code }) => {
           if (sessionId !== bound || code !== "not_found") return
           gone = true

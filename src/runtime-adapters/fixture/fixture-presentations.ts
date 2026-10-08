@@ -1,7 +1,7 @@
 import type { ThreadAssistantMessagePart } from "@assistant-ui/react"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 
-import { viewerFileResult } from "@aos/protocol/mcp-apps"
+import { viewerFileResult } from "@harness-gw/sdk/protocol"
 import type { AosUiToolName } from "@shared/presentation/tools"
 import {
   FIXTURE_MCP_APP_FILES,

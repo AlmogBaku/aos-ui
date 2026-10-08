@@ -1,4 +1,4 @@
-import { categoryOf } from "@aos/protocol/push"
+import { categoryOf } from "@harness-gw/sdk/protocol"
 
 import type { WorkspaceActivityEvent } from "@/runtime-adapters/contracts"
 

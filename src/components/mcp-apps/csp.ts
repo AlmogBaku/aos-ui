@@ -2,7 +2,7 @@ import {
   isMcpAppCspDomain,
   type McpAppFiles,
   type McpUiCsp,
-} from "@aos/protocol/mcp-apps"
+} from "@harness-gw/sdk/protocol"
 
 import { fileLocation } from "./host-handlers"
 

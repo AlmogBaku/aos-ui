@@ -54,7 +54,7 @@ changes list and raw patch, or the ANSI-stripped output, as plain text.
 The `render_*` tools and `present_artifact` come from the AOS UI tools MCP
 server (`packages/tools-mcp`). Each harness prefixes MCP tool names differently
 (`mcp__aos_ui__render_chart` on Hermes, `aos-ui__render_chart` on OpenClaw);
-the proxy canonicalizes them in `packages/proxy/core/aos-tool-names.ts`, so
+the harness-gw gateway canonicalizes them (its `src/core/aos-tool-names.ts`), so
 the registry only ever sees the bare names above. `present_artifact` is an MCP
 App: its `artifact` view (`ui://aos-ui/artifact`) renders PDFs, images, plain
 text, and Agent HTML (its scripts run in an opaque-origin frame with no network)

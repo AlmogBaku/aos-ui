@@ -4,7 +4,7 @@ import { useRef, useState } from "react"
 import { readPermissionAction } from "@/lib/tool-artifact"
 import type { PermissionPayload } from "./payloads/permission"
 
-import { AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
+import { HGW_PERMISSION_KIND_SESSION } from "@harness-gw/sdk/protocol"
 
 import { Button } from "@/components/ui/button"
 
@@ -225,7 +225,7 @@ function optionLabel(
   if (label !== undefined) return label
   if (kind === "allow-once") return labels.permission.allowOnce
   if (kind === "allow-always") return labels.permission.allowAlways
-  if (kind === AOS_PERMISSION_KIND_SESSION)
+  if (kind === HGW_PERMISSION_KIND_SESSION)
     return labels.permission.allowSession
   if (kind === "reject-always") return labels.permission.rejectAlways
   return labels.permission.reject

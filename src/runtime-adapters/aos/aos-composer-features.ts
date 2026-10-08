@@ -25,12 +25,12 @@ import type {
   SessionModelUpdateRequest,
   SessionModelUpdateResponse,
   SlashCommand,
-} from "@aos/protocol"
+} from "@harness-gw/sdk/protocol"
 import type {
-  AosContext,
-  AosModelChoices,
-  AosWorkspaceCapabilities,
-} from "./aos-client"
+  HgwContext,
+  HgwModelChoices,
+  HgwWorkspaceCapabilities,
+} from "@harness-gw/sdk"
 
 /**
  * The Session's projection as its updates folded it so far. Every read
@@ -39,16 +39,16 @@ import type {
  */
 type SessionCapabilityClient = {
   /** What the Session supports, absent until it reports it. */
-  workspaceCapabilities(sessionId: string): AosWorkspaceCapabilities | undefined
+  workspaceCapabilities(sessionId: string): HgwWorkspaceCapabilities | undefined
   /** Told of every change to anything the composer reads for the Session. */
   subscribeComposer(sessionId: string, listener: () => void): () => void
 }
 
 type ComposerClient = SessionCapabilityClient & {
   /** The models the Session offers, absent until it reports them. */
-  models(sessionId: string): AosModelChoices | undefined
+  models(sessionId: string): HgwModelChoices | undefined
   /** The newest usage the provider reported, absent until it reports one. */
-  context(sessionId: string): AosContext | undefined
+  context(sessionId: string): HgwContext | undefined
   /** What the Session's settled turns spent. */
   turnUsage?(
     sessionId: string
@@ -84,7 +84,7 @@ function selectionFor(
 }
 
 export function useAosSlashCommands(
-  capabilities: AosWorkspaceCapabilities | undefined,
+  capabilities: HgwWorkspaceCapabilities | undefined,
   enabled = true
 ): readonly SlashCommand[] | undefined {
   if (!enabled) return undefined
@@ -129,7 +129,7 @@ export function useAosComposerFeatures(
   client: ComposerClient,
   config: ComposerFeatureConfig,
   sessionId: string | undefined,
-  capabilities: AosWorkspaceCapabilities | undefined,
+  capabilities: HgwWorkspaceCapabilities | undefined,
   onError?: (error: Error) => void
 ): ComposerFeatureViewModel {
   const slashCommands = useAosSlashCommands(capabilities)

@@ -1,13 +1,16 @@
 import type { RemoteThreadListAdapter } from "@assistant-ui/react"
 import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2"
 
-import { AOS_META_KEY, AosSessionInfoMetaSchema } from "@aos/protocol/acp"
+import {
+  HGW_META_KEY,
+  HgwSessionInfoMetaSchema,
+} from "@harness-gw/sdk/protocol"
+import type { AcpConnection } from "@harness-gw/sdk"
 import type { AosDraftRegistry } from "../aos-drafts"
-import type { AcpConnection } from "./types"
 
 /**
  * Assistant UI's remote thread list over one ACP connection. ACP owns the
- * Session catalog; `_meta.aos` carries the owning Agent and the archived flag.
+ * Session catalog; `_meta.hgw` carries the owning Agent and the archived flag.
  * History belongs to the Session projector, so this adapter exposes no
  * `historyFor`. Assistant UI has no pin, so that write travels on the workspace
  * channel instead of here.
@@ -49,7 +52,7 @@ export type AcpThreadListAdapter = RemoteThreadListAdapter & {
 
 /** Rejects a Session the proxy did not describe rather than guessing at it. */
 function metadataOf(info: SessionInfo) {
-  const meta = AosSessionInfoMetaSchema.parse(info._meta?.[AOS_META_KEY])
+  const meta = HgwSessionInfoMetaSchema.parse(info._meta?.[HGW_META_KEY])
   const metadata: RemoteThreadMetadata = {
     status: meta.archived ? "archived" : "regular",
     remoteId: info.sessionId,

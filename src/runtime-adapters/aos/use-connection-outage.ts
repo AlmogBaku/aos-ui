@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react"
 
-import type { AcpConnection, AcpConnectionOutage } from "./acp/types"
+import type { AcpConnection, AcpConnectionOutage } from "@harness-gw/sdk"
 
 /** How long a reconnect may run before it shows, so a healthy resume shows nothing. */
 export const RECONNECTING_NOTICE_GRACE_MS = 2_000

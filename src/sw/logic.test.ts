@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
-import { OPEN_MESSAGE_TYPE, type PushMessage } from "@aos/protocol/push"
+import { OPEN_MESSAGE_TYPE } from "@/sw/open-messages"
+import type { PushMessage } from "@harness-gw/sdk/protocol"
 
 import {
   handleNotificationClick,
@@ -273,10 +274,9 @@ describe("notification clicks", () => {
       },
     })
 
-    expect(tab.postMessage).toHaveBeenCalledWith(
-      { type: OPEN_MESSAGE_TYPE },
-      [PORT]
-    )
+    expect(tab.postMessage).toHaveBeenCalledWith({ type: OPEN_MESSAGE_TYPE }, [
+      PORT,
+    ])
   })
 
   it("opens a window when the tab it was handed never answers", async () => {

@@ -4,6 +4,8 @@ import { join } from "node:path"
 import { ESLint } from "eslint"
 import { beforeAll, describe, expect, it } from "vitest"
 
+import { productionSources } from "../support/production-sources"
+
 const eslint = new ESLint()
 async function boundaryErrors(filePath: string, code: string) {
   const [result] = await eslint.lintText(code, { filePath })
@@ -18,6 +20,16 @@ async function restrictedImportErrors(filePath: string, code: string) {
     ({ ruleId }) => ruleId === "no-restricted-imports"
   )
 }
+
+/** Block comments, and line comments that start a line or follow whitespace. */
+function stripComments(source: string) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//gu, "")
+    .replace(/(^|\s)\/\/.*$/gmu, "$1")
+}
+
+const RUNTIME_NAME_LITERAL =
+  /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu
 
 /** Any module specifier, however it is written: import, export, or require. */
 const AG_UI_SPECIFIER =
@@ -94,11 +106,6 @@ describe("runtime package import boundaries", () => {
       "src/components/example.test.tsx",
       'import "../../packages/tools-mcp/server"',
     ],
-    [
-      "packages/proxy/example.ts",
-      'import { createToolsServer } from "../tools-mcp/server"',
-    ],
-    ["packages/proxy/acp/example.ts", 'import "../../tools-mcp/cli"'],
     ["packages/tools-mcp/example.ts", 'import { cn } from "@/lib/utils"'],
     ["packages/tools-mcp/example.ts", 'import "../../src/main"'],
     [
@@ -106,31 +113,8 @@ describe("runtime package import boundaries", () => {
       'import { Button } from "@/components/ui/button"',
     ],
     [
-      "packages/tools-mcp/example.ts",
-      'import { runProxyCli } from "../proxy/cli"',
-    ],
-    [
-      "packages/tools-mcp/example.ts",
-      'import { redactForLog } from "../proxy/redaction"',
-    ],
-    ["packages/lifecycle/example.ts", 'import { readFile } from "node:fs"'],
-    ["packages/lifecycle/example.ts", 'import { serve } from "bun"'],
-    ["packages/lifecycle/example.ts", 'import { cn } from "@/lib/utils"'],
-    [
-      "packages/lifecycle/example.ts",
-      'import { redactForLog } from "../proxy/redaction"',
-    ],
-    [
-      "packages/proxy/core/example.ts",
-      'import { createOwner } from "@aos/lifecycle"',
-    ],
-    [
       "src/runtime-adapters/aos/acp/example.ts",
       'import { Button } from "@/components/ui/button"',
-    ],
-    [
-      "src/runtime-adapters/aos/acp/example.ts",
-      'import { runProxyCli } from "../../../../packages/proxy/cli"',
     ],
   ])(
     "keeps each package out of code it must not import: %s %s",
@@ -144,30 +128,8 @@ describe("runtime package import boundaries", () => {
       "packages/tools-mcp/example.ts",
       'import { presentationToolDefinitions } from "../../shared/presentation/tools"',
     ],
-    [
-      "packages/proxy/core/example.ts",
-      'import { createOwner } from "../../lifecycle"',
-    ],
   ])("allows the sanctioned package imports: %s %s", async (filePath, code) => {
     expect(await restrictedImportErrors(filePath, code)).toEqual([])
-  })
-
-  it("keeps console logging out of the lifecycle package", async () => {
-    const [result] = await eslint.lintText('console.info("joined")', {
-      filePath: "packages/lifecycle/example.ts",
-    })
-    expect(result!.messages.map(({ ruleId }) => ruleId)).toEqual(["no-console"])
-  })
-
-  it("loads the lifecycle package once through the alias and the relative path", async () => {
-    const [aliased, relative] = await Promise.all([
-      import("@aos/lifecycle"),
-      import("../../packages/lifecycle"),
-    ])
-
-    // Owner state such as each actor's transition track is module-scoped, so
-    // a second copy would split it between the two import styles.
-    expect(aliased.createOwner).toBe(relative.createOwner)
   })
 
   it.each(["vite.config.ts", "shared/example.ts"])(
@@ -202,11 +164,11 @@ describe("runtime package import boundaries", () => {
       )
     ).toHaveLength(1)
   })
-  it("reports no-floating-promises and no-misused-promises on a virtual proxy file", async () => {
+  it("reports no-floating-promises and no-misused-promises on a virtual browser adapter file", async () => {
     // A floating promise (no await, return, or catch) and a misused promise
     // (async function passed where a void-return callback is expected) must both
-    // be flagged by the type-aware rules enabled for packages/proxy, packages/lifecycle,
-    // and src/runtime-adapters non-test files.
+    // be flagged by the type-aware rules enabled for the web server and the
+    // browser runtime adapters.
     const code = `
       async function doWork(): Promise<void> {}
       doWork()
@@ -214,10 +176,34 @@ describe("runtime package import boundaries", () => {
       run(async () => { await doWork() })
     `
     const [result] = await eslint.lintText(code, {
-      filePath: "packages/proxy/example.ts",
+      filePath: "src/runtime-adapters/aos/example.ts",
     })
     const ruleIds = result!.messages.map(({ ruleId }) => ruleId)
     expect(ruleIds).toContain("@typescript-eslint/no-floating-promises")
     expect(ruleIds).toContain("@typescript-eslint/no-misused-promises")
+  })
+
+  it("keeps runtime vocabulary out of the browser outside the fixture", async () => {
+    const fixtureRoot = join("src", "runtime-adapters", "fixture")
+    const files = (await productionSources("src")).filter(
+      ([path]) => !path.startsWith(fixtureRoot)
+    )
+    expect(files.length).toBeGreaterThan(0)
+
+    for (const [path, text] of files) {
+      expect(
+        stripComments(text).match(RUNTIME_NAME_LITERAL)?.[0],
+        `${path} names a runtime`
+      ).toBeUndefined()
+    }
+  })
+
+  it("keeps provider-native code out of the browser", async () => {
+    for (const [path, source] of await productionSources("src")) {
+      expect(source, path).not.toMatch(
+        /(?:from\s+|import\s*\()["'][^"']*(?:hermes|@opencode-ai\/sdk|@openclaw\/gateway-)[^"']*["']/iu
+      )
+      expect(source, path).not.toMatch(/\bHermes(?:Rpc|Http|Server|Session)/u)
+    }
   })
 })

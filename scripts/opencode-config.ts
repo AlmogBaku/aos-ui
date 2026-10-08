@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from "node:path"
 
-import { readSecretFile } from "../packages/proxy/secrets"
+import { readSecretFile } from "./secret-file"
 
 type Environment = Readonly<Record<string, string | undefined>>
 

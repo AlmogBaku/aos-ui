@@ -1,7 +1,7 @@
 import { createMessageQueue } from "@assistant-ui/core"
 import type { AppendMessage, MessageQueueController } from "@assistant-ui/core"
 
-import { AOS_JSONRPC_ERRORS } from "@aos/protocol/acp"
+import { HGW_JSONRPC_ERRORS } from "@harness-gw/sdk/protocol"
 
 import type { QueueControls } from "@/runtime-adapters/queue-controls"
 
@@ -23,7 +23,7 @@ export const isBusyRefusal = (error: unknown) =>
   typeof error === "object" &&
   error !== null &&
   "code" in error &&
-  error.code === AOS_JSONRPC_ERRORS.turnInProgress
+  error.code === HGW_JSONRPC_ERRORS.turnInProgress
 
 const isBusy = ({ status }: ProjectorExecution) =>
   status === "running" || status === "waiting-for-input"

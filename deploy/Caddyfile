@@ -1,0 +1,29 @@
+# One origin per lane: each site sends /api/v1 (HTTP and WebSocket) to its
+# gateway listener and everything else to its aos-ui server listener. The lane
+# is the port, never the path. The operator lane has no application
+# authentication, so this wiring is its guard; test/containers/compose.test.ts
+# checks it.
+#
+# Each site binds loopback unless AOS_UI_CADDY_BIND says otherwise: a
+# host-network deployment ignores Compose `ports:`, so the default lives here.
+# There is no access log, because a file address carries its pass in the query.
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+http://:18080 {
+	bind {$AOS_UI_CADDY_BIND:127.0.0.1}
+	route {
+		# Only this lane's own names, so a rebound DNS name gets nothing. The
+		# public host is unset by default, leaving loopback only.
+		@foreign not host {$AOS_UI_PUBLIC_HOST} 127.0.0.1 localhost
+		respond @foreign 421
+		reverse_proxy /api/v1/* {$AOS_UI_GATEWAY_UPSTREAM:gateway:4100}
+		reverse_proxy {$AOS_UI_WEB_UPSTREAM:web:4200}
+	}
+}
+
+# The guest site, mounted only by the harness overlays.
+import /etc/caddy/lanes/*.caddy

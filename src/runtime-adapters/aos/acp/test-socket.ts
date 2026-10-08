@@ -3,12 +3,11 @@ import type {
   AnyWireMessage,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { WebSocketConstructor } from "@agentclientprotocol/sdk/experimental/ws-client"
-import type { Logger } from "@aos/lifecycle"
-import { tabAcpLogger } from "./log"
+import { createAcpLogger, type Logger } from "@harness-gw/sdk"
 
 // Lazy logger for cleanup error reporting; only created if an error fires.
 let _socketLog: Logger | undefined
-const socketLog = () => (_socketLog ??= tabAcpLogger())
+const socketLog = () => (_socketLog ??= createAcpLogger({ debug: false }))
 
 const CONNECTING = 0
 const OPEN = 1

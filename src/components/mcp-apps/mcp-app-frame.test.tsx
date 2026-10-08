@@ -428,7 +428,7 @@ describe("MCP App lifecycle", () => {
 
 describe("MCP App files", () => {
   const address = (toolCallId: string, pass: string) =>
-    `${window.location.origin}/api/aos/v1/agents/researcher/sessions/session-1/tool-calls/${toolCallId}/app/files/path?pass=${pass}`
+    `${window.location.origin}/api/v1/agents/researcher/sessions/session-1/tool-calls/${toolCallId}/app/files/path?pass=${pass}`
   const files = (pass: string, expiresAt: number) => ({
     addresses: { path: address("t1", pass) },
     expiresAt: new Date(expiresAt).toISOString(),

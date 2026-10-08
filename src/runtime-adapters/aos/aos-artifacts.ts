@@ -1,7 +1,7 @@
 import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
 
 import type { ArtifactAdapter, ArtifactResolveOptions } from "../contracts"
-import { AosClientError } from "./aos-client"
+import { HgwClientError } from "@harness-gw/sdk"
 
 type ArtifactClient = {
   readArtifact(
@@ -30,7 +30,7 @@ export class AosArtifactAdapter implements ArtifactAdapter {
       return await this.client.readArtifact(sessionId, artifact.id, signal)
     } catch (error) {
       // Pruned bytes are a permanent, presentable state, not a failed request.
-      if (error instanceof AosClientError && error.kind === "artifact-missing")
+      if (error instanceof HgwClientError && error.kind === "artifact-missing")
         throw new ArtifactMissingError()
       throw error
     }

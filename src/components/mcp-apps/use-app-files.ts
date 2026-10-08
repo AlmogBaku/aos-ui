@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
-import { backoffDelay } from "@aos/lifecycle"
-import type { McpAppFiles } from "@aos/protocol/mcp-apps"
+import { backoffDelay } from "@harness-gw/sdk"
+import type { McpAppFiles } from "@harness-gw/sdk/protocol"
 import {
   McpAppFilesRefusedError,
   type HarnessRuntime,

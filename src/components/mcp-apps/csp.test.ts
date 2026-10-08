@@ -112,12 +112,12 @@ describe("MCP App CSP", () => {
   it("admits the call's own files by exact path, never their passes", () => {
     const policy = buildMcpAppCsp(undefined, {
       addresses: {
-        path: "https://aos.example/api/aos/v1/agents/a/sessions/s;1/tool-calls/t%201/app/files/path?pass=secret",
+        path: "https://aos.example/api/v1/agents/a/sessions/s;1/tool-calls/t%201/app/files/path?pass=secret",
         broken: "not a url",
       },
     })
     const path =
-      "https://aos.example/api/aos/v1/agents/a/sessions/s%3B1/tool-calls/t%201/app/files/path"
+      "https://aos.example/api/v1/agents/a/sessions/s%3B1/tool-calls/t%201/app/files/path"
     expect(directive(policy, "connect-src")).toBe(`connect-src ${path}`)
     expect(directive(policy, "media-src")).toBe(
       `media-src 'self' data: ${path}`

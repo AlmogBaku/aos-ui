@@ -1,4 +1,7 @@
-import { PRESENCE_HEARTBEAT_MS, PRESENCE_IDLE_MS } from "@aos/protocol/push"
+import {
+  PRESENCE_HEARTBEAT_MS,
+  PRESENCE_IDLE_MS,
+} from "@harness-gw/sdk/protocol"
 
 /**
  * Whether a foreground connection is still attended. The proxy holds a push back

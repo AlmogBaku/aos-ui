@@ -6,20 +6,20 @@ import {
   type McpAppTarget,
 } from "../contracts"
 import {
-  AosClientError,
-  type AosRemoteClient,
+  HgwClientError,
+  type HgwRemoteClient,
   type McpAppSubject,
-} from "./aos-client"
+} from "@harness-gw/sdk"
 
 type McpAppClient = Pick<
-  AosRemoteClient,
+  HgwRemoteClient,
   "openMcpApp" | "callMcpAppTool" | "readMcpAppResource" | "renewMcpAppFiles"
 >
 
 /** A client error no retry fixes: every 4xx but the rate limit's 429. */
-function refusal(error: unknown): error is AosClientError {
+function refusal(error: unknown): error is HgwClientError {
   return (
-    error instanceof AosClientError &&
+    error instanceof HgwClientError &&
     error.status !== undefined &&
     error.status >= 400 &&
     error.status < 500 &&
@@ -48,7 +48,7 @@ export class AosMcpAppAdapter implements McpAppAdapter {
       .openMcpApp(target.sessionId, subjectOf(target), signal)
       .catch((error: unknown) => {
         // A pruned Artifact is a permanent, presentable state, as its bytes are.
-        throw error instanceof AosClientError &&
+        throw error instanceof HgwClientError &&
           error.kind === "artifact-missing"
           ? new ArtifactMissingError()
           : error

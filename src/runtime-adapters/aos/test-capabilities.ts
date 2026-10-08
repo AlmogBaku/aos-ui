@@ -1,6 +1,6 @@
-import type { AosWorkspaceCapabilities } from "./aos-client"
+import type { HgwWorkspaceCapabilities } from "@harness-gw/sdk"
 
-type Capabilities = AosWorkspaceCapabilities
+type Capabilities = HgwWorkspaceCapabilities
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
 

@@ -5,5 +5,5 @@
     "allowImportingTsExtensions": true,
     "types": ["bun", "node"]
   },
-  "include": ["scripts/**/*.ts", "*.config.ts"]
+  "include": ["scripts/**/*.ts", "server/**/*.ts", "*.config.ts"]
 }

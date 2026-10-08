@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { PRESENCE_HEARTBEAT_MS, PRESENCE_IDLE_MS } from "@aos/protocol/push"
+import {
+  PRESENCE_HEARTBEAT_MS,
+  PRESENCE_IDLE_MS,
+} from "@harness-gw/sdk/protocol"
 import { createHeartbeat, createIdleTracker } from "./presence"
 
 afterEach(() => {

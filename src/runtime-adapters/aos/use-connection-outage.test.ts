@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { AcpConnection, AcpConnectionOutage } from "./acp/types"
+import type { AcpConnection, AcpConnectionOutage } from "@harness-gw/sdk"
 import {
   RECONNECTED_NOTICE_MS,
   RECONNECTING_NOTICE_GRACE_MS,

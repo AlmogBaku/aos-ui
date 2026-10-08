@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { PushMessageSchema, type PushMessage } from "@aos/protocol/push"
+import { PushMessageSchema, type PushMessage } from "@harness-gw/sdk/protocol"
 
 import { readMessage } from "./logic"
 

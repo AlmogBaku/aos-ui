@@ -20,14 +20,22 @@ import { ExportedMessageRepository } from "@assistant-ui/core"
 import type { CompleteAttachment } from "@assistant-ui/core"
 
 import {
-  AOS_ATTACHMENT_URI_SCHEME,
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AOS_PLAN_ID,
-  AOS_STOP_REASONS,
-  type AosHistoryCursor,
-  type AosInitializeMeta,
-} from "@aos/protocol/acp"
+  HGW_ATTACHMENT_URI_SCHEME,
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HGW_PLAN_ID,
+  HGW_STOP_REASONS,
+  type HgwHistoryCursor,
+  type HgwInitializeMeta,
+} from "@harness-gw/sdk/protocol"
+import {
+  createAcpApprovals,
+  type AcpConnection,
+  type AcpPendingRequest,
+  type AcpHistoryPage,
+  type AcpSessionReplayListener,
+  type AcpSessionUpdateListener,
+} from "@harness-gw/sdk"
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 import { draft } from "@/components/assistant-ui/elements/thread.aui.test-helpers"
@@ -37,14 +45,6 @@ import {
 } from "@/runtime-adapters/queue-controls"
 import { threadHistoryExtras } from "@/runtime-adapters/thread-history"
 
-import { createAcpApprovals } from "./acp-approvals"
-import type {
-  AcpConnection,
-  AcpPendingRequest,
-  AcpHistoryPage,
-  AcpSessionReplayListener,
-  AcpSessionUpdateListener,
-} from "./types"
 import {
   acpExtras,
   useAcpRuntime,
@@ -55,7 +55,7 @@ const SESSION_ID = "session-1"
 const TURN_META = { sequence: 0, turnId: "run-1" }
 
 /** The handshake of a proxy that does, or does not, serve older pages. */
-const initializeMeta = (historyPages: boolean): AosInitializeMeta => ({
+const initializeMeta = (historyPages: boolean): HgwInitializeMeta => ({
   version: 1,
   role: "operator",
   extensions: {
@@ -74,8 +74,8 @@ const initializeMeta = (historyPages: boolean): AosInitializeMeta => ({
 
 function createFakeConnection(
   options: {
-    /** What each from-start replay reports as `_meta.aos.history`. */
-    history?: AosHistoryCursor
+    /** What each from-start replay reports as `_meta.hgw.history`. */
+    history?: HgwHistoryCursor
     historyPages?: boolean
   } = {}
 ) {
@@ -103,7 +103,7 @@ function createFakeConnection(
   /** What a from-start replay resends, while the resume is still in flight. */
   let replayedTurns: readonly SessionUpdate[] = []
   const fake = { history: options.history }
-  const histories = new Map<string, AosHistoryCursor>()
+  const histories = new Map<string, HgwHistoryCursor>()
   /** A from-start replay: announced, recorded, then settled, as the connection does. */
   const replayFromStart = async (sessionId: string, reply: Promise<void>) => {
     const settles = [...(replays.get(sessionId) ?? [])].map((listener) =>
@@ -193,7 +193,7 @@ function createFakeConnection(
       replayedTurns = turns
     },
     /** The history the next from-start replay reports. */
-    set history(history: AosHistoryCursor | undefined) {
+    set history(history: HgwHistoryCursor | undefined) {
       fake.history = history
     },
     /** Answers the `index`th page read. */
@@ -233,7 +233,7 @@ function createFakeConnection(
             { optionId: "once", name: "Allow once", kind: "allow_once" },
             { optionId: "deny", name: "Deny", kind: "reject_once" },
           ],
-          _meta: { aos: { requestId: "interrupt-1" } },
+          _meta: { hgw: { requestId: "interrupt-1" } },
         },
         respond,
         signal: new AbortController().signal,
@@ -462,7 +462,7 @@ describe("useAcpRuntime", () => {
       partway = fake.resync(dropped.promise).catch(() => {})
     })
     await act(async () => {
-      fake.notify(AOS_METHODS.notify.error, {
+      fake.notify(HGW_METHODS.notify.error, {
         sessionId: SESSION_ID,
         code: "not_found",
         message: "not_found",
@@ -578,7 +578,7 @@ describe("useAcpRuntime", () => {
     })
     const gone = (sessionId: string) =>
       act(async () => {
-        fake.notify(AOS_METHODS.notify.error, {
+        fake.notify(HGW_METHODS.notify.error, {
           sessionId,
           code: "not_found",
           message: "not_found",
@@ -659,7 +659,7 @@ describe("useAcpRuntime", () => {
         content: [
           {
             type: "resource_link",
-            uri: "aos-attachment:stage-1/att-1",
+            uri: "hgw-attachment:stage-1/att-1",
             name: "photo.png",
             mimeType: "image/png",
           },
@@ -733,7 +733,7 @@ describe("useAcpRuntime", () => {
           {
             sessionUpdate: "state_update",
             state: "idle",
-            stopReason: AOS_STOP_REASONS.error,
+            stopReason: HGW_STOP_REASONS.error,
           },
           { ...TURN_META, ...FAILURE }
         )
@@ -808,7 +808,7 @@ describe("useAcpRuntime", () => {
         {
           sessionUpdate: "state_update",
           state: "idle",
-          stopReason: AOS_STOP_REASONS.error,
+          stopReason: HGW_STOP_REASONS.error,
         },
       ])
       await mount(fake)
@@ -823,7 +823,7 @@ describe("useAcpRuntime", () => {
           {
             sessionUpdate: "state_update",
             state: "idle",
-            stopReason: AOS_STOP_REASONS.uncertain,
+            stopReason: HGW_STOP_REASONS.uncertain,
           },
           TURN_META
         )
@@ -842,7 +842,7 @@ describe("useAcpRuntime", () => {
           {
             sessionUpdate: "state_update",
             state: "idle",
-            stopReason: AOS_STOP_REASONS.error,
+            stopReason: HGW_STOP_REASONS.error,
           },
           { ...TURN_META, ...FAILURE }
         )
@@ -916,7 +916,7 @@ describe("useAcpRuntime", () => {
           { type: "text", text: "Read this" },
           {
             type: "resource_link",
-            uri: `${AOS_ATTACHMENT_URI_SCHEME}stage-1/att-1`,
+            uri: `${HGW_ATTACHMENT_URI_SCHEME}stage-1/att-1`,
             name: "chart.png",
             mimeType: "image/png",
           },
@@ -932,7 +932,7 @@ describe("useAcpRuntime", () => {
     const onComposerPrefill = vi.fn()
     await mount(fake, { onComposerPrefill })
     act(() => {
-      fake.notify(AOS_METHODS.notify.composerPrefill, {
+      fake.notify(HGW_METHODS.notify.composerPrefill, {
         sessionId: "other-session",
         turnId: "run-1",
         text: "Elsewhere",
@@ -940,7 +940,7 @@ describe("useAcpRuntime", () => {
     })
     expect(onComposerPrefill).not.toHaveBeenCalled()
     act(() => {
-      fake.notify(AOS_METHODS.notify.composerPrefill, {
+      fake.notify(HGW_METHODS.notify.composerPrefill, {
         sessionId: SESSION_ID,
         turnId: "run-1",
         text: "Next question?",
@@ -1081,7 +1081,7 @@ describe("useAcpRuntime", () => {
     const { result } = await mount(fake, { enableMessageQueue: true })
     fake.prompt.mockRejectedValueOnce(
       Object.assign(new Error("busy"), {
-        code: AOS_JSONRPC_ERRORS.turnInProgress,
+        code: HGW_JSONRPC_ERRORS.turnInProgress,
       })
     )
     act(() => {
@@ -1126,7 +1126,7 @@ describe("useAcpRuntime", () => {
         {
           sessionUpdate: "state_update",
           state: "idle",
-          stopReason: AOS_STOP_REASONS.error,
+          stopReason: HGW_STOP_REASONS.error,
         },
         { sequence: 0, turnId: "run-2" }
       )
@@ -1240,7 +1240,7 @@ describe("useAcpRuntime approvals", () => {
 /** An older page as `resumePage` hands it over, tagged updates and all. */
 const pageOf = (
   updates: readonly SessionUpdate[],
-  history: AosHistoryCursor
+  history: HgwHistoryCursor
 ): AcpHistoryPage => ({
   updates: updates.map((update) => ({
     update,
@@ -1687,7 +1687,7 @@ describe("useAcpRuntime extras", () => {
           sessionUpdate: "plan_update",
           plan: {
             type: "items",
-            planId: AOS_PLAN_ID,
+            planId: HGW_PLAN_ID,
             entries: [
               { content: "Ship it", priority: "medium", status: "in_progress" },
             ],

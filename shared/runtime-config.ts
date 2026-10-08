@@ -36,7 +36,6 @@ export type PublicRuntimeConfiguration =
 export type GuestSurfaceConfiguration = {
   status: "ready"
   surface: "guest"
-  basePath: string
 }
 
 export type ApplicationConfiguration =
@@ -99,6 +98,12 @@ export function serializePublicRuntimeConfiguration(
   }
 }
 
+/**
+ * The build the server serves, read by the tab that compares it with its own;
+ * neither surface's configuration depends on it.
+ */
+const buildIdField = { buildId: z.string().optional() }
+
 const publicComposerFeatureFields = {
   composerModelSelectorEnabled: z.boolean().optional(),
   composerContextEnabled: z.boolean().optional(),
@@ -108,6 +113,7 @@ const publicConfigurationSchema = z
   .object({
     mode: z.enum(["aos", "fixture"]),
     ...publicComposerFeatureFields,
+    ...buildIdField,
   })
   .strict()
 
@@ -129,13 +135,7 @@ export function parsePublicRuntimeConfiguration(
 }
 
 const guestSurfaceSchema = z
-  .object({
-    surface: z.literal("guest"),
-    basePath: z
-      .string()
-      .regex(/^\/(?!\/)[A-Za-z0-9/_-]+$/u)
-      .transform((value) => value.replace(/\/+$/u, "")),
-  })
+  .object({ surface: z.literal("guest"), ...buildIdField })
   .strict()
 
 /** Selects the guest surface before runtime parsing; guest code never selects a provider. */
@@ -143,6 +143,6 @@ export function parsePublicApplicationConfiguration(
   input: unknown
 ): ApplicationConfiguration {
   const guest = guestSurfaceSchema.safeParse(input)
-  if (guest.success) return { status: "ready", ...guest.data }
+  if (guest.success) return { status: "ready", surface: guest.data.surface }
   return parsePublicRuntimeConfiguration(input)
 }

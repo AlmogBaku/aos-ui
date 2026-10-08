@@ -27,7 +27,10 @@ import {
   type BrowserSettingsView,
 } from "./activity"
 import { defaultBrowserPreferences } from "@/lib/notifications/policy"
-import { PRESENCE_HEARTBEAT_MS, PRESENCE_IDLE_MS } from "@aos/protocol/push"
+import {
+  PRESENCE_HEARTBEAT_MS,
+  PRESENCE_IDLE_MS,
+} from "@harness-gw/sdk/protocol"
 
 /** Everything the operator's notification surfaces read, with nothing on. */
 function browserSettings(

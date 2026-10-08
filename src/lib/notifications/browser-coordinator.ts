@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { categoryOf } from "@aos/protocol/push"
+import { categoryOf } from "@harness-gw/sdk/protocol"
 import type { ActivityRecord } from "./activity"
 import type { ActivityStore } from "./store"
 import type { BrowserNotificationPort } from "./browser-port"

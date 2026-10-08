@@ -21,7 +21,7 @@ const image =
 const upstreamScript = `
 import { createServer } from "node:http";
 createServer(async (request, response) => {
-  if (request.url === "/api/aos/v1/smoke/stream") {
+  if (request.url === "/api/v1/smoke/stream") {
     response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
     response.write("data: started\\n\\n");
     setTimeout(() => response.end("data: finished\\n\\n"), 300);
@@ -30,7 +30,7 @@ createServer(async (request, response) => {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   const raw = Buffer.concat(chunks);
-  if (!request.url.startsWith("/api/aos/v1/smoke/request?")) {
+  if (!request.url.startsWith("/api/v1/smoke/request?")) {
     response.writeHead(404).end();
     return;
   }
@@ -80,7 +80,7 @@ async function runSmoke(baseUrl: string) {
   await waitForHealth(baseUrl)
   const body = JSON.stringify({ message: "normalized proxy" })
   const response = await fetch(
-    `${baseUrl}/api/aos/v1/smoke/request?profile=smoke+profile`,
+    `${baseUrl}/api/v1/smoke/request?profile=smoke+profile`,
     {
       method: "POST",
       headers: {
@@ -98,7 +98,7 @@ async function runSmoke(baseUrl: string) {
   assert.deepEqual(result, {
     ok: true,
     received: {
-      url: "/api/aos/v1/smoke/request?profile=smoke+profile",
+      url: "/api/v1/smoke/request?profile=smoke+profile",
       bodyBytes: Buffer.byteLength(body),
       cookie: "aos-session=synthetic-smoke",
       authorization: "Bearer synthetic-smoke",
@@ -122,7 +122,7 @@ async function runSmoke(baseUrl: string) {
   assert.equal(nativePath.status, 404)
   await nativePath.arrayBuffer()
 
-  const stream = await fetch(`${baseUrl}/api/aos/v1/smoke/stream`, {
+  const stream = await fetch(`${baseUrl}/api/v1/smoke/stream`, {
     signal: AbortSignal.timeout(10_000),
   })
   assert.equal(stream.status, 200)

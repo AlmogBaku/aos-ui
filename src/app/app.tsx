@@ -265,11 +265,7 @@ function Application() {
     return (
       <RuntimeErrorBoundary locale={locale}>
         <Suspense fallback={<LoadingWorkspace locale={locale} />}>
-          <GuestAosSurface
-            config={config}
-            inviteToken={inviteToken}
-            locale={locale}
-          />
+          <GuestAosSurface inviteToken={inviteToken} locale={locale} />
         </Suspense>
       </RuntimeErrorBoundary>
     )

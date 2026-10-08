@@ -2,7 +2,8 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
 import type { ToolCallMessagePart } from "@assistant-ui/core"
 import { describe, expect, it } from "vitest"
 
-import { AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
+import { HGW_PLAN_ID, HGW_STOP_REASONS } from "@harness-gw/sdk/protocol"
+import type { AcpApproval } from "@harness-gw/sdk"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { isMcpAppToolPart } from "@/components/mcp-apps/tool-part"
@@ -15,7 +16,6 @@ import {
   readAosToolArtifact,
 } from "@/lib/tool-artifact"
 
-import type { AcpApproval } from "./acp-approvals"
 import { TERMINAL_TAIL_LIMIT } from "./projector-terminals"
 
 import {
@@ -154,6 +154,34 @@ describe("applyUpdate messages", () => {
       ],
     },
     {
+      name: "a turn's thought and responses stay one message under their own message ids",
+      entries: [
+        thoughtChunk("a1-thought", "Weigh it"),
+        agentChunk("a1", "Checking."),
+        toolCall({ title: "grep", status: "in_progress" }, TOOL_META),
+        toolCall({ status: "completed" }, TURN_META),
+        agentChunk("a2", "Shipping it."),
+      ],
+      expected: [
+        {
+          id: "a1-thought",
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "Weigh it" },
+            { type: "text", text: "Checking." },
+            {
+              type: "tool-call",
+              toolCallId: "t1",
+              toolName: "grep",
+              args: {},
+              isError: false,
+            },
+            { type: "text", text: "Shipping it." },
+          ],
+        },
+      ],
+    },
+    {
       name: "a whole thought upsert and a whole message upsert compose",
       entries: [
         [
@@ -251,7 +279,7 @@ describe("applyUpdate messages", () => {
             content: [
               {
                 type: "resource_link",
-                uri: "aos-attachment:stage-1/att-1",
+                uri: "hgw-attachment:stage-1/att-1",
                 name: "notes.txt",
                 mimeType: "text/plain",
               },
@@ -266,7 +294,7 @@ describe("applyUpdate messages", () => {
           content: [
             {
               type: "file",
-              data: "aos-attachment:stage-1/att-1",
+              data: "hgw-attachment:stage-1/att-1",
               mimeType: "text/plain",
               filename: "notes.txt",
             },
@@ -306,7 +334,7 @@ describe("applyUpdate messages", () => {
       stateUpdate({ state: "running" }, history),
       agentChunk("a1", "Half an answer"),
       stateUpdate(
-        { state: "idle", stopReason: AOS_STOP_REASONS.error },
+        { state: "idle", stopReason: HGW_STOP_REASONS.error },
         { ...history, ...error }
       ),
     ])
@@ -321,7 +349,7 @@ describe("applyUpdate messages", () => {
     expect(replayed.execution).toEqual({
       status: "failed",
       turnId: "history",
-      stopReason: AOS_STOP_REASONS.error,
+      stopReason: HGW_STOP_REASONS.error,
       error,
     })
   })
@@ -952,7 +980,7 @@ describe("applyUpdate execution", () => {
       const failed = fold(
         [
           stateUpdate(
-            { state: "idle", stopReason: AOS_STOP_REASONS.error },
+            { state: "idle", stopReason: HGW_STOP_REASONS.error },
             { ...TURN_META, ...named }
           ),
         ],
@@ -961,7 +989,7 @@ describe("applyUpdate execution", () => {
       expect(failed.execution).toEqual({
         status: "failed",
         turnId: "run-1",
-        stopReason: AOS_STOP_REASONS.error,
+        stopReason: HGW_STOP_REASONS.error,
         error,
       })
       expect(toThreadMessages(failed)[3]?.status).toEqual({
@@ -974,7 +1002,7 @@ describe("applyUpdate execution", () => {
 
   it("fails the Session on an uncertain stop reason", () => {
     const uncertain = fold(
-      [stateUpdate({ state: "idle", stopReason: AOS_STOP_REASONS.uncertain })],
+      [stateUpdate({ state: "idle", stopReason: HGW_STOP_REASONS.uncertain })],
       answering
     )
     expect(uncertain.execution.status).toBe("failed")
@@ -1077,7 +1105,7 @@ describe("applyUpdate Session metadata", () => {
   const todos = [{ id: "todo-1", label: "Ship", status: "active" }]
 
   it("takes the Session Todos from the plan meta", () => {
-    const planned = fold([[plan(AOS_PLAN_ID), { ...TURN_META, todos }]])
+    const planned = fold([[plan(HGW_PLAN_ID), { ...TURN_META, todos }]])
     expect(planned.todos).toEqual(todos)
   })
 
@@ -1088,7 +1116,7 @@ describe("applyUpdate Session metadata", () => {
   })
 
   it("ignores a plan whose meta has no Todos", () => {
-    expect(fold([[plan(AOS_PLAN_ID), TURN_META]])).toBe(initialProjectorState)
+    expect(fold([[plan(HGW_PLAN_ID), TURN_META]])).toBe(initialProjectorState)
   })
 
   it("records title, config options, and commands, and leaves usage to the composer", () => {
@@ -1263,7 +1291,7 @@ describe("artifact links", () => {
   })
 
   it.each([
-    "https://aos.example/api/aos/v1/agents/researcher/sessions/s1/artifacts/art-1",
+    "https://aos.example/api/v1/agents/researcher/sessions/s1/artifacts/art-1",
     "artifact://art-1/../../secrets",
   ])("keeps a link to %s an ordinary file, never an artifact", (uri) => {
     const [, answer] = toThreadMessages(
