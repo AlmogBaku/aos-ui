@@ -22,21 +22,23 @@ configuration, and AOS renders the views of every Agent that can call it:
 - [OpenCode](runtimes/opencode.md#mcp-apps): a `remote` entry in the `mcp`
   configuration.
 
-On Hermes and OpenCode the proxy reads the view itself, so it must reach the
-server over HTTP at the URL the runtime reports, or at the URL configured for
-it under [`mcpApps.fallback`](configuration.md#mcp-apps-fallback); that
-includes `aos-ui`. A server that needs credentials renders only once its headers are configured
-under [`mcpApps.fallback`](configuration.md#mcp-apps-fallback).
+On Hermes and OpenCode the [harness-gw](https://github.com/AlmogBaku/harness-gw)
+gateway reads the view itself, so it must reach the server over HTTP at the URL
+the runtime reports, or at the URL configured for it under the gateway's
+`mcpApps.fallback`; that includes `aos-ui`. A server that needs credentials
+renders only once its headers are configured there. harness-gw's runtime
+guides document the fallback.
 
 ## Sandbox
 
 The view runs inside a double iframe. The outer frame is a static page,
 `/mcp-app-sandbox.html`, loaded sandboxed with an opaque origin and holding only
-a message relay; the inner frame holds the view. Both proxy listeners, and Vite
-in development, serve that page with its own CSP header: the widest set of
+a message relay; the inner frame holds the view. The AOS web server, on both
+the operator and guest surfaces, and Vite in development, serve that page with
+its own CSP header: the widest set of
 sources any view may be granted, framable only by the same origin. The view's
-own CSP, below, is injected into its document and narrows that ceiling. A
-reverse proxy in front of AOS must pass the page's headers through unchanged
+own CSP, below, is injected into its document and narrows that ceiling. Caddy,
+and any reverse proxy in front of it, must pass the page's headers through unchanged
 and must not add a CSP or `X-Frame-Options` of its own to it. Requests the
 view makes carry `Origin: null`, so an App server must not rely on an origin
 check. This departs from the spec, which gives the outer frame
@@ -85,7 +87,7 @@ grants images and media `data:` only, `blob:` images stay blank.
 | `ui/request-display-mode` | Grants `inline`, `fullscreen`, or `pip` if the view declared it; otherwise keeps the current mode |
 | `ui/update-model-context` | Refused                                                                                           |
 
-Every request goes through the proxy, scoped to the tool call's own Session.
+Every request goes through the gateway, scoped to the tool call's own Session.
 The browser never talks to the MCP server. The page may answer a repeated
 `resources/read` for the same Agent, server, and URI from an earlier read, so
 a server that changes a resource gives it a new URI.
@@ -96,7 +98,7 @@ A view given [files](#files) finds their addresses in its host context under
 ```json
 {
   "aos/files": {
-    "path": "https://aos.example/api/aos/v1/agents/…/tool-calls/call-1/app/files/path?pass=…"
+    "path": "https://aos.example.test/api/v1/agents/…/tool-calls/call-1/app/files/path?pass=…"
   }
 }
 ```
@@ -104,7 +106,7 @@ A view given [files](#files) finds their addresses in its host context under
 The host renews the passes while the view is mounted: at half their life,
 when the page wakes or comes back online past that point, and when the
 workspace's connection recovers. A failed renewal retries with backoff until
-the proxy refuses it. The fresh addresses arrive as a host-context change, so
+the gateway refuses it. The fresh addresses arrive as a host-context change, so
 a view fetches a file by the address it received last. `ui/open-link` and
 `ui/download-file` recognize the view's own file by its address, whatever
 pass it carries, and use a fresh one. An own file opens over `http` too when
@@ -127,21 +129,21 @@ argument that holds an absolute, normalized path names a file. Opening any
 view withholds from its `toolInput` every top-level argument whose value
 starts with `/`, a file or not; a view that needs such a value reads it from
 its own result. For a call from one of
-[`mcpApps.files.servers`](configuration.md#mcp-app-files), the view gets
+the gateway's [`mcpApps.files.servers`](configuration.md#mcp-app-files), the view gets
 `files` in their place, with one address per argument that names a file:
 
 ```json
 {
   "addresses": {
-    "path": "/api/aos/v1/agents/…/tool-calls/call-1/app/files/path?pass=…"
+    "path": "/api/v1/agents/…/tool-calls/call-1/app/files/path?pass=…"
   },
   "expiresAt": "2026-01-01T12:10:00.000Z"
 }
 ```
 
 - An address reads `GET …/tool-calls/:toolCallId/app/files/:argument`, under
-  `/api/aos/v1` on the operator listener and `/api/guest/v1` on the guest
-  listener. The proxy takes the path from the runtime's own record of the
+  `/api/v1` on both the operator and guest listeners; which listener answers,
+  never the path, decides whose request it is. The gateway takes the path from the runtime's own record of the
   call, never from the request, and judges it by the configured folders on
   every request.
 - An address carries a pass for that one call and listener, valid for at most
@@ -149,8 +151,8 @@ its own result. For a call from one of
   judged by the pass alone; one without a pass needs the listener's own
   login, which for a guest is the invitation.
 - `POST …/tool-calls/:toolCallId/app/files` answers fresh addresses in the
-  same shape. It checks `Origin` and the listener's login, as a view's other
-  requests do.
+  same shape. It checks `Origin` against the listener's `allowedOrigins`, and
+  the listener's login, as a view's other requests do.
 - A call that names no file gets no `files`; one the listener may not read
   gets `files` with no addresses.
 - A view reads its files only from an https origin, or from 127.0.0.1 or
@@ -188,7 +190,7 @@ routes sit beside a call's, under the same roots, at
 `…/sessions/:sessionId/artifacts/:artifactId/app`:
 
 - `GET …/app` opens the view: the viewer's resource, an empty `toolInput`,
-  and a `toolResult` carrying the attachment's name and type as the proxy
+  and a `toolResult` carrying the attachment's name and type as the gateway
   reads them from the runtime, never its path. `files` holds one address,
   `path`, for its bytes.
 - That `toolResult` is the whole contract a configured viewer reads:
@@ -210,7 +212,7 @@ routes sit beside a call's, under the same roots, at
 
 ## Presentation
 
-Where the proxy reads the view itself (Hermes, OpenCode), it knows from the
+Where the gateway reads the view itself (Hermes, OpenCode), it knows from the
 server's `tools/list` which tools declare one, so the card draws as soon as
 the call starts. The view receives the call's input once the arguments are
 complete and its result once the call settles; it never receives partial

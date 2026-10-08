@@ -1,18 +1,34 @@
-# Run OpenCode behind the AOS proxy
+# Run AOS with OpenCode
 
-The browser connects only to the normalized AOS proxy (`AOS_UI_RUNTIME_MODE=aos`). The proxy attaches to one separately operated OpenCode server, keeps its Basic-auth credentials private, and scopes every Session operation to the configured absolute OpenCode directory. It is not a browser-direct OpenCode integration.
+The browser connects only to the [harness-gw](https://github.com/AlmogBaku/harness-gw)
+gateway (`AOS_UI_RUNTIME_MODE=aos`). The gateway attaches to one separately
+operated OpenCode server, keeps its Basic-auth credentials private, and scopes
+every Session operation to the configured absolute OpenCode directory. It is
+not a browser-direct OpenCode integration.
+
+This page covers running AOS against OpenCode, the optional launcher, and the
+AOS UI tools. The gateway's OpenCode adapter (native routes, MCP App fallback,
+icon reads) is documented in harness-gw's
+[`docs/runtimes/opencode.md`](https://github.com/AlmogBaku/harness-gw/blob/main/docs/runtimes/opencode.md).
 
 ## Prerequisites
 
 - Bun and an OpenCode installation authenticated with the model providers you intend to use
 - An absolute external worktree for OpenCode to operate in
-- Private, owner-only files for the OpenCode server password and the proxy signing keys
+- Private, owner-only files for the OpenCode server password and the gateway signing keys
 
 The worktree is native runtime state. Do not point OpenCode at the AOS checkout unless that is deliberately the Agent's working directory. AOS neither installs OpenCode nor owns its provider credentials.
 
 ## Attach a locally operated server
 
-Start OpenCode independently, with server authentication enabled, then create a private proxy configuration from [`deploy/proxy.opencode.example.yaml`](../../deploy/proxy.opencode.example.yaml). Set its `runtime.baseUrl` to the server address reachable by the proxy, `runtime.directory` to the exact absolute worktree, `runtime.username` to the OpenCode server username, and `runtime.passwordFile` to the matching private password file.
+Start OpenCode independently, with server authentication enabled, then create a
+private gateway configuration from harness-gw's
+[`examples/config.opencode.example.yaml`](https://github.com/AlmogBaku/harness-gw/blob/main/examples/config.opencode.example.yaml).
+Set its `runtime.baseUrl` to the server address reachable by the gateway,
+`runtime.directory` to the exact absolute worktree, `runtime.username` to the
+OpenCode server username, and `runtime.passwordFile` to the matching private
+password file. For Vite on port `3000`, set the operator listener to
+`127.0.0.1:4100` and `publicOrigin` to `http://localhost:3000`.
 
 ```bash
 # Terminal 1: OpenCode owns this process and its provider credentials.
@@ -21,15 +37,12 @@ OPENCODE_SERVER_USERNAME=aos-ui \
 OPENCODE_SERVER_PASSWORD='replace-with-a-private-secret' \
   opencode serve --hostname 127.0.0.1 --port 4096
 
-# Terminal 2: the browser talks only to this proxy.
-bun run proxy:serve -- --config /absolute/private/path/proxy.opencode.yaml
-```
+# Terminal 2, in the harness-gw checkout: the browser talks only to this gateway.
+bun run serve --config /absolute/private/path/harness-gw.opencode.yaml
 
-For Vite development, point the browser at that normalized proxy:
-
-```bash
+# Terminal 3, in the aos-ui checkout
 AOS_UI_RUNTIME_MODE=aos \
-AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
+AOS_UI_GATEWAY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
 
@@ -37,21 +50,29 @@ Never put the server password, provider credentials, directory, or native URL in
 
 ## Compose composition
 
-The optional overlay starts OpenCode alongside the proxy. The native port is internal to Compose; it is not published to the browser.
+The optional overlay starts OpenCode beside the gateway and opens the guest
+lane. The native port is internal to Compose; it is not published to the
+browser.
 
 ```bash
 cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.opencode.yaml \
-AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
-AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.opencode.yaml \
+HARNESS_GW_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
+HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml up --build
 ```
 
-The overlay also points the launcher at the base stack's `tools-mcp` service (`AOS_UI_TOOLS_MCP_URL=http://tools-mcp:4110/mcp`) and starts OpenCode only after that service is healthy.
+The overlay mounts the same password file into both the gateway and OpenCode,
+points the launcher at the base stack's `tools-mcp` service
+(`AOS_UI_TOOLS_MCP_URL=http://tools-mcp:4110/mcp`), and starts OpenCode only
+after that service is healthy.
 
-The example proxy configuration uses `http://opencode:4096` and `/workspace`, which are correct only inside this Compose composition. On Linux, set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` when the defaults do not match the worktree owner.
+The example gateway configuration uses `http://opencode:4096` and `/workspace`,
+which are correct only inside this Compose composition. On Linux, set
+`AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` when the defaults do not match the
+worktree owner.
 
 ## Native model configuration and AOS UI tools
 
@@ -93,18 +114,18 @@ An independently launched OpenCode server registers the same entry in its own
 OpenCode's v2 session engine, which AOS drives, does not expose MCP tools at the
 pinned `1.18.29`. The `aos-ui` tools are therefore registered but not callable
 through AOS on OpenCode until upstream exposes MCP tools to that engine. When
-they are, the proxy canonicalizes their names like any other harness. Charts,
-maps, and stats are [MCP App](#mcp-apps) views the proxy reads from the
-registered URL itself, so that URL must reach the server from the proxy as
-well as from OpenCode, and each view receives a text-only result.
+they are, the gateway canonicalizes their names like any other harness. Charts,
+maps, and stats are [MCP App](#mcp-apps) views the gateway reads from the
+registered URL itself, so that URL must reach the server from the gateway as
+well as from OpenCode.
 
 `bun run opencode:serve` also writes the hidden `agent-builder` creator
 definition, `.opencode/skills/aos-agent-creator/SKILL.md` with its
 `reference/harness-opencode.md`, and `.opencode/skills/aos-invite-link/SKILL.md`
 into the worktree, and refuses to start if they would conflict with existing
 content or if the target port is already occupied. The creator may write only
-a new `.opencode/agents/<id>.md` file. The OpenCode adapter does not yet report
-it as the creator, so AOS does not offer **New Agent** on OpenCode.
+a new `.opencode/agents/<id>.md` file. The gateway does not yet report it as
+the creator, so AOS does not offer **New Agent** on OpenCode.
 
 The launcher accepts these environment variables:
 
@@ -123,8 +144,8 @@ The launcher accepts these environment variables:
 The three `AOS_UI_OPENAI_COMPATIBLE_*` variables are all-or-none.
 
 Set `AOS_RUNTIME_PROXY_URL` for an Agent using `aos-invite-link` to the
-configured operator proxy origin. The skill prefers the operator invitation
-endpoint over the local CLI, so it needs network access but no signing key.
+configured operator gateway origin. The skill calls the operator invitation
+endpoint, so it needs network access but no signing key.
 
 ## MCP Apps
 
@@ -144,72 +165,45 @@ itself needs no entry:
 }
 ```
 
-OpenCode keeps no App views, so the proxy reads the server list from
-`GET /config` and connects to each view's server with its own MCP client:
-
-- It reaches only enabled remote servers without `headers` or OAuth. A local
-  server, or one that needs credentials the proxy does not hold, shows the
-  tool call's textual details.
-- For a server that needs headers, give the proxy its own copy under
-  `mcpApps.fallback.servers.NAME.headers` in the proxy configuration
-  ([MCP Apps fallback](../configuration.md#mcp-apps-fallback)). Its URL must
-  then be `https:` or loopback.
-- When the proxy reaches a server at another address than OpenCode does, set
-  `mcpApps.fallback.servers.NAME.url`; the proxy connects there instead.
-- OpenCode stores only a tool's text output, so the view receives a text-only
-  result; the tool is never called again to recover more.
-- The tool shows as `mcp__NAME__TOOL`, matched against the configured server
-  names even when a name contains `_`.
+OpenCode keeps no App views, so the gateway connects to each view's server with
+its own MCP client. It reaches only enabled remote servers without `headers` or
+OAuth; any other shows the tool call's textual details. A view receives a
+text-only result, because OpenCode stores only a tool's text output. Header
+and address overrides are in harness-gw's OpenCode guide.
 
 MCP tools are not callable from the v2 session engine at the pinned `1.18.29`
-(see above), so Apps appear once upstream exposes them. This fallback is
-temporary and goes away once OpenCode serves MCP Apps itself.
+(see above), so Apps appear once upstream exposes them.
 
 ## Folder
 
-Each Agent's folder is the proxy's configured `runtime.directory`. AOS uses it
-as the required `cwd` for `session/new` and `session/resume`.
+Each Agent's folder is the gateway's configured `runtime.directory`.
 
 ## Artifacts
 
 OpenCode 1.18.29 cannot call MCP tools, so `present_artifact` is not callable
-and the App shows "Can't reach this file". `open` returns no file addresses.
-There is no file read or call lookup on this runtime yet.
+and the App shows "Can't reach this file".
 
 ## Agent icons
 
-OpenCode has no native Agent write, so every `_aos/agents/update` call returns
-the `-31015 unsupported` error and `avatarEditable` is `false` for every Agent.
-
-An operator may hand-write an `avatar: ring/blue` key in the Agent file's
-frontmatter. The proxy reads it from `request.body.avatar` and treats it as
-the Agent's icon. Be aware of two effects:
-
-- OpenCode forwards `request.body` to the model provider on every request, so
-  the `avatar` key travels to the LLM API.
-- An unknown frontmatter key causes OpenCode to load that Agent file with its
-  legacy parser, which may change other frontmatter handling.
-
-Agents without a stored icon receive a generated icon derived from their
-position in the id-sorted roster. If the roster changes, the icon assignments
-can shift. A stable icon requires writing the frontmatter key.
-
-Session `createdAt` comes from `time.created`.
-
-A follow-up ticket (ALM-16) will adopt `experimental.fs.write` once a released
-OpenCode ships it, enabling the proxy to store icons without frontmatter.
+OpenCode has no native Agent write, so AOS cannot change an Agent's icon on
+OpenCode. An operator may hand-write an `avatar: ring/blue` key in the Agent
+file's frontmatter, which AOS shows as the Agent's icon; harness-gw's OpenCode
+guide lists that key's side effects (it reaches the model provider, and it
+switches OpenCode to its legacy frontmatter parser). Agents without a stored
+icon receive a generated icon derived from their position in the id-sorted
+roster, so the assignments can shift when the roster changes.
 
 ## Capability limits
 
-- AOS reads the native Agent catalog, creates, renames, pins, archives, and deletes Sessions, and projects Session Todos, but Agent visibility, Agent icon writes, Activity, and context accounting are unavailable when OpenCode has no exact matching operation. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
+- AOS reads the native Agent catalog, creates, renames, pins, archives, and deletes Sessions, and projects Session Todos, but Agent visibility, Agent icon writes, Activity, and context accounting are unavailable. Voice becomes available when the gateway `voice` block is configured; see [Use voice](../chat-voice.md).
 - Runs support streaming, reconnect, Stop, attachments, questions, and permissions. Edit/regenerate and active-turn steering are unavailable.
-- An invitation can resolve only an existing OpenCode Session titled `aos-invite:<ref>`. OpenCode cannot create that reserved Session safely because its pinned API has no title-bearing creation and a separate rename is not atomic; a new invitation therefore cannot create a Session on first Send.
+- An invitation can resolve only an existing OpenCode Session titled `aos-invite:<ref>`; a new invitation cannot create a Session on first Send.
 - AOS never restarts OpenCode automatically. Restart it under operator control after changing its configuration, once active work has finished.
 
 ## Verify
 
 ```bash
-bunx vitest run test/opencode scripts/opencode packages/proxy/adapters/opencode packages/tools-mcp
+bunx vitest run scripts/opencode packages/tools-mcp
 ```
 
 Native live acceptance has not been run. It requires approved disposable Agents and real model credentials; mocked tests do not prove a live OpenCode journey.

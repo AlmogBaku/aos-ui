@@ -50,10 +50,10 @@ works; AOS shows each as a short notice line in the conversation, labelled by
 kind. Notices are live only: they are not stored in history, so they do not
 reappear after a reload.
 
-If the connection to the proxy drops, the conversation stays on screen and a
+If the connection to the gateway drops, the conversation stays on screen and a
 "Reconnecting to AOS…" notice appears once the outage has lasted a few
 seconds. It clears when every resumed Session has rejoined; "The AOS server is
-full. Reconnecting shortly." means the proxy refused the connection for
+full. Reconnecting shortly." means the gateway refused the connection for
 capacity.
 
 ## Read Plans, Todos, and Subagents
@@ -82,9 +82,9 @@ The tool's description tells the Agent to call it again after each change so the
 
 **pip** moves the view into the side panel beside the conversation, or into a drawer over the conversation on phones. The message shows a short placeholder with a control that brings the view back. Moving the view reloads it, so a PDF reopens at its first page. Only one view is in pip at a time, within a Session. Close the panel, press Escape, or use the view's own inline control to return it.
 
-The proxy serves the file; the `aos-ui` MCP server never opens it. The page receives a signed address that is valid for about ten minutes and renewed while the card is open. The address serves only the path the tool call named. Which paths may be served is governed by the `mcpApps.files` folder rules; see [Configuration](configuration.md) and [MCP Apps](mcp-apps.md).
+The gateway serves the file; the `aos-ui` MCP server never opens it. The page receives a signed address that is valid for about ten minutes and renewed while the card is open. The address serves only the path the tool call named. Which paths may be served is governed by the `mcpApps.files` folder rules; see [Configuration](configuration.md) and [MCP Apps](mcp-apps.md).
 
-**What can prevent a file from loading.** Each failure logs `app_file.refused` or `app_file.unavailable` at the proxy. Common reasons:
+**What can prevent a file from loading.** Each failure logs `app_file.refused` or `app_file.unavailable` in the gateway log. Common reasons:
 
 - The tool's MCP server is not in `mcpApps.files.servers`, which defaults to `["aos-ui"]`.
 - The runtime cannot read files (OpenCode, and OpenClaw for sandboxed or remote Sessions or guests).
@@ -171,7 +171,7 @@ Rapid events are coalesced per category into one notification: a 3-second window
 
 ### OS notifications without an open tab (Web Push)
 
-When the proxy is configured for Web Push, a device that has notifications turned on receives OS notifications even with no AOS tab open, via a service worker. When at least one tab is open and active on that device, the tab handles delivery and no OS alert is raised.
+When the gateway is configured for Web Push, a device that has notifications turned on receives OS notifications even with no AOS tab open, via a service worker. When at least one tab is open and active on that device, the tab handles delivery and no OS alert is raised.
 
 Cross-device suppression: push is not sent while you are present on any device — defined as a foreground AOS tab that has been active within the last three minutes, with a 60-second heartbeat. After you stop being present, a backgrounded or idle tab holds notifications for 60 seconds; a closed workspace holds them for about 2 seconds, long enough for a reload to reconnect. A Session on screen never alerts.
 
@@ -183,7 +183,7 @@ If the deployment does not configure Web Push, or if the origin is not HTTPS, no
 
 Notification payloads and OS text contain no Agent name, Session name, conversation content, tool content, question, permission, or error details — only a category, a count, opaque identifiers, a timestamp, and locale. Multiple tabs elect one delivery tab so no peer repeats an alert. Guest sessions receive no notifications.
 
-Activity history lives in the proxy's in-memory feed; it does not survive a proxy restart by design. Browser and operating-system policies may delay or suppress delivery; Activity remains the place to check.
+Activity history lives in the gateway's in-memory feed; it does not survive a gateway restart by design. Browser and operating-system policies may delay or suppress delivery; Activity remains the place to check.
 
 ## Change language and appearance
 

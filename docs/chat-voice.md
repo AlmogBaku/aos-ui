@@ -2,47 +2,49 @@
 
 AOS supports microphone transcription and read-aloud synthesis. Speech is served
 by the runtime's native interfaces where available, or by an optional
-OpenAI-compatible proxy provider configured in the private proxy configuration.
+OpenAI-compatible gateway provider configured in the private
+[harness-gw](https://github.com/AlmogBaku/harness-gw) gateway configuration.
 There is no browser speech fallback and no separate voice Agent.
 
-Voice support is implemented for evaluation but still requires live acceptance with an approved, speech-enabled profile or a configured proxy provider. Browser mocks verify orchestration, not provider availability or long-response completeness.
+Voice support is implemented for evaluation but still requires live acceptance with an approved, speech-enabled profile or a configured gateway provider. Browser mocks verify orchestration, not provider availability or long-response completeness.
 
 ## Configure speech
 
 1. Connect AOS to a runtime by following the relevant runtime guide ([Hermes](runtimes/hermes.md), [OpenClaw](runtimes/openclaw.md), or [OpenCode](runtimes/opencode.md)).
 2. For Hermes: configure STT, TTS, or both in the owning native Hermes profile. AOS neither selects providers nor stores their credentials. Hermes makes the final provider selection when speech is requested.
-3. For OpenClaw or OpenCode, or to override or supplement Hermes native speech: configure a proxy provider (see [Configure a proxy speech provider](#configure-a-proxy-speech-provider) below).
+3. For OpenClaw or OpenCode, or to override or supplement Hermes native speech: configure a gateway provider (see [Configure a gateway speech provider](#configure-a-gateway-speech-provider) below).
 4. Open a Session. AOS checks non-secret native configuration hints independently for STT and TTS.
 5. Use HTTPS or `localhost` and grant microphone permission only when you start recording.
 
-For local development, run the normalized AOS proxy and the Vite dev server:
+For local development, run the gateway and the Vite dev server:
 
 ```bash
-# Terminal 1
-bun run proxy:serve -- --config /absolute/private/path/proxy.yaml
+# Terminal 1, in the harness-gw checkout
+bun run serve --config /absolute/private/path/harness-gw.yaml
 
-# Terminal 2
+# Terminal 2, in the aos-ui checkout
 AOS_UI_RUNTIME_MODE=aos \
-AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
+AOS_UI_GATEWAY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
 
-The proxy privately selects and authenticates Hermes; there is no direct
+The gateway privately selects and authenticates the runtime; there is no direct
 browser Hermes runtime mode.
 
 Selecting a microphone mode does not request permission. The choice is a local view preference, not a Hermes profile setting.
 
-## Configure a proxy speech provider
+## Configure a gateway speech provider
 
-The proxy can route speech requests to an OpenAI-compatible provider via the
-`voice` block in the private proxy configuration. See
+The gateway can route speech requests to an OpenAI-compatible provider via the
+`voice` block in its private configuration, overridable with
+`HARNESS_GW_VOICE_TRANSCRIPTION_*` and `HARNESS_GW_VOICE_SPEECH_*` variables. See
 [Voice providers](configuration.md#voice-providers) for the full field
 reference, `mode` semantics, and key-file rules.
 
 In `"fallback"` mode (default), the provider is used only where the runtime
 cannot serve speech natively: always for OpenClaw and OpenCode, and at
 request-time for Hermes when its native call fails. In `"override"` mode, the
-proxy provider is always used instead of the runtime.
+gateway provider is always used instead of the runtime.
 
 With `"override"`, recordings and read-aloud text are sent only to the configured
 provider. With `"fallback"`, they are sent to the runtime first and to the
@@ -85,9 +87,9 @@ Hermes does not provide word timestamps through this interface, so AOS drives pr
 
 Recordings remain in browser memory. Successfully generated read-aloud audio has an absolute one-hour IndexedDB expiry beginning after synthesis succeeds; reads do not extend it. The app prunes expired entries when the cache initializes and with one full-cache sweep every five minutes while active. Every lookup also validates expiry, so expired audio is never reused when browser suspension or closure delays physical deletion. Browser eviction, private-browsing policy, or clearing site data can remove entries earlier.
 
-Scope changes, authentication loss, or unmounting release microphone tracks, active audio, and temporary object URLs without clearing unexpired cached audio. Ordinary chat messages and the local mode preference also persist. The proxy does not log audio content or transcript text; when it routes a request to a proxy provider it logs one redacted `voice.fallback` event naming the direction and the runtime's public error code.
+Scope changes, authentication loss, or unmounting release microphone tracks, active audio, and temporary object URLs without clearing unexpired cached audio. Ordinary chat messages and the local mode preference also persist. The gateway does not log audio content or transcript text; when it routes a request to its own provider it logs one redacted `voice.fallback` event naming the direction and the runtime's public error code.
 
-**Data flow.** With `mode: "override"`, recordings and read-aloud text are sent only to the configured proxy provider. With `mode: "fallback"`, they are sent to the runtime first and to the configured proxy provider when the runtime's native call fails — even when the runtime advertises native speech capability.
+**Data flow.** With `mode: "override"`, recordings and read-aloud text are sent only to the configured gateway provider. With `mode: "fallback"`, they are sent to the runtime first and to the configured gateway provider when the runtime's native call fails — even when the runtime advertises native speech capability.
 
 Switching browser tabs or windows does not stop active capture; use Finish, Send, or Discard. Hiding the page disarms pending automatic reading; audio that is already playing carries on.
 
@@ -97,13 +99,13 @@ Where the browser supports the Screen Wake Lock API, AOS keeps the screen on whi
 
 - **Microphone unavailable:** use HTTPS or `localhost`; check device support, browser permission, native login, and profile STT configuration.
 - **Voice turn unavailable:** clear the draft, attachments, and queue; wait for an idle resumed Session; resolve approvals; confirm both STT and TTS.
-- **Read-aloud unavailable:** check native TTS configuration and authentication, or configure a proxy speech provider. Retry explicitly after generation failure or autoplay rejection.
-- **Upload rejected (400):** the proxy provider returned `invalid_request` for the audio type or size. Check that the audio format is supported by the configured provider and that the request fits within the provider's size limits.
-- **Provider unavailable (503):** the proxy provider returned an error or timed out. Check provider connectivity, `baseUrl`, and `apiKeyFile`. The `timeoutMs` default is 60 seconds; lower values may time out on slow providers.
+- **Read-aloud unavailable:** check native TTS configuration and authentication, or configure a gateway speech provider. Retry explicitly after generation failure or autoplay rejection.
+- **Upload rejected (400):** the gateway provider returned `invalid_request` for the audio type or size. Check that the audio format is supported by the configured provider and that the request fits within the provider's size limits.
+- **Provider unavailable (503):** the gateway provider returned an error or timed out. Check provider connectivity, `baseUrl`, and `apiKeyFile`. The `timeoutMs` default is 60 seconds; lower values may time out on slow providers.
 - **Guest audio rate-limited (503):** guest conversations are budgeted at 2 concurrent in-flight audio operations and 60 audio operations per 10 minutes per conversation, shared across all tabs and devices on the same invitation link. A guest exceeding this budget receives `503`; the limit resets automatically.
-- **Redirects refused:** the proxy refuses upstream redirects from the configured `baseUrl`. Point `baseUrl` directly at the serving endpoint.
-- **Upload rejected (body size):** The transcription route (`POST /api/aos/v1/agents/:agentId/audio/transcribe`) accepts a 7 500 000-byte JSON body. The speech route (`POST /api/aos/v1/agents/:agentId/audio/speak`) accepts a 40 000-byte body. The 8 MiB Hermes WebSocket frame guard is a separate upstream limit. Check your reverse proxy for a smaller limit on either route.
-- **Long response is incomplete or fails:** the current integration uses the provider's complete-audio response rather than streaming or chunking, and the proxy waits up to 90 seconds for Hermes to synthesize it. A provider renders roughly four seconds of speech per second, so a very long answer can exceed that and fail with `503`. Test the configured provider's limit before release.
+- **Redirects refused:** the gateway refuses upstream redirects from the configured `baseUrl`. Point `baseUrl` directly at the serving endpoint.
+- **Upload rejected (body size):** The transcription route (`POST /api/v1/agents/:agentId/audio/transcribe`) accepts a 7 500 000-byte JSON body. The speech route (`POST /api/v1/agents/:agentId/audio/speak`) accepts a 40 000-byte body. The 8 MiB Hermes WebSocket frame guard is a separate upstream limit. Check Caddy and any reverse proxy in front of it for a smaller limit on either route.
+- **Long response is incomplete or fails:** the current integration uses the provider's complete-audio response rather than streaming or chunking, and the gateway waits up to 90 seconds for Hermes to synthesize it. A provider renders roughly four seconds of speech per second, so a very long answer can exceed that and fail with `503`. Test the configured provider's limit before release.
 
 See [Troubleshooting](troubleshooting.md) for authentication, WebSocket, and container issues.
 

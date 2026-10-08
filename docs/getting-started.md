@@ -6,8 +6,8 @@ This tutorial attaches AOS UI to an independently operated agent harness, then i
 
 For real work, you need:
 
-- an authenticated AOS proxy connected to the harness selected by the
-  deployment (Hermes is the primary and first-supported harness)
+- the [harness-gw](https://github.com/AlmogBaku/harness-gw) gateway, authenticated to the harness selected by
+  the deployment (Hermes is the primary and first-supported harness)
 - any credentials required by that harness
 - [Bun](https://bun.sh/)
 - a current desktop browser
@@ -36,8 +36,8 @@ connection guide. Begin with Hermes unless you specifically operate another
 harness:
 
 - [Run AOS with Hermes](runtimes/hermes.md)
-- [Run OpenClaw behind the AOS proxy](runtimes/openclaw.md)
-- [Run OpenCode behind the AOS proxy](runtimes/opencode.md)
+- [Run AOS with OpenClaw](runtimes/openclaw.md)
+- [Run AOS with OpenCode](runtimes/opencode.md)
 
 Follow the local-development steps in that guide. When both the harness and AOS UI are running, open <http://localhost:3000>.
 

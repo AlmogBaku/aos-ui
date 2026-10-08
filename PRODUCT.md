@@ -19,7 +19,7 @@ AOS provides one calm workspace for selecting a primary Agent, resuming its Sess
 AOS is a UI for native harnesses, with Agent creation and rich messages around
 their conversations. Hermes is the primary and first-supported harness;
 OpenClaw and OpenCode use separate integrations behind the same harness-runtime
-boundary. The browser connects to the proxy over a single ACP v2 WebSocket per
+boundary. The browser connects to the gateway over a single ACP v2 WebSocket per
 tab. Explicit fixtures remain available.
 
 ## Operating Context
@@ -41,9 +41,9 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 - Provider events retain their originating Agent and Session. Delayed events may update their own cache but never the visible Session.
 - Rich tools always have safe, inspectable fallbacks. Browser-side code execution is limited to MCP App views — such as the AOS UI charts, maps, stats, and artifact views — in their opaque-origin double iframe; terminal/filesystem/VCS surfaces and provider hosting are out of scope. Agent-written HTML shown inside the artifact view runs its own scripts in a frame of its own with an opaque origin, under a policy that reaches no network, frame, or form.
 - An Artifact is a provider-owned deliverable that an Agent explicitly publishes: with a `MEDIA:` line where the harness defines that convention, or a trusted provider-native delivery tool such as Hermes text-to-speech. Ordinary file edits and paths mentioned in prose are not Artifacts. Published images, audio, and video show inline in conversation; other files download. An image or a file opens in the side panel, and the inspector lists every file the Session published.
-- An Agent shows a file to the user with `present_artifact` from the AOS UI tools MCP server: the conversation shows a live card that renders PDFs (fitted to the card, with selectable text, keyboard paging, and an outline and page list the reader opens), images, plain text, and Agent-written HTML with its scripts in an isolated frame. PDFs and images zoom by pinch, Ctrl with the wheel, the zoom keys, or the controls above them. A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) offers download, and open where the browser shows that kind, instead of a preview. The card's controls are Refresh, Download, Full screen, Open in new tab, and pip; pip moves the view to the side panel, and Full screen covers the viewport under the side panel's header. Open in new tab is offered only for PDFs, images, audio, and video, which the browser shows itself; the proxy serves every other file as plain text. The proxy serves the file; the `aos-ui` MCP server never opens it. Folder rules in `mcpApps.files` govern which paths may be served.
+- An Agent shows a file to the user with `present_artifact` from the AOS UI tools MCP server: the conversation shows a live card that renders PDFs (fitted to the card, with selectable text, keyboard paging, and an outline and page list the reader opens), images, plain text, and Agent-written HTML with its scripts in an isolated frame. PDFs and images zoom by pinch, Ctrl with the wheel, the zoom keys, or the controls above them. A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) offers download, and open where the browser shows that kind, instead of a preview. The card's controls are Refresh, Download, Full screen, Open in new tab, and pip; pip moves the view to the side panel, and Full screen covers the viewport under the side panel's header. Open in new tab is offered only for PDFs, images, audio, and video, which the browser shows itself; the gateway serves every other file as plain text. The gateway serves the file; the `aos-ui` MCP server never opens it. Folder rules in `mcpApps.files` govern which paths may be served.
 - Where the provider exposes it, context-window usage is surfaced per Session. Model and effort can be selected before or during a run via `session/set_config_option`. In-progress runs can be steered without creating a new run. Sessions support rename, archive, and delete.
-- Deep links to a specific Agent and Session resolve even when the Session is past the first catalog page, using `session/resume` with `_meta.aos.agentId`.
+- Deep links to a specific Agent and Session resolve even when the Session is past the first catalog page, using `session/resume` with `_meta.hgw.agentId`.
 
 ## Activity and Live Notifications
 
@@ -54,7 +54,7 @@ in-app notices, and default-on live browser notifications. Completion in the
 exact visible, focused Session is already read and suppresses alerts. Other
 Sessions in a focused workspace produce unread markers and one coalesced notice.
 Hidden tabs and visible but unfocused windows/apps deliver eligible generic OS
-notifications; when the proxy is configured for Web Push, notifications reach
+notifications; when the gateway is configured for Web Push, notifications reach
 the operator's devices even with no AOS tab open.
 
 Notification preferences are on by default. The browser asks for permission
@@ -79,9 +79,9 @@ deleted targets remain unavailable.
 
 Stored Activity and OS payloads contain no conversation, tool, question,
 permission, or error content. OS text also omits Agent and Session labels.
-The proxy activity feed covers all Sessions visible to the connection. Fixtures exercise
+The gateway activity feed covers all Sessions visible to the connection. Fixtures exercise
 deterministic scenarios, and the other native adapters expose Activity only
-when the ACP `initialize` response includes `_meta.aos.extensions.activity: true`. Browser and OS policies can delay
+when the ACP `initialize` response includes `_meta.hgw.extensions.activity: true`. Browser and OS policies can delay
 or suppress delivery. The Activity bell is in the desktop Agents heading and
 mobile header, with an accessible unread count, keyboard-managed drawer,
 English/Hebrew support, and reduced motion.

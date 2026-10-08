@@ -1,9 +1,20 @@
 # Configuration reference
 
+AOS has three layers of configuration:
+
+- the public `/runtime-config.json`, read by the browser;
+- the aos-ui web server and Compose stack (`AOS_UI_*` variables, Caddy);
+- the private harness-gw gateway configuration (a YAML file plus
+  `HARNESS_GW_*` variables), which selects and authenticates the one native
+  runtime.
+
+## Public runtime configuration
+
 The browser loads `/runtime-config.json` without caching. It has exactly two
-runtime modes: `aos` for the normalized same-origin proxy and `fixture` for a
-deterministic local preview. Native provider URLs, credentials, directories,
-and model identifiers never belong in this public file.
+runtime modes: `aos` for the harness-gw gateway on the same origin and
+`fixture` for a deterministic local preview. Native provider URLs,
+credentials, directories, and model identifiers never belong in this public
+file.
 
 ```json
 {
@@ -16,264 +27,159 @@ and model identifiers never belong in this public file.
 Unknown fields are rejected. Published HTML Artifacts load no external assets
 in preview.
 
+The aos-ui web server serves the operator's file with one field added,
+`buildId`, read from `dist/build-id`. The guest surface needs no file: it
+answers a generated `{ "surface": "guest" }` with the same `buildId`. The
+browser refetches the configuration on reconnect and when the tab regains
+focus, and reloads once when the served `buildId` differs from the build it is
+running.
+
 ## Local development
 
 Vite derives the same public shape when no configuration file is supplied.
 
-| Variable                                 | Default                     | Use                                                                                                                          |
-| ---------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                       | Public runtime JSON file. Also read by the Bun proxy and static server at startup; required in every non-fixture deployment. |
-| `AOS_UI_RUNTIME_MODE`                    | `aos`                       | `aos` or explicit `fixture`.                                                                                                 |
-| `AOS_UI_PROXY_TARGET`                    | `http://127.0.0.1:4100`     | Local normalized proxy target.                                                                                               |
-| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                      | Set `false` to hide model selection.                                                                                         |
-| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                      | Set `false` to hide context usage.                                                                                           |
-| `AOS_UI_TOOLS_MCP_URL`                   | `http://127.0.0.1:4110/mcp` | Tools MCP server URL that `bun run opencode:serve` registers as `aos-ui`.                                                    |
+| Variable                                 | Default                     | Use                                                                                         |
+| ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
+| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                       | Public runtime JSON file. Also read by the web server; required in every non-fixture setup. |
+| `AOS_UI_RUNTIME_MODE`                    | `aos`                       | `aos` or explicit `fixture`.                                                                |
+| `AOS_UI_GATEWAY_TARGET`                  | `http://127.0.0.1:4100`     | Gateway that Vite forwards `/api/v1` (HTTP and WebSocket) to.                               |
+| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                      | Set `false` to hide model selection.                                                        |
+| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                      | Set `false` to hide context usage.                                                          |
+| `AOS_UI_TOOLS_MCP_URL`                   | `http://127.0.0.1:4110/mcp` | Tools MCP server URL that `bun run opencode:serve` registers as `aos-ui`.                   |
 
-The AOS proxy privately selects and authenticates exactly one Hermes, OpenClaw,
+The gateway privately selects and authenticates exactly one Hermes, OpenClaw,
 or OpenCode runtime. Hermes is the primary and first-supported harness. There
-is no browser runtime mode or provider route for any of them.
+is no browser runtime mode or provider route for any of them. Run the gateway
+from its own checkout; see
+[harness-gw `README.md`](https://github.com/AlmogBaku/harness-gw/blob/main/README.md).
 
-### Compose host variables
+## Web server
+
+`bun run web:serve` (`server/cli.ts`) serves the built app, the page policy
+(the guest page's CSP and framing headers), `/runtime-config.json`, and a
+`/healthz` liveness check. It answers `GET` and `HEAD` only; any other method
+gets 405, and every `/api` path is 404, because the gateway answers `/api/v1`
+beside it.
+
+| Variable                     | Default                           | Use                                                                                                    |
+| ---------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `AOS_UI_WEB_HOST`            | `127.0.0.1`                       | Operator surface bind address: `127.0.0.1`, `::1`, or a wildcard with `AOS_UI_WEB_EXPOSURE`.           |
+| `AOS_UI_WEB_PORT`            | `3000`                            | Operator surface port. Compose uses `4200`.                                                            |
+| `AOS_UI_GUEST_WEB_PORT`      | unset                             | Guest surface port; the guest surface runs only when it is set. Compose's harness overlays use `4201`. |
+| `AOS_UI_GUEST_WEB_HOST`      | `127.0.0.1`                       | Guest surface bind address, under the same rule as `AOS_UI_WEB_HOST`.                                  |
+| `AOS_UI_WEB_EXPOSURE`        | unset                             | `private-container` allows a wildcard bind (`0.0.0.0` or `::`) inside a private container network.     |
+| `AOS_UI_STATIC_ROOT`         | `/app/dist`                       | The built app, holding `build-id` beside the assets.                                                   |
+| `AOS_UI_RUNTIME_CONFIG_FILE` | `/run/aos-ui/runtime-config.json` | The operator's public runtime configuration.                                                           |
+
+The guest surface never serves `/auth`, `/sw.js`, or `/manifest.webmanifest`.
+
+## Compose host variables
 
 These variables control how the Compose stack publishes its listeners on the
-host. They are not read by the Vite dev server. The `tools-mcp` service has no
-authentication and is always published on `127.0.0.1`, whatever the operator
-bind address.
+host. They are not read by the Vite dev server. Caddy is the only published
+lane listener; the `tools-mcp` service has no authentication and is always
+published on `127.0.0.1`, whatever the operator bind address.
 
-| Variable                      | Default     | Use                                                 |
-| ----------------------------- | ----------- | --------------------------------------------------- |
-| `AOS_UI_BIND_ADDRESS`         | `127.0.0.1` | Host bind address for the operator listener.        |
-| `AOS_UI_WEB_PUBLISHED_PORT`   | `3000`      | Host-side published port for the operator listener. |
-| `AOS_UI_GUEST_BIND_ADDRESS`   | `127.0.0.1` | Host bind address for the guest listener.           |
-| `AOS_UI_GUEST_PUBLISHED_PORT` | `3001`      | Host-side published port for the guest listener.    |
-| `AOS_UI_TOOLS_MCP_PORT`       | `4110`      | Loopback host port for the `tools-mcp` service.     |
+| Variable                      | Default                              | Use                                                                        |
+| ----------------------------- | ------------------------------------ | -------------------------------------------------------------------------- |
+| `AOS_UI_BIND_ADDRESS`         | `127.0.0.1`                          | Host bind address for the operator lane.                                   |
+| `AOS_UI_WEB_PUBLISHED_PORT`   | `3000`                               | Host port for the operator lane (Caddy `:18080`).                          |
+| `AOS_UI_GUEST_BIND_ADDRESS`   | `127.0.0.1`                          | Host bind address for the guest lane.                                      |
+| `AOS_UI_GUEST_PUBLISHED_PORT` | `3001`                               | Host port for the guest lane (Caddy `:18081`), added by a harness overlay. |
+| `AOS_UI_PUBLIC_HOST`          | unset                                | Extra `Host` name the operator lane answers, such as a tailnet name.       |
+| `AOS_UI_GUEST_PUBLIC_HOST`    | unset                                | Extra `Host` name the guest lane answers.                                  |
+| `AOS_UI_TOOLS_MCP_PORT`       | `4110`                               | Loopback host port for the `tools-mcp` service.                            |
+| `AOS_UI_HOST_UID`/`_GID`      | `1000`                               | Numeric owner of the mounted secret files; the gateway runs as this user.  |
+| `HARNESS_GW_IMAGE`            | `ghcr.io/almogbaku/harness-gw:0.1.0` | Gateway image a harness overlay runs.                                      |
+| `HARNESS_GW_CONFIG_FILE`      | required by a harness overlay        | Host path of the private gateway configuration.                            |
 
-## Private proxy configuration
+Each harness overlay also requires its secret-file variables, such as
+`HARNESS_GW_HERMES_TOKEN_FILE` and `HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE`;
+see [Deployment](deployment.md).
 
-The Bun proxy reads a private YAML configuration file. Start from the
-maintained example for the selected provider:
-[`Hermes`](../deploy/proxy.hermes.example.yaml),
-[`OpenClaw`](../deploy/proxy.openclaw.example.yaml), or
-[`OpenCode`](../deploy/proxy.opencode.example.yaml).
+## Caddy routing
 
-**Resolution order.** The path is resolved as: `--config` flag, then
-`AOS_UI_PROXY_CONFIG_FILE`, then the discovery path
-`${XDG_CONFIG_HOME:-$HOME/.config}/aos-ui/proxy.yaml`. The `invite`
-subcommand never discovers a default path; it requires `--config` or
-`AOS_UI_PROXY_CONFIG_FILE`. A discovered path that does not exist is treated
-as an empty document, so a deployment configured entirely through environment
-overrides is valid. An explicitly supplied path that does not exist is an error.
+`deploy/Caddyfile` (and `deploy/caddy/guest.caddy`, mounted by the harness
+overlays) gives each lane one origin: `/api/v1/*`, HTTP and WebSocket, goes to
+that lane's gateway listener, and everything else to that lane's aos-ui web
+server listener. The lane is the port, never the path.
 
-**File checks.** Before parsing, the loader checks that the path is a regular
-file (not a directory, device, or socket), is not group- or world-writable,
-and is owned by the current process user or by root. Symlinks are followed.
-Files larger than 1 MiB are rejected. These checks exist because the file
-specifies listener addresses and can therefore widen the unauthenticated
-operator surface. Compose bind-mounts preserve host ownership, so the file
-must be owned by `AOS_UI_HOST_UID` (or by root) and must not be mode `0664`
-or wider.
+- Each site answers only its own `Host` names, `127.0.0.1`, `localhost`, and
+  the optional `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other
+  name gets 421. Never set those variables to `localhost` or `127.0.0.1`:
+  Caddy rejects the duplicate host and does not start.
+- `AOS_UI_CADDY_BIND` sets the bind address (default `127.0.0.1`; Compose sets
+  `0.0.0.0` inside the container and publishes the port on loopback).
+- The upstreams default to the Compose service names and are overridden by
+  `deploy/compose.host.yaml` with `AOS_UI_GATEWAY_UPSTREAM`,
+  `AOS_UI_GATEWAY_GUEST_UPSTREAM`, `AOS_UI_WEB_UPSTREAM`, and
+  `AOS_UI_WEB_GUEST_UPSTREAM`.
+- There is no admin API, no automatic HTTPS, and no access log, because a file
+  address carries its pass in the query. External ingress owns TLS.
 
-**YAML hardening.** The file must contain exactly one YAML document. Anchors
-and aliases are not allowed. The keys `__proto__`, `constructor`, and
-`prototype` are not allowed anywhere in the document. Any parser warning fails
-the load.
+## Gateway configuration
 
-| Field             | Meaning                                                                                                                                       |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`         | Configuration format; V1 accepts only `1`.                                                                                                    |
-| `deploymentId`    | Stable identifier bound into guest invitations.                                                                                               |
-| `listen`          | Trusted operator listener. `host` must be `127.0.0.1`, `::1`, `0.0.0.0`, or `::`. Wildcard binds require `exposure: "private-container"`.     |
-| `publicOrigin`    | Exact browser origin accepted for state-changing operator requests. Must be `https:` unless the host is `127.0.0.1`, `[::1]`, or `localhost`. |
-| `runtime`         | One selected runtime: a stable ID plus the provider-specific private connection fields below.                                                 |
-| `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                                                                   |
-| `voice`           | Optional proxy speech provider for transcription and/or read-aloud (see [Voice providers](#voice-providers) below).                           |
-| `guest`           | Optional distinct guest listener/origin and invitation signing keys (see below).                                                              |
-| `mcpApps`         | Optional MCP Apps fallback overrides and file rules (see [MCP Apps fallback](#mcp-apps-fallback) and [MCP App files](#mcp-app-files) below).  |
-| `log`             | Proxy log. `level` is `debug`, `info`, `warn`, or `error`; `debug` adds every owner state change and is never a production setting.           |
-| `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.                                                       |
+The harness-gw gateway reads one private YAML file. Start from the example for
+the selected runtime in harness-gw's `examples/`:
+[`config.hermes.example.yaml`](https://github.com/AlmogBaku/harness-gw/blob/main/examples/config.hermes.example.yaml),
+[`config.openclaw.example.yaml`](https://github.com/AlmogBaku/harness-gw/blob/main/examples/config.openclaw.example.yaml),
+or
+[`config.opencode.example.yaml`](https://github.com/AlmogBaku/harness-gw/blob/main/examples/config.opencode.example.yaml).
+The schema, with every key documented, is harness-gw's `src/config.ts`; the
+wire and HTTP API, including origin rules, are in
+[`docs/protocol.md`](https://github.com/AlmogBaku/harness-gw/blob/main/docs/protocol.md).
+TODO(ALM-36): harness-gw has no configuration reference doc yet; once it does,
+replace the gateway sections below with a link to it.
 
-V1 selects one of the supported adapter kinds per deployment; unknown kinds are
-rejected. Operator and guest listeners use the exact same runtime instance,
-credentials, transport, and Session coordinator. There is no second guest
-runtime or credential.
+What an aos-ui operator needs to know:
 
-| `runtime.kind` | Required private fields                                                                                  |
-| -------------- | -------------------------------------------------------------------------------------------------------- |
-| `hermes`       | `baseUrl`, absolute owner-only `tokenFile`, and `sessionIdleMs` (1 000–86 400 000 ms)                    |
-| `openclaw`     | WebSocket `baseUrl`, absolute owner-only `deviceIdentityFile`, and absolute owner-only `deviceTokenFile` |
-| `opencode`     | `baseUrl`, absolute `directory`, `username`, and absolute owner-only `passwordFile`                      |
-
-`runtime.sessionIdleMs` (Hermes only) controls how long the proxy keeps a Session attachment warm after
-the last subscriber disconnects before closing only that Session. The shared
-Hermes socket remains open.
-
-`runtime.mediaArtifacts` (every runtime, default `true`) turns native assistant
-media into Artifacts: a Hermes `MEDIA:` line or text-to-speech receipt, and an
-OpenClaw media block. Set it to `false` to leave that media as the runtime sent
-it: a Hermes `MEDIA:` line stays visible in the message text, native file path
-included, to every reader of the Session, guests too, and an OpenClaw
-assistant media block, which has no text form, is not shown. Images the
-operator or a guest attaches to their own message stay Artifacts either way.
-OpenCode publishes no native media, so the field has no effect there.
-
-When `guest` is configured, its `invitations` block accepts:
-
-| Field              | Default  | Meaning                                                       |
-| ------------------ | -------- | ------------------------------------------------------------- |
-| `keys`             | required | Array of up to 3 `{id, secretFile}` objects for key rotation. |
-| `clockSkewSeconds` | `0`      | Accepted clock skew when validating tokens (0–60 s).          |
-
-Each invitation carries its own lifetime: the `expiresIn` it was issued with, or
-72 hours when it names none.
-
-The operator listener intentionally has no application authentication. Network
-access grants full operator access. Keep it on loopback or a trusted private
-network, or put it behind an authenticated ingress. If `guest` is configured,
-its listener and public origin must differ from the operator's; guest access
-requires a scoped, expiring JWT.
-
-Every provider secret file (`runtime.tokenFile`, `runtime.passwordFile`, or
-`runtime.deviceIdentityFile`/`runtime.deviceTokenFile` as applicable) and every
-`guest.invitations.keys[].secretFile` must be absolute paths to regular,
-non-symlinked, owner-only files with no group or other read bits, and between 1
-and 8192 bytes. Guest invitation signing-key files must contain exactly 43
-characters of base64url encoding a 32-byte value. Secret values never belong
-directly in the YAML file, Compose environment, `VITE_*`, public runtime
-configuration, or browser bundle. Unknown and legacy OIDC, operator-cookie,
-Hermes browser-broker, and guest-Hermes fields are rejected.
-
-For Compose runtime overlays, `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` select
-the non-root proxy identity and the declared secret ownership. On Linux, use
-the numeric owner of the source secret files because local Compose mounts them
-without changing their host ownership.
-
-The Bun proxy serves the built browser assets, `/runtime-config.json`, the
-operator API, and—when configured—the separate guest surface. See
-[Deployment](deployment.md) for Compose mounts and listener exposure.
-
-### Built-in defaults {#built-in-defaults}
-
-The loader starts from these defaults before merging the file and any
-environment overrides. `deploymentId`, `publicOrigin`, and `runtime` have no
-default; a minimal local file contains only those three fields.
-
-| Field                                | Default     |
-| ------------------------------------ | ----------- |
-| `version`                            | `1`         |
-| `listen.host`                        | `127.0.0.1` |
-| `listen.port`                        | `4100`      |
-| `limits.activeExecutions`            | `256`       |
-| `limits.guestActiveExecutions`       | `32`        |
-| `limits.operatorEventPeers`          | `256`       |
-| `limits.subscriberEvents`            | `512`       |
-| `limits.subscriberBytes`             | `2097152`   |
-| `log.level`                          | `info`      |
-| `shutdownGraceMs`                    | `5000`      |
-| `runtime.sessionIdleMs` (Hermes)     | `300000`    |
-| `runtime.mediaArtifacts`             | `true`      |
-| `guest.invitations.clockSkewSeconds` | `0`         |
-| `voice.*.mode`                       | `fallback`  |
-| `voice.*.timeoutMs`                  | `60000`     |
-| `voice.speech.format`                | `mp3`       |
-
-### Environment overrides {#environment-overrides}
-
-Every scalar field in the schema can be set or overridden by an environment
-variable prefixed `AOS_UI_PROXY_`. Values are trimmed; an empty string after
-trimming means the variable is not set. Integer fields must be whole numbers; boolean fields take `true` or `false`.
-`AOS_UI_PROXY_RUNTIME_KIND` is read first and determines which runtime-specific
-rows apply; using a runtime-specific variable with the wrong kind is an error.
-A variable whose `Applies` is "only when file has `guest` block" fails if the
-file contains no `guest` key, because env overrides cannot open a second
-listener on their own. Push and voice variables create their respective blocks
-when the file omits them. Arrays (`guest.invitations.keys`) and the whole
-`mcpApps` block are file-only; env cannot remove a key already present in
-the file. The variables
-`AOS_UI_PROXY_TARGET`, `AOS_UI_PROXY_HOST`, `AOS_UI_PROXY_PORT`, and
-`AOS_UI_PROXY_CONFIG_FILE` are not overrides; they belong to other features.
-
-To widen the listener from loopback to `0.0.0.0` using only environment
-variables, set both `AOS_UI_PROXY_LISTEN_HOST=0.0.0.0` and
-`AOS_UI_PROXY_LISTEN_EXPOSURE=private-container`; setting the host alone fails
-schema validation.
-
-| Variable                                            | Field                                | Type    | Applies                          |
-| --------------------------------------------------- | ------------------------------------ | ------- | -------------------------------- |
-| `AOS_UI_PROXY_DEPLOYMENT_ID`                        | `deploymentId`                       | string  | always                           |
-| `AOS_UI_PROXY_PUBLIC_ORIGIN`                        | `publicOrigin`                       | string  | always                           |
-| `AOS_UI_PROXY_LISTEN_HOST`                          | `listen.host`                        | string  | always                           |
-| `AOS_UI_PROXY_LISTEN_PORT`                          | `listen.port`                        | int     | always                           |
-| `AOS_UI_PROXY_LISTEN_EXPOSURE`                      | `listen.exposure`                    | string  | always                           |
-| `AOS_UI_PROXY_RUNTIME_ID`                           | `runtime.id`                         | string  | always                           |
-| `AOS_UI_PROXY_RUNTIME_KIND`                         | `runtime.kind`                       | string  | always                           |
-| `AOS_UI_PROXY_RUNTIME_BASE_URL`                     | `runtime.baseUrl`                    | string  | always                           |
-| `AOS_UI_PROXY_RUNTIME_MEDIA_ARTIFACTS`              | `runtime.mediaArtifacts`             | boolean | always                           |
-| `AOS_UI_PROXY_RUNTIME_TOKEN_FILE`                   | `runtime.tokenFile`                  | string  | hermes only                      |
-| `AOS_UI_PROXY_RUNTIME_SESSION_IDLE_MS`              | `runtime.sessionIdleMs`              | int     | hermes only                      |
-| `AOS_UI_PROXY_RUNTIME_DIRECTORY`                    | `runtime.directory`                  | string  | opencode only                    |
-| `AOS_UI_PROXY_RUNTIME_USERNAME`                     | `runtime.username`                   | string  | opencode only                    |
-| `AOS_UI_PROXY_RUNTIME_PASSWORD_FILE`                | `runtime.passwordFile`               | string  | opencode only                    |
-| `AOS_UI_PROXY_RUNTIME_DEVICE_IDENTITY_FILE`         | `runtime.deviceIdentityFile`         | string  | openclaw only                    |
-| `AOS_UI_PROXY_RUNTIME_DEVICE_TOKEN_FILE`            | `runtime.deviceTokenFile`            | string  | openclaw only                    |
-| `AOS_UI_PROXY_LIMITS_ACTIVE_EXECUTIONS`             | `limits.activeExecutions`            | int     | always                           |
-| `AOS_UI_PROXY_LIMITS_GUEST_ACTIVE_EXECUTIONS`       | `limits.guestActiveExecutions`       | int     | always                           |
-| `AOS_UI_PROXY_LIMITS_OPERATOR_EVENT_PEERS`          | `limits.operatorEventPeers`          | int     | always                           |
-| `AOS_UI_PROXY_LIMITS_SUBSCRIBER_EVENTS`             | `limits.subscriberEvents`            | int     | always                           |
-| `AOS_UI_PROXY_LIMITS_SUBSCRIBER_BYTES`              | `limits.subscriberBytes`             | int     | always                           |
-| `AOS_UI_PROXY_GUEST_LISTEN_HOST`                    | `guest.listen.host`                  | string  | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_LISTEN_PORT`                    | `guest.listen.port`                  | int     | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_LISTEN_EXPOSURE`                | `guest.listen.exposure`              | string  | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_PUBLIC_ORIGIN`                  | `guest.publicOrigin`                 | string  | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_INVITATIONS_CLOCK_SKEW_SECONDS` | `guest.invitations.clockSkewSeconds` | int     | only when file has `guest` block |
-| `AOS_UI_PROXY_PUSH_STATE_DIR`                       | `push.stateDir`                      | string  | may create `push` block          |
-| `AOS_UI_PROXY_PUSH_VAPID_SUBJECT`                   | `push.vapid.subject`                 | string  | may create `push` block          |
-| `AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE`          | `push.vapid.privateKeyFile`          | string  | may create `push` block          |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_PROVIDER`         | `voice.transcription.provider`       | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_BASE_URL`         | `voice.transcription.baseUrl`        | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_API_KEY_FILE`     | `voice.transcription.apiKeyFile`     | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_MODEL`            | `voice.transcription.model`          | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_MODE`             | `voice.transcription.mode`           | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_TIMEOUT_MS`       | `voice.transcription.timeoutMs`      | int     | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_TRANSCRIPTION_LANGUAGE`         | `voice.transcription.language`       | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_PROVIDER`                | `voice.speech.provider`              | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_BASE_URL`                | `voice.speech.baseUrl`               | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_API_KEY_FILE`            | `voice.speech.apiKeyFile`            | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_MODEL`                   | `voice.speech.model`                 | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_MODE`                    | `voice.speech.mode`                  | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_TIMEOUT_MS`              | `voice.speech.timeoutMs`             | int     | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_VOICE`                   | `voice.speech.voice`                 | string  | may create `voice` block         |
-| `AOS_UI_PROXY_VOICE_SPEECH_FORMAT`                  | `voice.speech.format`                | string  | may create `voice` block         |
-| `AOS_UI_PROXY_LOG_LEVEL`                            | `log.level`                          | string  | always                           |
-| `AOS_UI_PROXY_SHUTDOWN_GRACE_MS`                    | `shutdownGraceMs`                    | int     | always                           |
-
-### Errors {#config-errors}
-
-When the configuration is invalid, the proxy logs a `proxy.start_failed` event
-whose `error` is named `ProxyConfigurationError`. Its message begins with
-`Invalid proxy configuration in <path>:` followed by one indented line per
-field:
-
-```
-Invalid proxy configuration in /etc/aos-ui/proxy.yaml:
-  runtime.tokenFile: Invalid input: expected string, received undefined
-  limits: 1 unrecognized key
-```
-
-Field paths are reported; values are never included. Unrecognized keys are
-reported as a count, not by name. A stale key, one an earlier release accepted
-and this one no longer does, is an unrecognized key: the proxy refuses to start
-and names the field path that holds it. When a variable set the failing field, its
-name appears in parentheses after the message. File-check failures (not a
-regular file, group- or world-writable, owned by another user, too large) name
-the path and the constraint that failed.
-
-Fields removed in recent releases that are now stale keys in an upgraded deployment: `guest.lane`, `guest.invitations.ttlSeconds`, and any separate replay-limit fields under `limits`. Replay bounds use `limits.subscriberEvents` and `limits.subscriberBytes` with no separate keys. Remove them from your configuration file before starting the upgraded proxy.
-
-Every logged error carries its name, message, native `code` or `reason`, and
-cause chain, never its stack. Before a line is written, the log masks every
-credential-named field, strips each URL's userinfo, query, and fragment, and
-replaces each voice key, MCP header value, guest invitation key, and VAPID
-private key the proxy has read with `[REDACTED]`.
+- **Path.** `--config`, then `HARNESS_GW_CONFIG_FILE`, then
+  `${XDG_CONFIG_HOME:-$HOME/.config}/harness-gw/config.yaml`. The `invite`
+  command never discovers a path. `harness-gw config check --config <path>`
+  validates the file, its `HARNESS_GW_*` overrides, and the schema, and starts
+  nothing.
+- **File checks.** The file must be a regular file owned by the gateway user or
+  root and never group- or world-writable. Compose bind-mounts keep host
+  ownership, so it must be owned by `AOS_UI_HOST_UID` at mode `0600` or
+  `0640`, or by root at `0644`.
+- **Listeners.** `listen` is the trusted operator listener and the optional
+  `guest.listen` the guest one; in Compose they are ports `4100` and `4101`
+  behind Caddy. A wildcard host needs `exposure: private-container`. The
+  operator listener has no application authentication: network access grants
+  full operator access. Operator and guest share one runtime instance and
+  credential.
+- **Origins.** Each listener's `publicOrigin` (and optional `allowedOrigins`,
+  which defaults to it) must list the exact origin the browser uses, such as
+  `http://127.0.0.1:3000` for the operator lane in Compose and
+  `http://127.0.0.1:3001` for the guest lane. A WebSocket upgrade or
+  state-changing request with a foreign, `null`, or missing `Origin` is refused
+  with 403, so a client that is not a browser must still send a listed
+  `Origin`. The one exception is invitation creation on the operator listener,
+  which the `aos-invite-link` skill's `curl` calls without one. A
+  non-loopback origin must be `https:`.
+- **Runtime.** `runtime.kind` is `hermes`, `openclaw`, or `opencode`, with that
+  runtime's private connection fields and secret files; see the harness-gw
+  runtime guides under `docs/runtimes/`. `runtime.mediaArtifacts` (default
+  `true`) turns native assistant media into Artifacts; with `false`, a Hermes
+  `MEDIA:` line, native path included, stays visible to every reader of the
+  Session, guests too.
+- **Secrets.** Every secret file is an absolute path to a regular,
+  non-symlinked, owner-only file. Guest invitation signing keys are 43
+  base64url characters encoding 32 bytes. Secret values never belong in the
+  YAML file, the Compose environment, `VITE_*`, the public runtime
+  configuration, or the browser bundle.
+- **Environment overrides.** Every scalar field can be set by `HARNESS_GW_`
+  followed by its path in upper snake case, for example
+  `HARNESS_GW_LISTEN_PORT`, `HARNESS_GW_RUNTIME_BASE_URL`, or
+  `HARNESS_GW_PUSH_VAPID_SUBJECT`. Arrays, `allowedOrigins`, and the whole
+  `mcpApps` block are file-only, and a guest override needs a `guest` block in
+  the file.
+- **Errors.** An invalid configuration logs `proxy.start_failed` with a
+  message beginning `Invalid proxy configuration in <path>:` and one line per
+  failing field path, naming the variable that set it; values are never
+  included. A key this release no longer accepts is an unrecognized key and
+  stops the gateway. Logs mask credential fields and URL userinfo, query, and
+  fragment.
 
 Runtime slash-command suggestions are enabled on the operator surface only.
 The guest listener advertises none and refuses any guest message or steer whose
@@ -285,7 +191,7 @@ Add a `voice` block to route transcription (`POST {baseUrl}/audio/transcriptions
 and/or read-aloud synthesis (`POST {baseUrl}/audio/speech`) through an
 OpenAI-compatible speech provider. Omitting the block leaves only the runtime's
 native speech interfaces active. The block must contain at least one of
-`transcription` or `speech`; the example proxy configs intentionally omit it.
+`transcription` or `speech`; the example gateway configs intentionally omit it.
 
 ```yaml
 voice:
@@ -334,24 +240,24 @@ Each direction (`transcription`, `speech`) accepts:
 
 #### Mode semantics
 
-`"fallback"` uses the proxy provider only where the runtime cannot serve speech:
+`"fallback"` uses the gateway provider only where the runtime cannot serve speech:
 at the capability level when the runtime reports speech unavailable (OpenClaw,
 OpenCode), and at request time when the runtime's native call fails. On Hermes,
 which advertises speech availability per transport, fallback is request-time
-only: the native call is attempted first, and the proxy provider is used only
+only: the native call is attempted first, and the gateway provider is used only
 if that call fails.
 
-`"override"` always uses the proxy provider, regardless of runtime capability.
+`"override"` always uses the gateway provider, regardless of runtime capability.
 
 Provider failures surface as `503 temporarily_unavailable`. An unsupported audio
-type or oversized request surfaces as `400 invalid_request`. The proxy never logs
+type or oversized request surfaces as `400 invalid_request`. The gateway never logs
 audio content or transcript text; it logs one redacted `voice.fallback` event
 per direction naming the direction and the runtime's public error code.
 
 ### MCP Apps fallback {#mcp-apps-fallback}
 
 MCP App servers are registered in the runtime's own MCP configuration, never
-in AOS. On Hermes and OpenCode the proxy reads an App's view itself, through
+in AOS. On Hermes and OpenCode the gateway reads an App's view itself, through
 its own MCP client, from the server URL the runtime reports. By default it
 connects only to Streamable HTTP servers that ask for no credentials. Add an
 `mcpApps` block to let it reach a server at another address, or one that needs
@@ -370,11 +276,11 @@ mcpApps:
 
 - The key under `servers` is the MCP server name exactly as the runtime reports
   it. Each entry needs `url`, `headers`, or both.
-- `url` replaces the URL the runtime reports; the proxy connects there
-  instead. Use it when the proxy reaches the server at a different address
+- `url` replaces the URL the runtime reports; the gateway connects there
+  instead. Use it when the gateway reaches the server at a different address
   than the harness does. A Hermes on the host registers
-  `http://127.0.0.1:4110/mcp`, but a proxy in a Compose container has its own
-  loopback, so the Hermes Compose example overrides `aos-ui` with the Compose
+  `http://127.0.0.1:4110/mcp`, but a gateway in a Compose container has its own
+  loopback, so harness-gw's Hermes example overrides `aos-ui` with the Compose
   service address `http://tools-mcp:4110/mcp`. It must be an `http:` or
   `https:` URL without credentials, query, or fragment. Only the runtime's
   report decides whether a server is reachable at all: an override never adds
@@ -382,7 +288,7 @@ mcpApps:
 - Each header's `file` holds the whole header value (for example
   `Bearer …`). It follows the same rules as `runtime.tokenFile`: absolute,
   regular, non-symlinked, owner-only, 1–8192 bytes, one line. Every file is read
-  once at startup, so a changed value needs a proxy restart.
+  once at startup, so a changed value needs a gateway restart.
 - A server with headers is reached only over `https:` or on a loopback host,
   whether the URL is the override or the runtime's; anything else is refused.
   A `url` over plain HTTP to a host other than loopback is accepted only
@@ -396,7 +302,7 @@ See [MCP Apps](mcp-apps.md) for what a view may do once it is served.
 ### MCP App files {#mcp-app-files}
 
 A tool call can name files for its App's view to show, as `present_artifact`
-names the file it presents. The proxy reads such a file for the view through
+names the file it presents. The gateway reads such a file for the view through
 the runtime, and the view never sees its path; see [MCP Apps](mcp-apps.md#files)
 for the routes. An `mcpApps.files` block decides which calls and folders
 qualify:
@@ -465,15 +371,15 @@ the block leaves tab-only delivery active; no other behavior changes.
 
 ```yaml
 push:
-  stateDir: /var/lib/aos-ui/push
+  stateDir: /var/lib/harness-gw/push
   vapid:
     subject: mailto:ops@example.com
     privateKeyFile: /run/secrets/vapid-private-key
 ```
 
-`stateDir` must exist and be writable by the proxy user before the proxy starts.
+`stateDir` must exist and be writable by the gateway user before the gateway starts.
 It holds one JSON file of device registrations (push endpoints and their keys;
-no conversation content), up to 32 per operator. The proxy refuses to start if
+no conversation content), up to 32 per operator. The gateway refuses to start if
 the directory is missing or unwritable — there is no silent fallback.
 
 Generate a VAPID key pair once:
@@ -484,12 +390,12 @@ bunx web-push generate-vapid-keys
 
 Keep only the private key (a 43-character base64url scalar). Write it to a
 file, set its permissions to `0600`, and pass the path as `privateKeyFile`. The
-public key is derived at proxy startup; do not configure it separately.
+public key is derived at gateway startup; do not configure it separately.
 
-For Compose deployments, `compose.push.yaml` passes push settings to the proxy
+For Compose deployments, `compose.push.yaml` passes push settings to the gateway
 as container environment variables; the private configuration file needs no
 `push` block. Add `-f compose.push.yaml` after the runtime overlay and set
-`AOS_UI_PUSH_STATE_DIR`, `AOS_UI_VAPID_PRIVATE_KEY_FILE`, and
-`AOS_UI_PUSH_VAPID_SUBJECT` (see
+`HARNESS_GW_PUSH_STATE_DIR`, `HARNESS_GW_VAPID_PRIVATE_KEY_FILE`, and
+`HARNESS_GW_PUSH_VAPID_SUBJECT` (see
 [Deployment](deployment.md#web-push-state-and-vapid-secret)). Omitting the
 overlay leaves tab-only delivery active with no additional variables required.

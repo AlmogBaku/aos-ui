@@ -1,33 +1,35 @@
 # AOS contributor documentation
 
-These documents are for engineers and coding agents changing the normalized
-runtime gateway. Operator setup and product usage remain in the
-[operator documentation](../README.md).
+These documents are for engineers and coding agents changing AOS UI. The
+gateway, its runtime adapters, the wire protocol, and the `@harness-gw/sdk`
+client are maintained in [harness-gw](https://github.com/AlmogBaku/harness-gw); operator setup and product usage
+remain in the [operator documentation](../README.md).
 
-## Runtime adapters
+## Gateway and wire
 
-- [Author a runtime adapter](runtime-adapter-authoring.md) — map a native harness
-  to the proxy-owned run vocabulary; the ACP layer handles browser delivery.
+- [harness-gw protocol](https://github.com/AlmogBaku/harness-gw/blob/main/docs/protocol.md) — ACP v2, the `_hgw/*`
+  extension methods, `_meta.hgw` shapes, error codes, origins, and the
+  `/api/v1` HTTP API.
+- [Author a runtime adapter](https://github.com/AlmogBaku/harness-gw/blob/main/docs/development/runtime-adapter-authoring.md) —
+  map a native harness to the gateway-owned turn vocabulary.
+- [Gateway architecture](https://github.com/AlmogBaku/harness-gw/blob/main/docs/design/aos-runtime-gateway-architecture.md) —
+  the normative final-system boundaries.
+- [Hermes adapter package map](https://github.com/AlmogBaku/harness-gw/blob/main/src/adapters/hermes/README.md),
+  [turn lifecycle](https://github.com/AlmogBaku/harness-gw/blob/main/src/adapters/hermes/TURN-LIFECYCLE.md), and
+  [vendored client provenance](https://github.com/AlmogBaku/harness-gw/blob/main/src/adapters/hermes/UPSTREAM.md) —
+  the primary adapter's layout, event sequencing, and upstream pin.
+
+A client change that needs the SDK is made and tested in harness-gw, then
+consumed here through the `@harness-gw/sdk` package (a local tarball until the
+first release).
+
+## AOS UI
+
 - [Regenerate PWA icons](pwa-icons.md) — rasterize the adaptive logo with its
   light palette substituted; the generated PNGs are committed.
 - [Hermes V1 retrospective](hermes-v1-retrospective.md) — understand the
   implementation choices and the mistakes that exposed the adapter contract.
-- [Gateway architecture](../design/aos-runtime-gateway-architecture.md) — the
-  normative final-system boundaries.
-- [Gateway V1](../design/aos-runtime-gateway-v1.md) — dated completion record of
-  the Hermes-first slice that established the adapter seam; not normative.
-- [Hermes adapter package map](../../packages/proxy/adapters/hermes/README.md) —
-  module layout and turn-lifecycle guide for the primary adapter.
-- [Hermes turn lifecycle](../../packages/proxy/adapters/hermes/TURN-LIFECYCLE.md) —
-  detailed event sequencing within one native turn.
-- [Hermes vendored client provenance](../../packages/proxy/adapters/hermes/vendor/hermes-shared/UPSTREAM.md) —
-  per-file hashes and sync recipe; the live vendor pin is also recorded in
-  `docs/research/hermes-transport-audit-2026-09.md`.
-
-## Browser wire
-
-- [ACP v2 browser wire](../runtimes/acp.md) — all AOS extension methods,
-  `_meta.aos` shapes, error codes, and REST routes.
+  It predates the gateway's move to harness-gw, so its paths are historical.
 
 Provider research records evidence rather than requirements:
 

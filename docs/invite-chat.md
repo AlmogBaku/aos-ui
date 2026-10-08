@@ -1,16 +1,17 @@
 # Share an invited conversation
 
-The proxy can expose one runtime-neutral guest conversation on its dedicated
-guest listener. Guests and operators share the same runtime, transport, and
+The [harness-gw](https://github.com/AlmogBaku/harness-gw) gateway can expose
+one runtime-neutral guest conversation on its dedicated guest listener, which
+AOS serves as its own guest lane. Guests and operators share the same runtime, transport, and
 Session coordinator. The invitation restricts the guest to one Agent and one
 conversation reference.
 
 ## Configure the guest listener
 
-Add `guest` to the private proxy configuration for the selected runtime, as
-shown in the maintained [Hermes](../deploy/proxy.hermes.example.yaml),
-[OpenClaw](../deploy/proxy.openclaw.example.yaml), or
-[OpenCode](../deploy/proxy.opencode.example.yaml) example.
+Add `guest` to the private gateway configuration for the selected runtime, as
+shown in harness-gw's `examples/config.hermes.example.yaml`,
+`examples/config.openclaw.example.yaml`, or
+`examples/config.opencode.example.yaml`.
 The signing key must be a private 32-byte secret file. The default invitation
 lifetime is 72 hours.
 
@@ -23,8 +24,19 @@ chmod 600 /absolute/private/path/guest-invite-signing-key
 The guest listener must have its own origin and port. It uses the same selected
 runtime instance as the trusted operator listener; do not configure a second
 provider token or runtime. Up to three signing keys may be configured for
-rotation (`guest.invitations.keys`); the proxy accepts tokens signed by any
+rotation (`guest.invitations.keys`); the gateway accepts tokens signed by any
 of them.
+
+Under Compose, every harness overlay opens the guest lane: Caddy publishes it
+on `${AOS_UI_GUEST_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}`,
+sends `/api/v1` to the gateway's guest listener (4101), and everything else to
+the AOS web server's guest surface (4201), which serves the guest page under
+its own content security policy and never the operator sign-in, service
+worker, or manifest. Mount the key with
+`HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE`, set the gateway's
+`guest.publicOrigin` to the address guests use, and set
+`AOS_UI_GUEST_PUBLIC_HOST` to its host name so Caddy answers it. The
+development overlay serves no guest page; its guest lane answers 502.
 
 ## Prepare the invited Agent
 
@@ -45,7 +57,7 @@ Guests get no slash commands. The guest listener advertises none, and it refuses
 any guest message or steer whose text starts with `/`, even after leading
 whitespace.
 
-The `limits.guestActiveExecutions` proxy config field caps concurrent guest
+The `limits.guestActiveExecutions` gateway config field caps concurrent guest
 runs. It must not exceed `limits.activeExecutions`.
 
 ## Create an invitation
@@ -56,20 +68,22 @@ install it in a Hermes profile's `skills/` directory or through
 `skills.external_dirs` (see [Run Hermes](runtimes/hermes.md#skills)); the
 OpenCode launcher writes it into the worktree's `.opencode/skills/`.
 
-The proxy CLI signs locally and makes no HTTP request. `--ref` is optional; if
+The gateway CLI, run from the harness-gw checkout, signs locally and makes no
+HTTP request. `--ref` is optional; if
 omitted, the CLI generates a URL-safe conversation reference. Whether a new
 Session can be created on first Send depends on the selected runtime's exact
 native semantics.
 
 ```bash
-bun run gateway -- invite --config /absolute/private/path/proxy.yaml --agent interviewer
+bun run gateway invite --config /absolute/private/path/harness-gw.yaml --agent interviewer
 ```
 
 The `aos-invite-link` skill instead sends one POST to the trusted
-operator proxy's `/api/aos/v1/guest-invitations` endpoint. That endpoint
-requires the `Origin` header to match the operator `publicOrigin`; a missing
-or mismatched origin returns 403. An unknown Agent ID returns 404. Set
-`AOS_RUNTIME_PROXY_URL` to the configured operator origin in the Hermes
+operator gateway's `/api/v1/guest-invitations` endpoint. That endpoint admits a
+request with no `Origin`, as the skill's `curl` sends; one that carries an
+`Origin` outside the operator listener's `allowedOrigins` returns 403. An
+unknown Agent ID returns 404, and the guest lane answers 404 for the route. Set
+`AOS_RUNTIME_PROXY_URL` to a reachable operator origin in the Hermes
 environment; native and containerized installs need only network access to
 that listener, not the signing key. The endpoint accepts the same invitation
 fields and applies the same defaults as the CLI.
@@ -82,7 +96,7 @@ runtime should receive once when the invited Session is created.
 The command prints a URL whose fragment contains the invitation. The fragment
 stays in the guest URL so refresh can authenticate again; URL fragments are not
 sent in HTTP requests. The browser authenticates by sending the token as the
-`_meta.aos.token` of an `auth/login` ACP request with method `aos-invite` on
+`_meta.hgw.token` of an `auth/login` ACP request with method `hgw-invite` on
 the guest connection.
 
 > [!WARNING]
@@ -109,26 +123,29 @@ the guest connection.
 - Permission requests never reach a guest. One raised in a turn the guest
   started is declined for it; one raised in another turn waits for the
   operator.
-- Voice transcription and speech are Agent-scoped and do not create a Session. Guest audio and read-aloud text may reach the operator-configured proxy speech provider under the same permissions as operator requests. Guest audio is budgeted per conversation at 2 concurrent in-flight operations and 60 audio operations per 10 minutes, shared across all tabs and devices on the same invitation link.
+- Voice transcription and speech are Agent-scoped and do not create a Session. Guest audio and read-aloud text may reach the operator-configured gateway speech provider under the same permissions as operator requests. Guest audio is budgeted per conversation at 2 concurrent in-flight operations and 60 audio operations per 10 minutes, shared across all tabs and devices on the same invitation link.
 - An Artifact the invited Session publishes reaches the guest as a link. The
   guest browser fetches it from
-  `/api/guest/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId`
-  with its invitation token as a Bearer token; the proxy resolves it only from
-  that Session's own history.
+  `/api/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` on the
+  guest lane with its invitation token as a Bearer token; the gateway resolves
+  it only from that Session's own history.
 - A tool call in the invited Session that declares an MCP App view reaches the
   guest as the App card alone, without the call's arguments or result; no
   other tool call reaches the guest. The `aos-ui` charts, maps, and stats are
   such cards. The guest
   browser opens the view and reads its resources under the invitation's
   Artifact permission and relays its tool calls under the message permission,
-  through `/api/guest/v1/agents/:agentId/sessions/:sessionId/tool-calls/:toolCallId/app`,
+  through `/api/v1/agents/:agentId/sessions/:sessionId/tool-calls/:toolCallId/app`
+  on the guest lane,
   and only for a call of that Session. The view itself receives
   the call's input and result, so give a guest-facing Agent only App servers
   whose views are fit for a guest.
 - Expiry detaches the guest only; it does not stop provider work.
 - Invalid or expired links ask the guest to request a new invitation.
 
-Guest output is allowlisted. It excludes reasoning, raw tools, permission
+Guest output is allowlisted; harness-gw's
+[`docs/protocol.md`](https://github.com/AlmogBaku/harness-gw/blob/main/docs/protocol.md#guest-listener)
+specifies it. It excludes reasoning, raw tools, permission
 requests, usage and model readings, privileged roles, provider metadata and positions, filesystem paths, credentials, live
 provider IDs, and Agent-wide approval grants.
 

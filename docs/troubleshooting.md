@@ -11,99 +11,127 @@ Start with the symptom you see. AOS fails closed when runtime configuration or p
    Every production recipe must set `AOS_UI_RUNTIME_CONFIG_FILE`.
 3. Remove unknown fields and credentials.
 4. Provider-specific server adapters are not browser runtime modes; confirm the
-   normalized AOS proxy is configured and reachable.
-5. Confirm the private proxy configuration selects one supported runtime kind:
+   harness-gw gateway is configured and reachable on the same origin at
+   `/api/v1`.
+5. Confirm the private gateway configuration selects one supported runtime kind:
    `hermes`, `openclaw`, or `opencode`.
 
 If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
 
-## The proxy returns "Invalid proxy configuration"
+## Check each service
 
-The startup log entry (`proxy.start_failed`) carries a readable
-`ProxyConfigurationError` message. The message begins with the file path,
-followed by one indented line per field; values are never included and
-unrecognized keys are reported as a count:
+Under Compose, check the three layers from the outside in:
 
-```
-Invalid proxy configuration in /etc/aos-ui/proxy.yaml:
-  runtime.tokenFile: Invalid input: expected string, received undefined
-  limits: 1 unrecognized key
+```bash
+docker compose ps                                   # every service healthy
+curl --fail --silent http://127.0.0.1:3000/healthz  # Caddy, then the web server
+curl --fail --silent http://127.0.0.1:3000/runtime-config.json
+curl --fail --silent http://127.0.0.1:3000/api/v1/healthz  # the gateway
 ```
 
-When a `AOS_UI_PROXY_*` variable set the failing field, its name appears in
-parentheses after the message. File-check failures produce their own messages
-before parsing begins:
+`/healthz` on the operator lane is answered by the AOS web server through
+Caddy; `/api/v1/healthz` and `/api/v1/readyz` are the gateway's, operator lane
+only. Read each service's log with `docker compose logs caddy`, `web`, or
+`gateway`. Caddy keeps no access log, because a file address carries its pass
+in the query.
 
-- `the configuration file must be a regular file`
-- `the configuration file must not be group- or world-writable`
-- `the configuration file must be owned by this user or by root`
-- `the configuration file is larger than the 1048576 byte limit`
+| Response | Where it comes from |
+| --- | --- |
+| `421 Misdirected Request` | Caddy: the request's `Host` is not `127.0.0.1`, `localhost`, or the lane's `AOS_UI_PUBLIC_HOST` / `AOS_UI_GUEST_PUBLIC_HOST`. Set the name the browser uses; never set those variables to `localhost` or `127.0.0.1`, which Caddy already lists. |
+| `502 Bad Gateway` | Caddy cannot reach the web server or gateway lane. Under `compose.dev.yaml`, the guest lane always answers 502, because Vite serves the operator surface only. |
+| `404` on an `/api` path | The web server answers no `/api` path, and the gateway answers nothing outside `/api/v1`; operator-only gateway routes such as invitations and push answer 404 on the guest lane. |
+| `405` | The web server accepts only GET and HEAD. |
+| `503` on `/runtime-config.json` | The web server cannot read its `AOS_UI_RUNTIME_CONFIG_FILE`, or the file is not a JSON object. |
 
-If no `--config` flag or `AOS_UI_PROXY_CONFIG_FILE` variable is set, the proxy
-discovers `${XDG_CONFIG_HOME:-$HOME/.config}/aos-ui/proxy.yaml`. A discovered
-path that does not exist is not an error; an explicitly supplied path that does
-not exist is. Use `--config` or `AOS_UI_PROXY_CONFIG_FILE` to make the path
-explicit.
+## The gateway does not start
 
-To validate the schema interactively, check all required fields are present
-(`deploymentId`, `publicOrigin`, `runtime`), `version: 1`, `listen.host` is one
-of `127.0.0.1|::1|0.0.0.0|::`, and `publicOrigin` is `https:` unless the host
-is `127.0.0.1`, `[::1]`, or `localhost`. See the
-[configuration reference](configuration.md) for the full field list.
+The gateway's startup log (`proxy.start_failed`) names the configuration file
+and one indented line per failing field, without values. `harness-gw config
+check --config <file>` runs the same validation without starting anything. File
+ownership and mode rules, discovery, `HARNESS_GW_*` overrides, and every field
+are documented in harness-gw's
+[`README.md`](https://github.com/AlmogBaku/harness-gw/blob/main/README.md) and
+the example configurations in its `examples/` directory. Gateway variables are
+`HARNESS_GW_*` only; an `AOS_UI_*` name configures the UI, never the gateway.
 
 ## A request returns 403 Forbidden
 
-The `Origin` header on attachments, transcription, speech, and guest-invitation requests must match the operator `publicOrigin` configured in the private proxy configuration. Mismatches — including `http://` vs `https://` or a wrong port — return 403.
+Each gateway listener accepts a WebSocket upgrade or a state-changing request
+(attachments, transcription, speech, invitations, push) only with an `Origin`
+in its `allowedOrigins`, which default to its `publicOrigin`. A missing,
+`null`, or foreign `Origin` gets 403 before any route runs, and the gateway
+logs nothing for it. Mismatches include `http://` against `https://`, a wrong
+port, and `localhost` against `127.0.0.1`. The one request admitted without an
+`Origin` is invitation creation on the operator lane, so the
+`aos-invite-link` skill's `curl` works. A non-browser ACP client must send a
+listed `Origin`. The rules are in harness-gw's
+[`docs/protocol.md`](https://github.com/AlmogBaku/harness-gw/blob/main/docs/protocol.md#origins).
+
+## The page reloads once after a deploy
+
+Each open tab refetches `/runtime-config.json` when it reconnects and when it
+regains focus. When the `buildId` there, which the web server reads from the
+served `dist/build-id`, differs from the build the tab runs, the tab reloads
+once; a `sessionStorage` entry prevents a reload loop. A tab that keeps the
+old build after a deploy means `/runtime-config.json` is cached by something in
+front of Caddy or still reports the old build.
+
+## A connection ends with a version error
+
+The browser checks the gateway's extension version in `initialize`. A gateway
+that speaks another version ends the connection without reconnecting, because
+a retry cannot change it. Deploy a gateway release that matches the
+`@harness-gw/sdk` version this build of AOS uses.
 
 ## A secret file is rejected
 
-Secret files must be regular non-symlinked files, owner-only (`chmod 600`), non-empty, and at most 8192 bytes. Guest invitation signing keys must be exactly 43 characters of base64url encoding a 32-byte value. The proxy error message does not reveal which constraint failed; check all of them.
+Secret files must be regular non-symlinked files, owner-only (`chmod 600`), non-empty, and at most 8192 bytes. Guest invitation signing keys must be exactly 43 characters of base64url encoding a 32-byte value. The gateway's error message does not reveal which constraint failed; check all of them.
 
-## `/api/aos/v1/readyz` returns 503
+## `/api/v1/readyz` returns 503
 
-`readyz` returns 503 when the proxy cannot reach the configured runtime.
-`healthz` is liveness only and always returns 200, with body
-`{status: "ok"|"degraded", links: [{name, state}], gauges: {sockets,
-memberships, executions, uncertain, deadlinesFired, journalBytes}}`.
-`status: "degraded"` means the native link is `lost`; the proxy is still
-running and serving. Resolve the runtime connectivity problem first; `readyz`
-becomes 200 once the runtime reports ready.
+`readyz` returns 503 when the gateway cannot reach the configured runtime.
+`healthz` is liveness only and always returns 200; its body reports
+`status: "degraded"` while the native link is lost, and the gateway keeps
+serving. Resolve the runtime connectivity problem first; `readyz` becomes 200
+once the runtime reports ready. Both are on the operator lane only.
 
 ## Hermes authentication fails
 
-Hermes V1 uses a configured server token loaded from the proxy's private secret
-file. Verify the configured file exists, is owner-only, is readable by the
-proxy process, and contains the current Hermes token. The browser never handles
+The gateway authenticates to Hermes with a server token from a private secret
+file (`HARNESS_GW_HERMES_TOKEN_FILE` under Compose). Verify the file exists, is
+owner-only, is readable by the gateway's user (`AOS_UI_HOST_UID`), and contains
+the current Hermes token. Hermes closes a rejected socket with 4401; see
+harness-gw's [Hermes guide](https://github.com/AlmogBaku/harness-gw/blob/main/docs/runtimes/hermes.md). The browser never handles
 Hermes cookies or credentials.
 
 ## Hermes HTTP works but live updates fail
 
-- Confirm your reverse proxy forwards WebSocket upgrades on `/api/aos/v1/acp`
-  and keeps buffering disabled for `/api/aos/v1`.
-- Verify the proxy config's Hermes base URL is reachable from the proxy
+- Confirm any reverse proxy in front of Caddy forwards WebSocket upgrades on
+  `/api/v1/acp`, keeps buffering disabled for `/api/v1`, and passes the
+  browser's `Origin` unchanged.
+- Verify the gateway config's Hermes base URL is reachable from the gateway
   container; it is never a browser-facing URL.
 - Check that the server version exposes the native interfaces described in the [Hermes guide](runtimes/hermes.md).
 
 AOS reconnects to the native Session without submitting a prompt, keeping the conversation on screen under a "Reconnecting to AOS…" notice until the Session rejoins. Recovery and auto-continue policy remain Hermes settings.
 
-## The proxy container cannot reach Hermes
+## The gateway container cannot reach Hermes
 
-A host service bound only to `127.0.0.1` is not reachable through Docker's host gateway. Bind Hermes to an appropriate trusted interface or provide another container-reachable host, then update the private proxy config's `runtime.baseUrl`.
+A host service bound only to `127.0.0.1` is not reachable through Docker's host gateway. Bind Hermes to an appropriate trusted interface or provide another container-reachable host, then update the private gateway config's `runtime.baseUrl`. Alternatively run the host-networking shape, adding `-f deploy/compose.host.yaml` after the harness overlay, with the gateway's listeners on `127.0.0.1`; see [Deployment](deployment.md).
 
-From the proxy container, verify the configured host and port resolve and
-accept connections. Keep the browser-facing configuration on the normalized
-same-origin `/api/aos/v1` path.
+From the gateway container, verify the configured host and port resolve and
+accept connections. The browser reaches only the same-origin `/api/v1` path.
 
 ## OpenClaw is unavailable
 
 - Use `AOS_UI_RUNTIME_MODE=aos`; AOS does not expose a browser Gateway route.
 - Verify the private `runtime.baseUrl` is a reachable WebSocket URL and its
   device identity/token files are present, owner-only, and readable by the
-  proxy. Do not place either credential in browser configuration.
+  gateway. Do not place either credential in browser configuration.
 - With `compose.openclaw.yaml`, `host.docker.internal` reaches Docker's host
   gateway. A native Gateway bound only to host loopback may not be reachable;
   use a trusted container-reachable address instead.
-- Pairing or policy-negotiation errors are Gateway/proxy configuration errors.
+- Pairing or policy-negotiation errors are OpenClaw or gateway configuration errors.
   A missing Todo, Activity, edit/regenerate, steering, voice, or read-state
   control is an explicit capability limit.
 - Confirm Session records include matching `sessionId` and `agentId` values.
@@ -117,9 +145,9 @@ same-origin `/api/aos/v1` path.
 - Verify the private `runtime.baseUrl`, absolute `runtime.directory`,
   `runtime.username`, and owner-only `runtime.passwordFile` match the running
   OpenCode server.
-- From a proxy container, use the Compose service address (`opencode:4096`),
+- From the gateway container, use the Compose service address (`opencode:4096`),
   not a browser-facing URL. For an independently operated server, ensure its
-  address is reachable from the proxy process.
+  address is reachable from the gateway process.
 - A missing Activity, context meter, voice, edit/regenerate, or steering
   control is an explicit OpenCode capability limit, not a connection failure.
 
@@ -138,7 +166,7 @@ Denied or unsupported permission does not disable Activity. Multiple tabs elect 
 
 ## Microphone or read-aloud is unavailable
 
-Voice requires either the relevant native runtime STT/TTS configuration or a proxy `voice` block in the private proxy configuration. Microphone capture also requires HTTPS or `localhost`, browser support, and permission. Follow [Use voice](chat-voice.md) for mode-specific checks, proxy provider setup, and safety limits.
+Voice requires either the relevant native runtime STT/TTS configuration or a `voice` block in the private gateway configuration. Microphone capture also requires HTTPS or `localhost`, browser support, and permission. Follow [Use voice](chat-voice.md) for mode-specific checks, gateway provider setup, and safety limits.
 
 ## The tools MCP server is not connected
 
@@ -150,9 +178,9 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
   `http://tools-mcp:4110/mcp`. A harness in another container or on another
   host cannot reach host loopback.
 - Tools run but charts, maps, and stats show as text on Hermes or OpenCode: the
-  proxy cannot reach the URL the harness registered. A proxy in a container
-  needs `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp`
-  ([MCP Apps fallback](configuration.md#mcp-apps-fallback)).
+  gateway cannot reach the URL the harness registered. A gateway in a container
+  needs `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp` in its
+  configuration, as harness-gw's Hermes example sets.
 - Hermes: `hermes -p PROFILE mcp test aos-ui` reports whether the profile's
   `mcp_servers.aos-ui` entry connects. Confirm the entry is in that profile's
   own `config.yaml`, not another profile's.
@@ -164,9 +192,9 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
 - Hermes: a running server connects a new MCP server within about a minute.
   When `aos-ui` is the profile's first MCP server, run `/reload-mcp` or start
   a new Session.
-- OpenClaw: the server stays disabled until the proxy enables it for the
+- OpenClaw: the server stays disabled until the gateway enables it for the
   Session. A turn that fails because that enable patch failed usually means
-  the proxy device lacks `operator.admin`; re-pair it with that scope. Run
+  the gateway's device lacks `operator.admin`; re-pair it with that scope. Run
   `openclaw mcp reload` after changing `openclaw.json`.
 - OpenCode: at the pinned 1.18.29 the v2 session engine AOS drives does not
   expose MCP tools, so the tools are not callable through AOS. This is an
@@ -176,9 +204,9 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
 
 ### present_artifact file not loading
 
-The proxy logs `app_file.refused` (404) or `app_file.unavailable` (503) for
-every failure; it never logs the path. Reason codes, from
-`packages/proxy/routes/app-files.ts`:
+The gateway logs `app_file.refused` (404) or `app_file.unavailable` (503) for
+every failure, with a reason code and never the path. The codes, from
+harness-gw's `src/routes/app-files.ts`:
 
 **Refused (404):**
 
@@ -205,7 +233,7 @@ every failure; it never logs the path. Reason codes, from
 A 401 response means a bad or expired pass, or a guest without a valid login.
 A 429 response means the file route's own rate limit was hit.
 
-If the card shows "Can't reach this file" and the proxy logged nothing, `open`
+If the card shows "Can't reach this file" and the gateway logged nothing, `open`
 returned no address. Every path that leads there:
 
 - The call's MCP server is not in `mcpApps.files.servers`.
@@ -217,21 +245,11 @@ returned no address. Every path that leads there:
 
 **OpenClaw** cannot reach sandboxed Sessions or Sessions on other machines.
 
-**Hermes** reports the reason when it cannot resolve the real path of a file
-(logged as `hermes.file.real_path_unknown`):
-
-| Code              | Meaning                                                                             |
-| ----------------- | ----------------------------------------------------------------------------------- |
-| `listing_invalid` | A link loop anywhere in the folder, or a path that is not a folder                  |
-| `listing_refused` | The folder is outside a locked root or Hermes cannot read it                        |
-| `listing_missing` | The folder does not exist                                                           |
-| `listing_failed`  | A broken link anywhere in the folder (on Python 3.13+ a link loop also answers 500) |
-| `not_listed`      | The file is not in the folder listing; Hermes omits credential files from listings  |
-
-Hermes fails the whole folder listing when it cannot resolve even one entry, so
-one bad link blocks every file in that folder.
-
-Any of these causes the proxy to log `app_file.refused` with code `real_path_unknown`.
+**Hermes** fails a whole folder listing when it cannot resolve even one entry,
+so one broken or looping link blocks every file in that folder; the gateway
+logs `hermes.file.real_path_unknown`. harness-gw's
+[Hermes guide](https://github.com/AlmogBaku/harness-gw/blob/main/docs/runtimes/hermes.md)
+explains each listing code.
 
 For HTML files shown in the `present_artifact` card:
 
@@ -257,39 +275,30 @@ AOS validates Agent and Session ownership before selecting a route. Refresh the 
 
 To trace a live ACP connection in any build, add `?debug=acp` to the page URL once for the tab. The tab then logs one line per owner state change and one per wire frame to the browser console. The flag is stored in `sessionStorage` for the rest of the tab session; opening a new tab clears it.
 
-Match browser log lines to proxy log lines by the `sessionId`, `turnId`, and `requestId` fields that appear in both. Raise the proxy log level to `debug` with `AOS_UI_PROXY_LOG_LEVEL=debug` or `log.level: debug` in the private proxy configuration to see owner state changes on the server side. `debug` is never the production default.
+Match browser log lines to gateway log lines by the `sessionId`, `turnId`, and `requestId` fields that appear in both. Raise the gateway log level to `debug` with `HARNESS_GW_LOG_LEVEL=debug` or `log.level: debug` in the private gateway configuration to see owner state changes on the server side. `debug` is never the production default.
 
-### ACP upgrade log entries
+### Gateway log entries
 
 | Log line                          | Meaning and fix                                                                                                                                                                           |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `acp.upgrade.origin_refused`      | The `Origin` header was present but did not match `publicOrigin`. Update the reverse-proxy configuration or the `publicOrigin` field.                                                     |
 | `acp.upgrade.agent_unknown`       | The Agent id in the path is not in the catalog; the Agent may be deleted or hidden. Check the Agent id and confirm it is visible.                                                         |
 | `acp.upgrade.catalog_failed`      | The catalog query during upgrade threw; the socket was refused with 503. The line carries the public `errorCode`. Check runtime connectivity.                                             |
 | `turn.receipt.deadline_passed`    | The storage receipt for the prompt did not arrive within 30 s; the answer was sent as `uncertainMutation`. Check runtime latency and storage health.                                      |
 | `session.list.no_folder`          | (info) A list across Agents met an Agent whose runtime names no folder; that Agent's Sessions are omitted. Configure the Agent's folder (for Hermes, an absolute `terminal.cwd`).         |
 | `session.list.folder_read_failed` | A list across Agents could not read one Agent's folder; that Agent's Sessions are omitted and the others still list. The line carries the public `errorCode`. Check runtime connectivity. |
 
-**Folder refusal on `session/new` or `session/resume`:** the proxy returns
+A refused `Origin` is answered 403 without a log line; see
+[A request returns 403 Forbidden](#a-request-returns-403-forbidden).
+
+**Folder refusal on `session/new` or `session/resume`:** the gateway returns
 invalid params when `cwd` does not match the Agent's folder exactly, or
 unsupported when the Agent has no folder. Send an empty `cwd` or the folder the
 Session list row reports, or confirm the Agent's folder is configured in the
 runtime.
 
-## Renamed proxy log fields
-
-If you have log queries that filter on these field values, update them:
-
-| Old value             | New value             | Where                                         |
-| --------------------- | --------------------- | --------------------------------------------- |
-| `lane`                | `role`                | membership role field                         |
-| `subscriberId`        | `membershipId`        | membership id on turn and subscription events |
-| `acp.room.failed`     | `channel.failed`      | channel setup failure                         |
-| `acp.fanout.detached` | `membership.detached` | subscriber fell behind its queue bounds       |
-
 ## Collect useful diagnostics
 
-Record the runtime mode, browser, native runtime version, failing Agent/Session identifiers, and the first relevant browser-console or native-server error. Exclude credentials, invitation tokens, conversation content, tool payloads, and speech data.
+Record the runtime mode, browser, AOS build id, gateway version (`initialize`'s `info.version`), native runtime version, failing Agent/Session identifiers, and the first relevant browser-console or native-server error. Exclude credentials, invitation tokens, conversation content, tool payloads, and speech data.
 
 For code-level verification, run:
 

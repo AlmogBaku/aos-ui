@@ -446,7 +446,7 @@ assistant's answer.
   mid-turn. A failed compaction is a warning System Notice.
 - **Runtime status is a quiet, live-only line:** a `notice` session update from
   the runtime reads as a single muted line in the turn, with a kind icon chosen
-  by `_meta.aos.kind` (heartbeat, loop, goal, process; any other kind gets a plain status icon). A `warning` or
+  by `_meta.hgw.kind` (heartbeat, loop, goal, process; any other kind gets a plain status icon). A `warning` or
   `error` severity becomes a System Notice instead. Notices are never stored in
   history: they arrive as live stream events and travel with the turn they land
   in, or append to the latest assistant turn when no run is active.
@@ -514,7 +514,7 @@ assistant's answer.
   a "Load earlier messages" button; a failed read waits for that button. The
   row is observed afresh after every page, so a page that lands never counts
   as still in view. Past the last page the row reads "Beginning of
-  conversation", or "Earlier messages can't be loaded" where the proxy's bound
+  conversation", or "Earlier messages can't be loaded" where the gateway's bound
   stops the reading. While a page lands, the message the reader is looking at
   (their bookmark, else the first message in view) stays mounted, and a
   correction measured from the DOM puts it back where the reader saw it before

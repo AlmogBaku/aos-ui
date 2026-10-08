@@ -18,7 +18,7 @@
 
 Most agent harnesses present a coding-agent interface. AOS UI gives your personal harness a workspace for business use cases: an accountant, executive assistant, marketing agent, ghostwriter, product partner, hiring agent, or any other role you configure. It keeps their Agents and Sessions in one place without losing ownership, execution state, or pending work.
 
-AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packages installable capabilities for a separately operated agent harness. The browser uses the normalized AOS proxy; the selected native runtime keeps control of execution, credentials, Agent definitions, and durable history.
+AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packages installable capabilities for a separately operated agent harness. The browser talks to the [harness-gw](https://github.com/AlmogBaku/harness-gw) gateway; the selected native runtime keeps control of execution, credentials, Agent definitions, and durable history.
 
 ## What AOS provides
 
@@ -52,21 +52,25 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
   command palette
 - Optional voice controls (microphone transcription and read-aloud) and restricted guest invitations
 
-The browser has one real runtime: the normalized AOS proxy. The browser speaks
-ACP v2 over a single WebSocket per tab to the proxy, and uses REST only for
-bytes (attachments, Artifacts, audio) and discovery. Hermes is AOS's primary
-and first-supported harness. The proxy can also attach to OpenClaw or OpenCode,
-which is documented last as the newest attachment path. There is no
-browser-direct provider mode.
+The browser has one real runtime: the harness-gw gateway, a separate project
+that puts one native runtime behind ACP v2. The browser speaks ACP over a
+single WebSocket per tab to the gateway, and uses its `/api/v1` HTTP API only
+for bytes (attachments, Artifacts, audio) and discovery. Hermes is AOS's
+primary and first-supported harness. The gateway can also attach to OpenClaw
+or OpenCode, which is documented last as the newest attachment path. There is
+no browser-direct provider mode.
 
 ## Quick start
 
-AOS UI is not an agent harness. Run the AOS proxy against an authenticated harness separately.
+AOS UI is not an agent harness, and it does not include the gateway. Run the
+harness-gw gateway against an authenticated harness separately.
 
 ### Prerequisites
 
 - An independently operated Hermes, OpenClaw, or OpenCode runtime, plus that runtime's private credentials
 - [Bun](https://bun.sh/)
+- A [harness-gw](https://github.com/AlmogBaku/harness-gw) checkout, or its
+  container image, for anything beyond the fixture preview
 - A current desktop browser
 
 Install AOS UI:
@@ -77,32 +81,31 @@ cd aos-ui
 bun install
 ```
 
-For local proxy development (the browser supports only `aos` and explicit
-`fixture` mode):
+For local development against a real runtime (the browser supports only `aos`
+and explicit `fixture` mode):
 
 ```bash
-# Terminal 1: use the private example for the selected runtime
-bun run proxy:serve -- --config /absolute/private/path/proxy.yaml
+# Terminal 1, in the harness-gw checkout: start from its example config for
+# the selected runtime (examples/config.<runtime>.example.yaml)
+bun run serve --config /absolute/private/path/config.yaml
 
-# Terminal 2
+# Terminal 2, in this checkout
 AOS_UI_RUNTIME_MODE=aos \
-AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
+AOS_UI_GATEWAY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
 
-With no `--config`, the proxy discovers `${XDG_CONFIG_HOME:-$HOME/.config}/aos-ui/proxy.yaml`.
-
-Open <http://localhost:3000>. The browser sends only normalized AOS requests;
-the proxy owns provider credentials and all native communication. Configure
-the private proxy copy to listen on `127.0.0.1:4100`, use
+Open <http://localhost:3000>. Vite forwards only `/api/v1` to the gateway,
+which owns provider credentials and all native communication. Configure the
+private gateway copy to listen on `127.0.0.1:4100`, use
 `http://localhost:3000` as its public origin, and point its runtime at the
 selected native server. See [the runtime guides](docs/runtime-capabilities.md)
-for the exact private configuration; runtime selection is server-side, not a
-browser runtime mode.
+and the harness-gw [README](https://github.com/AlmogBaku/harness-gw#readme);
+runtime selection is server-side, not a browser runtime mode.
 
 ### Preview without a harness
 
-Fixture mode is an optional, backend-free preview of the interface. It is not a substitute for the AOS proxy:
+Fixture mode is an optional, backend-free preview of the interface. It is not a substitute for the gateway:
 
 ```bash
 AOS_UI_RUNTIME_MODE=fixture bun run dev
@@ -112,7 +115,12 @@ The fixture is deterministic and cannot create or modify native Agents. Continue
 
 ## Deployment
 
-AOS is served by the Bun proxy. Runtime selection comes from `/runtime-config.json`, so operators can switch between the proxy and explicit fixture mode without rebuilding the frontend.
+Compose runs three pieces behind one origin per lane: Caddy, the only
+published port; the aos-ui web server (`bun run web:serve`), which serves the
+built app and `/runtime-config.json`; and, under a harness overlay, the
+harness-gw gateway, which answers `/api/v1`. Runtime selection comes from
+`/runtime-config.json`, so operators can switch between the gateway and
+explicit fixture mode without rebuilding the frontend.
 
 For a containerized fixture preview:
 
@@ -129,10 +137,11 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 > TLS and access-control layer.
 
 > [!NOTE]
-> The default `{}` and the bare `.env.compose.example` value both fail the
-> strict runtime-config schema. Every non-fixture recipe must set
-> `AOS_UI_RUNTIME_CONFIG_FILE`. The readiness endpoint `/api/aos/v1/readyz`
-> returns 503 until the runtime is reachable.
+> The default `{}` fails the strict runtime-config schema, and the copied
+> `.env.compose.example` selects the fixture file. Every non-fixture recipe
+> must set `AOS_UI_RUNTIME_CONFIG_FILE`. Under a harness overlay, the
+> gateway's readiness endpoint `/api/v1/readyz` returns 503 until the runtime
+> is reachable.
 
 Every Compose file set also starts the `tools-mcp` service on `127.0.0.1:4110`
 (`AOS_UI_TOOLS_MCP_PORT`); register `http://127.0.0.1:4110/mcp` with your

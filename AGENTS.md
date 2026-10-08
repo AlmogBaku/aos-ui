@@ -16,12 +16,13 @@
 - `DESIGN.md` defines reusable component rules. Read **Conversation and
   Execution** before changing tool timelines, reasoning, rich tool placement,
   conversation search, or their responsive presentation.
-- `src/runtime-adapters/contracts.ts` is the browser runtime boundary;
-  `packages/proxy/core/runtime.ts` is the server adapter boundary;
-  `packages/protocol/acp.ts` is the browser-wire contract. Read
-  `docs/development/runtime-adapter-authoring.md` before adding, auditing, or
-  debugging a server runtime adapter, and keep provider details behind the
-  corresponding boundary.
+- `src/runtime-adapters/contracts.ts` is the browser runtime boundary. The
+  gateway, its server adapter boundary (`src/core/runtime.ts`), and the wire
+  contract (`protocol/acp.ts`) live in the separate harness-gw repository
+  (`https://github.com/AlmogBaku/harness-gw`); its `docs/protocol.md` specifies
+  the wire and its `docs/development/runtime-adapter-authoring.md` covers
+  server runtime adapters. aos-ui consumes the browser client and protocol as
+  the `@harness-gw/sdk` package. Keep provider details behind the gateway.
 
 ## Install and run
 
@@ -40,20 +41,29 @@ Run fixture mode for backend-free UI work:
 AOS_UI_RUNTIME_MODE=fixture bun run dev
 ```
 
-For local proxy development, run the proxy against an independently operated
-Hermes server, then attach Vite to the normalized proxy:
+For local gateway development, run harness-gw from its own checkout against an
+independently operated Hermes server, then attach Vite to it:
 
 ```bash
-bun run proxy:serve -- --config /absolute/private/path/proxy.yaml
+# in the harness-gw checkout
+bun run serve --config /absolute/private/path/config.yaml
 ```
 
-With no `--config`, the proxy discovers `${XDG_CONFIG_HOME:-$HOME/.config}/aos-ui/proxy.yaml`.
+With no `--config`, the gateway reads `HARNESS_GW_CONFIG_FILE` or discovers
+`${XDG_CONFIG_HOME:-$HOME/.config}/harness-gw/config.yaml`.
 
 ```bash
 AOS_UI_RUNTIME_MODE=aos \
-AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
+AOS_UI_GATEWAY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
+
+Vite forwards only `/api/v1` to the gateway and keeps the browser's `Origin`,
+so the gateway's `publicOrigin` (or `allowedOrigins`) must list the dev origin,
+such as `http://localhost:3000`. An SDK change is made and tested
+in harness-gw, then consumed here through the `@harness-gw/sdk` package
+(a local tarball until the first release); rerun `bun install` after
+replacing it.
 
 Open `http://localhost:3000`; compact Agent/Session URLs preserve local EN/HE preference.
 Copy `.env.example` to `.env.local` only for local overrides.
@@ -67,8 +77,10 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json docker compose u
 
 Compose is loopback-only by default. Treat any wider operator binding as a
 trusted-private-network deployment: this stack has no TLS or public multi-user
-authentication. The Bun proxy serves static assets and normalized APIs; an
-external reverse proxy is optional.
+authentication. Caddy (`deploy/Caddyfile`) is the only published lane port: it
+sends `/api/v1` to the gateway and everything else to the aos-ui web server
+(`bun run web:serve`, `server/cli.ts`). A harness overlay adds the gateway and
+the guest lane. An external TLS reverse proxy is optional.
 
 ## Architecture and invariants
 
@@ -78,7 +90,7 @@ external reverse proxy is optional.
   state), creator identity,
   Todos subscription, catalog/metadata/activity subscriptions, `markSessionRead`,
   and `reportFocus`. Session Todos arrive
-  as ACP `plan_update` notifications carrying `_meta.aos.todos`. Creation opens
+  as ACP `plan_update` notifications carrying `_meta.hgw.todos`. Creation opens
   an ordinary creator-owned Session through `New Agent` that the browser alone
   projects as a `New Agent` draft row until a creator run ends with a new Agent
   in the refreshed catalog; the hidden creator stays out of the roster and
@@ -93,20 +105,24 @@ external reverse proxy is optional.
   falling back to synthetic data. Public fixtures intentionally omit Agent
   creation; configured real runtimes may expose the hidden creator through
   `New Agent`.
-- The browser supports only the normalized `aos` runtime and explicit
-  `fixture` mode. The proxy selects one server adapter per deployment; Hermes
-  is the primary V1 implementation. OpenClaw and OpenCode adapters keep their
-  distinct native transports server-side.
+- The browser supports only the normalized `aos` runtime, which speaks to the
+  harness-gw gateway, and explicit `fixture` mode. The gateway selects one
+  server adapter per deployment; Hermes is the primary V1 implementation.
+  OpenClaw and OpenCode keep their distinct native transports inside the
+  gateway, never in this repository.
 - The three `AOS_UI_OPENAI_COMPATIBLE_*` values (`AOS_UI_OPENAI_COMPATIBLE_BASE_URL`,
   `AOS_UI_OPENAI_COMPATIBLE_API_KEY`, `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID`) are
   all-or-none; setting any one without the others is an error.
 - Provider-owned read state: the browser reports the focused Session via a
-  `_aos/session/focus` request (the proxy's acknowledgment is the liveness
+  `_hgw/session/focus` request (the gateway's acknowledgment is the liveness
   check); the runtime decides when that Session becomes read and delivers an
-  `unread` update. One ACP WebSocket is opened per browser tab; the browser
-  sends its compiled build id in `initialize` and reloads once when the proxy's
-  id differs (a `sessionStorage` entry prevents a loop); the proxy closes a
-  connection that does not complete `initialize` within 15 s.
+  `unread` update. One ACP WebSocket is opened per browser tab; the gateway
+  closes a connection that does not complete `initialize` within 15 s, and a
+  gateway whose `_meta.hgw` extension version differs ends the connection
+  without reconnecting. The web server's `/runtime-config.json` carries the
+  served `buildId`; the browser refetches it when the socket comes back and
+  when the tab becomes visible, and reloads once when it differs from its
+  compiled id (a `sessionStorage` entry prevents a loop).
   Usage is reported via ACP `usage_update`; model and effort are set via
   `session/set_config_option`.
 - A pinned Session is always open. It sits in Open sessions and in the tab
@@ -129,7 +145,7 @@ external reverse proxy is optional.
   MCP server authored as a `ui://` resource, rendered only inside the
   opaque-origin double iframe with a CSP built from its declared domains. The
   browser never talks to an MCP server; every App request goes through the
-  proxy, scoped to the tool call's own Session, and the card keeps its textual
+  gateway, scoped to the tool call's own Session, and the card keeps its textual
   details. Inside it, Agent HTML a file-showing view previews runs its scripts
   in a nested `sandbox="allow-scripts"` frame: an opaque origin with no
   same-origin access, popups, forms, or top navigation, under a policy whose
@@ -149,39 +165,25 @@ external reverse proxy is optional.
 - `src/runtime-adapters/aos` contains the provider-neutral remote browser
   runtime; `src/runtime-adapters/fixture` contains the explicit preview.
   Extend browser `contracts.ts` only for genuinely shared UI concepts.
-- `packages/proxy/core` owns normalized execution coordination;
-  `packages/proxy/adapters` owns native server clients, transports, identity,
-  retention, recovery, validation, and conversion. Do not move a native
-  transport concern into the shared coordinator. Session membership and
-  per-member delivery live in `packages/proxy/core/channel.ts`, and the member
-  types (`Principal`, `Member`, `Middleware`, commands, and events) in
-  `packages/proxy/core/member.ts`. `packages/proxy/acp` owns ACP translation,
-  read state, and the activity feed; `acp/member-encoder.ts` is the only code
-  that turns member events into ACP. `packages/proxy/auth` and
-  `packages/proxy/guest` own the operator and guest roles, and the guest
-  rules live in the `packages/proxy/guest/middleware` stack;
-  `packages/proxy/routes` owns HTTP handlers; `packages/proxy/cli` is the
-  server entry point. `packages/proxy/voice` owns proxy speech providers (the
-  OpenAI-compatible client and the `ServerRuntime` voice wrapper);
-  `packages/proxy/guest` owns the guest audio budget;
-  `packages/protocol/audio.ts` holds the shared audio limits.
-- `packages/lifecycle` is the shared owner state machine library for
-  connections, memberships, turns, native links, and readings; it composes
-  XState v5, cockatiel, and `DisposableStack`. The proxy imports it as
-  `../../lifecycle`; browser code and tests use `@aos/lifecycle`. Do not
-  duplicate owner machines in adapter or browser code.
-- MCP Apps: `packages/protocol/mcp-apps.ts` holds the view and request
-  schemas; `packages/proxy/routes/mcp-apps.ts` and
-  `packages/proxy/guest/routes/mcp-apps.ts` serve them; each adapter's
-  `mcp-apps.ts` implements `ServerRuntime.mcpApps`. `packages/proxy/mcp-apps`
-  is the proxy's own MCP client for runtimes without native MCP Apps (Hermes
-  and OpenCode) plus the `withMcpApps` wrapper and the shared name resolver;
-  delete the fallback once no adapter reaches it. `src/components/mcp-apps`
-  owns the sandbox frame, its CSP, and the host handlers. For file serving:
-  `packages/proxy/auth/file-pass.ts` manages passes,
-  `packages/proxy/core/app-files.ts` owns servable arguments and folder
-  rules, and `packages/proxy/routes/app-files.ts` owns the file and renewal
-  routes.
+- `@harness-gw/sdk` is the framework-free browser client (the ACP connection,
+  the workspace client, approvals, questions, and the HTTP client);
+  `@harness-gw/sdk/protocol` is the wire alone (`_hgw/*` method names, the
+  `_meta.hgw` schemas, the MCP App and audio limits). Both are built in
+  harness-gw; this repository only consumes them.
+  `src/runtime-adapters/client-contract.ts` proves at compile time that the
+  client's types still match `contracts.ts`. Gateway coordination, native
+  adapters, roles, guest rules, routes, voice providers, MCP App serving, and
+  file passes all belong to harness-gw; change them there.
+- `server/` owns the aos-ui web server: one listener per surface (operator,
+  and guest when `AOS_UI_GUEST_WEB_PORT` is set), the built assets,
+  `/runtime-config.json` with the served build id, the guest page policy, and
+  `/healthz`. It answers nothing under `/api` and refuses non-GET requests.
+  `deploy/Caddyfile` and `deploy/caddy/guest.caddy` own lane routing and Host
+  checks; `deploy/compose.host.yaml` is the host-networking shape.
+- MCP Apps: `src/components/mcp-apps` owns the sandbox frame, its CSP, and the
+  host handlers; `src/runtime-adapters/aos/aos-mcp-apps.ts` adapts the SDK's
+  MCP App client to `contracts.ts`. The view schemas come from
+  `@harness-gw/sdk/protocol`.
 - `src/components/ui/menu-popup.tsx` is the one popup shell for every menu.
   Session rows use it through `src/components/workspace/session-row-menu.tsx`
   and messages through
@@ -208,22 +210,20 @@ external reverse proxy is optional.
   registers for `render_chart`, `render_map`, `render_stats`, and
   `present_artifact`; it never reads files. All four are MCP Apps whose
   single-file views live in `packages/tools-mcp/views`;
-  `present_artifact`'s view shows the file the proxy serves for that call.
+  `present_artifact`'s view shows the file the gateway serves for that call.
   `shared/presentation` defines the tool schemas and view resources it
   serves. `shared/invite-link` and `shared/agent-creator` are
-  plain skills operators install into a harness. The proxy names the four
-  `aos-ui` tools bare and every other MCP tool `mcp__<server>__<tool>` in
-  `packages/proxy/core/aos-tool-names.ts`, and validates
-  Artifact paths in `packages/proxy/core/artifact-path.ts`. Agent worktrees,
+  plain skills operators install into a harness. The gateway names the four
+  `aos-ui` tools bare and every other MCP tool `mcp__<server>__<tool>`, and
+  validates Artifact paths. Agent worktrees,
   profiles, secrets, and state remain external. Never import native
   implementations into browser code.
-- Architecture boundary tests live in `test/architecture/` and
-  `packages/proxy/architecture.test.ts`; the ESLint rule is
+- Architecture boundary tests live in `test/architecture/`; the ESLint rule is
   `scripts/eslint-runtime-boundaries.mjs`.
 
 Treat generated and user-owned material carefully. Do not blindly regenerate
-customized shadcn/Assistant UI components. Only `aos-deploy` and
-`aos-runtime-adapter` under `.agents/skills/` are tracked project tooling; do
+customized shadcn/Assistant UI components. Only `aos-deploy` under
+`.agents/skills/` is tracked project tooling; do
 not touch user-local `.opencode/` or any other `.agents/skills/` content that
 is not tracked. Preserve unrelated working-tree changes.
 
@@ -234,8 +234,8 @@ parallel local implementations. Customize through supported composition seams;
 when a product requirement truly needs a replacement, document the unsupported
 case and keep the custom surface as narrow as possible.
 Native runtimes own the catalog, visibility, creator role, and persistence.
-The proxy uses Hermes native HTTP/WebSocket APIs without adding a workspace
-database or provider registry.
+The gateway uses Hermes native HTTP/WebSocket APIs without adding a workspace
+database or provider registry, and aos-ui adds none either.
 
 ## Conventions
 
@@ -246,9 +246,10 @@ database or provider registry.
 - Prefer focused modules and pure functions at provider/configuration
   boundaries. Validate external HTTP payloads before adapting them.
 - Load public runtime configuration from `/runtime-config.json`, separate from
-  the frontend build. Never put credentials in it or `VITE_*`. The Bun proxy
-  serves the production assets and normalized APIs; Nginx may be an external
-  TLS/reverse proxy. Feature flags `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` and
+  the frontend build. Never put credentials in it or `VITE_*`. The aos-ui web
+  server serves it and the production assets; the gateway serves only
+  `/api/v1`; Caddy joins them on one origin per lane, and an external TLS
+  reverse proxy may sit in front. Feature flags `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` and
   `AOS_UI_COMPOSER_CONTEXT_ENABLED` gate composer model and context-window UI
   at runtime (`shared/runtime-config.ts`).
 - Use `@/` imports for project modules and logical CSS properties for RTL-safe
@@ -263,8 +264,9 @@ each step below leaves evidence a reviewer can check.
 
 - **Name the rule, then find its cover.** Write the rule in one sentence, then
   grep the tests for it and the helpers for its setup: `test/support/`
-  (`fake-clock`, `acp-bridge-socket`, `production-sources`, `leak-oracle`,
-  `log-capture`), the `*.test-helpers.ts(x)` files beside the component, and
+  (`fake-clock`, `production-sources`, `log-capture`),
+  `src/runtime-adapters/aos/acp/test-socket.ts`, the `*.test-helpers.ts(x)`
+  files beside the component, and
   the fixture scenarios under `src/runtime-adapters/fixture/`. Extend the
   test that already covers the rule; write a new one only when none does.
   An "already covered by X" claim, in a deletion or a review, quotes X's
@@ -310,6 +312,9 @@ each step below leaves evidence a reviewer can check.
   implementation-coupled tests.
 - **Fixtures and mocks stay honest.** Fixtures are deterministic, and provider
   mocks preserve ownership semantics.
+- **Test the client where it lives.** A rule about the gateway, the wire, or
+  the SDK client is tested in harness-gw; aos-ui tests only how the UI uses
+  the client.
 
 ## Verify changes
 
@@ -335,7 +340,7 @@ deployment running on it, so `vitest.config.ts` caps workers at half the cores.
 Raise it through `AOS_UI_TEST_WORKERS` only when the machine is yours alone, and
 prefer `nice bun run test` for a full sweep beside a live deployment.
 The everyday suite is two Vitest projects: `bunx vitest run --project node`
-runs the DOM-free server, protocol, browser-logic, and tooling tests, and
+runs the DOM-free web-server, browser-logic, and tooling tests, and
 `--project dom` the jsdom rest (`.tsx` files and the `domTests` list in
 `vitest.config.ts`). A third project, `gate`, holds the production-build,
 Compose, and type-aware ESLint checks; `bun run test` skips it and
@@ -363,33 +368,42 @@ Additional checks by area:
   ```bash
   bunx vitest run test/containers/compose.test.ts
   docker compose -f compose.yaml config --quiet
-  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
-    AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
-    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.yaml \
+    HARNESS_GW_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+    HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
-  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
-    AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
-    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
-    AOS_UI_PUSH_STATE_DIR=/absolute/operator/dir \
-    AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
-    AOS_UI_PUSH_VAPID_SUBJECT=mailto:ops@example.com \
+  HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.yaml \
+    HARNESS_GW_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+    HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    docker compose -f compose.yaml -f compose.hermes.yaml -f deploy/compose.host.yaml config --quiet
+  HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.yaml \
+    HARNESS_GW_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+    HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    HARNESS_GW_PUSH_STATE_DIR=/absolute/operator/dir \
+    HARNESS_GW_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+    HARNESS_GW_PUSH_VAPID_SUBJECT=mailto:ops@example.com \
     docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml config --quiet
-  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.openclaw.yaml \
-    AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
-    AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
-    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.openclaw.yaml \
+    HARNESS_GW_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
+    HARNESS_GW_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
+    HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     docker compose -f compose.yaml -f compose.openclaw.yaml config --quiet
   AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
-    AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.opencode.yaml \
-    AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
-    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.opencode.yaml \
+    HARNESS_GW_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
+    HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
   ```
 
-  `compose.dev.yaml` adds the Vite dev server for local development. Build
-  affected images and smoke their health and streaming endpoints when runtime
-  container behavior changes.
-
+  `deploy/compose.host.yaml` goes after the harness overlay. `compose.dev.yaml`
+  runs the Vite dev server in `web` (operator surface only). Build affected
+  images and smoke Caddy's `/healthz`, the gateway's `/api/v1/healthz`, and a
+  streaming turn when runtime container behavior changes. The compose test
+  also checks the Caddyfile's lane routing and Host rules.
+- A web server change: `bunx vitest run server`.
+- A gateway, protocol, or SDK client change: make it in harness-gw and run its
+  own checks there; here, rerun `typecheck` and the affected tests after
+  installing the new package.
 - Live harness acceptance requires credentials and approved disposable external
   targets. No runtime ships an Agent-creation tool. The creator is a Hermes
   profile marked `ui_meta.aos.role: creator`, the OpenClaw Agent with the
