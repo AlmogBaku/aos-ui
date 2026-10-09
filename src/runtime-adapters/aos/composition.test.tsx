@@ -102,7 +102,7 @@ const catalogLatency = () =>
   })
 
 /** The AOS proxy end of the operator connection, in process. */
-function createProxyAgent() {
+function createGatewayAgent() {
   let peer: AgentContext | undefined
   const prompts: PromptParams[] = []
   const cancelled: string[] = []
@@ -377,7 +377,7 @@ function pipedSocket(app: AgentApp) {
 }
 
 function mount() {
-  const proxy = createProxyAgent()
+  const proxy = createGatewayAgent()
   vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
   let supplied: HarnessRuntime | undefined
   const Provider = runtimeAdapter.Provider
@@ -545,7 +545,7 @@ describe("provider-neutral AOS runtime composition", () => {
 /** The operator workspace over the fake proxy, opened at one compact URL. */
 function mountWorkspace(pathname: string) {
   window.history.replaceState(null, "", pathname)
-  const proxy = createProxyAgent()
+  const proxy = createGatewayAgent()
   vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
   const Provider = runtimeAdapter.Provider
   const view = render(
@@ -610,7 +610,7 @@ describe("the workspace over one ACP connection", () => {
   })
 
   it("opens one ACP socket when React discards the provider's render", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const sockets: { readyState: number }[] = []
     const socket = pipedSocket(proxy.app)
     vi.stubGlobal(
