@@ -58,13 +58,12 @@ the example configurations in its `examples/` directory. Gateway variables are
 
 Each gateway listener accepts a WebSocket upgrade or a state-changing request
 (attachments, transcription, speech, invitations, push) only with an `Origin`
-in its `allowedOrigins`, which default to its `publicOrigin`. A missing,
-`null`, or foreign `Origin` gets 403 before any route runs, and the gateway
-logs nothing for it. Mismatches include `http://` against `https://`, a wrong
-port, and `localhost` against `127.0.0.1`. The one request admitted without an
-`Origin` is invitation creation on the operator lane, so the
-`aos-invite-link` skill's `curl` works. A non-browser ACP client must send a
-listed `Origin`. The rules are in harness-gw's
+in its `allowedOrigins`, which default to its `publicOrigin`, when it carries
+one. A `null` or foreign `Origin` gets 403 before any route runs, and the
+gateway logs nothing for it. Mismatches include `http://` against `https://`, a
+wrong port, and `localhost` against `127.0.0.1`. A request with no `Origin`,
+such as the `aos-invite-link` skill's `curl` or a non-browser ACP client, is
+admitted. The rules are in harness-gw's
 [`docs/protocol.md`](https://github.com/AlmogBaku/harness-gw/blob/main/docs/protocol.md#origins).
 
 ## The page reloads once after a deploy
