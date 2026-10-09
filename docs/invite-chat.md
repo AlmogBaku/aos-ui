@@ -35,8 +35,8 @@ its own content security policy and never the operator sign-in, service
 worker, or manifest. Mount the key with
 `HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE`, set the gateway's
 `guest.publicOrigin` to the address guests use, and set
-`AOS_UI_GUEST_PUBLIC_HOST` to its host name so Caddy answers it. The
-development overlay serves no guest page; its guest lane answers 502.
+`AOS_UI_GUEST_PUBLIC_HOST` to its host name so Caddy answers it. Under the
+development overlay the guest page has no hot reload; rebuild to see a change.
 
 ## Prepare the invited Agent
 

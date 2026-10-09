@@ -38,7 +38,7 @@ in the query.
 | Response | Where it comes from |
 | --- | --- |
 | `421 Misdirected Request` | Caddy: the request's `Host` is not `127.0.0.1`, `localhost`, or the lane's `AOS_UI_PUBLIC_HOST` / `AOS_UI_GUEST_PUBLIC_HOST`. Set the name the browser uses. |
-| `502 Bad Gateway` | Caddy cannot reach the web server or gateway lane. Under `compose.dev.yaml`, the guest lane always answers 502, because Vite serves the operator surface only. On the guest lane's `/api/v1` with no gateway guest listener, add `deploy/compose.operator-only.yaml`; see [Run without the guest lane](deployment.md#run-without-the-guest-lane). |
+| `502 Bad Gateway` | Caddy cannot reach the web server or gateway lane. Under `compose.dev.yaml`, the guest site reaches the `web-guest` service, so check that it is running. On the guest lane's `/api/v1` with no gateway guest listener, add `deploy/compose.operator-only.yaml`; see [Run without the guest lane](deployment.md#run-without-the-guest-lane). |
 | `404` on an `/api` path | The web server answers no `/api` path, and the gateway answers nothing outside `/api/v1`; operator-only gateway routes such as invitations and push answer 404 on the guest lane. |
 | `405` | The web server accepts only GET and HEAD. |
 | `503` on `/runtime-config.json` | The web server cannot read its `AOS_UI_RUNTIME_CONFIG_FILE`, or the file is not a JSON object. |

@@ -417,10 +417,11 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
   docker compose -f compose.yaml -f compose.dev.yaml up --build
 ```
 
-With a harness overlay before it, Vite reaches that overlay's gateway. The
-development overlay serves the operator surface only, so the guest lane answers
-502; use the production `web` target to try the guest page. It bind-mounts the
-source and keeps `node_modules` in a named volume.
+With a harness overlay before it, Vite reaches that overlay's gateway. Vite
+serves the operator surface only, so the overlay's `web-guest` service, the
+production web server built from the checkout, serves the guest page without
+hot reload; rerun with `--build` to pick up a change there. The overlay
+bind-mounts the source and keeps `node_modules` in a named volume.
 
 ## Change public configuration
 

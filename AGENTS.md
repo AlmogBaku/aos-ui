@@ -405,7 +405,7 @@ Additional checks by area:
 
   `deploy/compose.host.yaml` goes after the harness overlay (and after
   `compose.push.yaml`), with exactly one harness overlay. `compose.dev.yaml`
-  runs the Vite dev server in `web` (operator surface only). Build affected
+  runs the Vite dev server in `web` and the guest page in `web-guest`. Build affected
   images and smoke Caddy's `/healthz`, the gateway's `/api/v1/healthz`, and a
   streaming turn when runtime container behavior changes. The compose test
   also checks the Caddyfile's lane routing and Host rules.

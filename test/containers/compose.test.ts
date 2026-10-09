@@ -447,6 +447,21 @@ describe("container orchestration", () => {
     })
   })
 
+  it("serves the guest site from the web server under the development overlay", () => {
+    const { services } = composeConfig(
+      ["compose.yaml", "compose.hermes.yaml", "compose.dev.yaml"],
+      harnessEnvironment("hermes")
+    )
+    const guest = services["web-guest"]
+
+    expect(services.caddy.environment).toMatchObject({
+      AOS_UI_WEB_GUEST_UPSTREAM: "web-guest:4201",
+    })
+    expect(guest.build?.target).toBe("web")
+    expect(guest.environment).toMatchObject({ AOS_UI_GUEST_WEB_PORT: "4201" })
+    expect(guest.ports).toBeUndefined()
+  })
+
   it("runs the web server image as a non-root user", () => {
     const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
     const web = dockerfile.slice(dockerfile.indexOf("AS web"))

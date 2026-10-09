@@ -1,6 +1,7 @@
 # Runs the Vite dev server in place of the web server, behind the same Caddy
-# site. It serves the operator surface only, so a harness overlay's guest lane
-# answers 502 here; use the production web target to try the guest page.
+# site. Vite serves the operator surface only, so the guest site, which a
+# harness overlay opens, is served by `web-guest`: the production web server
+# built from this checkout, without hot reload.
 services:
   web:
     build:
@@ -29,6 +30,33 @@ services:
       - type: volume
         source: web-node-modules
         target: /app/node_modules
+
+  # The guest page and its generated runtime-config, with the guest page
+  # policy. Caddy reaches it only through the guest site.
+  web-guest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    environment:
+      AOS_UI_STATIC_ROOT: /app/dist
+      AOS_UI_RUNTIME_CONFIG_FILE: /run/aos-ui/runtime-config.json
+      AOS_UI_WEB_HOST: 0.0.0.0
+      AOS_UI_WEB_PORT: "4200"
+      AOS_UI_GUEST_WEB_HOST: 0.0.0.0
+      AOS_UI_GUEST_WEB_PORT: "4201"
+      AOS_UI_WEB_EXPOSURE: private-container
+    expose:
+      - "4201"
+    configs:
+      - source: runtime-config
+        target: /run/aos-ui/runtime-config.json
+        mode: 0444
+    init: true
+
+  caddy:
+    environment:
+      AOS_UI_WEB_GUEST_UPSTREAM: web-guest:4201
 
 volumes:
   web-node-modules:
