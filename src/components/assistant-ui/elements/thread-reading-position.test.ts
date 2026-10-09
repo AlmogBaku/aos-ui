@@ -194,6 +194,17 @@ describe("thread reading position", () => {
     })
   })
 
+  it("leaves follow mode on an upward scroll over settled content, as a drag on an App frame makes", () => {
+    const controller = new ThreadReadingPositionController()
+    const viewport = createViewport({ clientHeight: 400, scrollHeight: 900 })
+    controller.restore("thread-a", viewport)
+
+    viewport.scrollTop = 200
+    expect(controller.capture("thread-a", viewport, false, true).mode).toBe(
+      "reading"
+    )
+  })
+
   it("keeps the reader's place through a scroll the reader did not make", () => {
     const controller = new ThreadReadingPositionController()
     const viewport = createViewport({ scrollTop: 300 })
@@ -323,6 +334,8 @@ describe("thread reading position", () => {
       ThreadReadingPositionController.prototype,
       "syncAfterContentChange"
     )
+    let now = 0
+    vi.spyOn(performance, "now").mockImplementation(() => now)
 
     function Harness() {
       const viewportRef = useRef<HTMLDivElement>(null)
@@ -350,6 +363,8 @@ describe("thread reading position", () => {
     frames.delete(scrollFrame)
     scrollCallback(0)
     expect(capture).toHaveBeenCalledTimes(1)
+    // No input, and the content is still settling after the mount.
+    expect(capture).toHaveBeenLastCalledWith("thread-a", viewport, false, false)
     // A scroll alone stays where it landed.
     expect(sync).not.toHaveBeenCalled()
 
@@ -364,14 +379,29 @@ describe("thread reading position", () => {
     // Growth that shared the frame with a scroll still reaches the end.
     expect(sync).toHaveBeenCalledTimes(1)
 
+    // A second without a resize settles the content.
+    now = 1_000
+    viewport.dispatchEvent(new Event("scroll"))
+    const [[settledFrame, settledCallback]] = frames
+    frames.delete(settledFrame)
+    settledCallback(0)
+    expect(capture).toHaveBeenLastCalledWith("thread-a", viewport, false, true)
+
     resize?.([], {} as ResizeObserver)
     resize?.([], {} as ResizeObserver)
     expect(frames).toHaveLength(1)
     const [[resizeFrame, resizeCallback]] = frames
     frames.delete(resizeFrame)
     resizeCallback(1)
-    expect(capture).toHaveBeenCalledTimes(2)
+    expect(capture).toHaveBeenCalledTimes(3)
     expect(sync).toHaveBeenCalledTimes(2)
+
+    // A resize unsettles it again.
+    viewport.dispatchEvent(new Event("scroll"))
+    const [[resizedFrame, resizedCallback]] = frames
+    frames.delete(resizedFrame)
+    resizedCallback(0)
+    expect(capture).toHaveBeenLastCalledWith("thread-a", viewport, false, false)
 
     resize?.([], {} as ResizeObserver)
     view.unmount()

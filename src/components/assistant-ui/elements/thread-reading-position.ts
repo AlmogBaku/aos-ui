@@ -3,6 +3,8 @@ import { useEffect, useLayoutEffect, useMemo, type RefObject } from "react"
 const DEFAULT_BOTTOM_THRESHOLD_PX = 48
 /** How long after the reader's own input a scroll still counts as theirs. */
 const READER_INPUT_WINDOW_MS = 1_000
+/** How long the content must stay unresized before it counts as settled. */
+const CONTENT_SETTLE_MS = 1_000
 const MESSAGE_SELECTOR = "[data-message-id]"
 
 export type ThreadReadingBookmark =
@@ -128,12 +130,24 @@ export class ThreadReadingPositionController {
    * landing before its message is measured — would otherwise be captured
    * mid-way: a following thread would stop short of its latest content, and
    * a reading one would keep whatever its saved offset happens to show.
+   *
+   * A touch that starts on an MCP App frame reaches only the frame, so its
+   * scroll arrives with no input. Over settled content, an upward scroll away
+   * from a following thread is therefore taken as the reader's; while the
+   * content is still resizing, as it does on load, it is not.
    */
-  capture(sessionId: string, viewport: HTMLElement, byReader = true) {
+  capture(
+    sessionId: string,
+    viewport: HTMLElement,
+    byReader = true,
+    contentSettled = false
+  ) {
     const previous = this.#bookmarks.get(sessionId)
     const scrolledUp = viewport.scrollTop < this.#scrollTop
     this.#scrollTop = viewport.scrollTop
-    if (previous && !byReader) {
+    const reader =
+      byReader || (previous?.mode === "follow" && scrolledUp && contentSettled)
+    if (previous && !reader) {
       // The reader's message keeps its place, so the fallback offset follows
       // it for a restore that finds the message not yet mounted.
       const message =
@@ -256,6 +270,8 @@ export function useThreadReadingPosition({
     let capturePending = false
     let resizePending = false
     let inputAt = Number.NEGATIVE_INFINITY
+    // A fresh mount is still measuring its content.
+    let resizedAt = performance.now()
     const noteInput = () => {
       inputAt = performance.now()
     }
@@ -270,10 +286,12 @@ export function useThreadReadingPosition({
         frame = null
         if (capturePending) {
           capturePending = false
+          const now = performance.now()
           controller.capture(
             sessionId,
             viewport,
-            performance.now() - inputAt < READER_INPUT_WINDOW_MS
+            now - inputAt < READER_INPUT_WINDOW_MS,
+            now - resizedAt >= CONTENT_SETTLE_MS
           )
         }
         // Growth that shares a frame with a scroll must still move the thread;
@@ -291,7 +309,10 @@ export function useThreadReadingPosition({
     // move a following thread too, not only the messages.
     const resizeObserver =
       typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() => schedule(false))
+        ? new ResizeObserver(() => {
+            resizedAt = performance.now()
+            schedule(false)
+          })
         : null
     for (const content of viewport.children) resizeObserver?.observe(content)
 
