@@ -521,7 +521,7 @@ describe("provider-neutral AOS runtime composition", () => {
     await send("Ship it")
 
     expect(
-      await screen.findByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+      await screen.findByText(en.runErrors.HGW_PROVIDER_UNAVAILABLE)
     ).toBeVisible()
     expect(thread().composer.getState().text).toBe("Ship it")
     expect(proxy.created).toEqual([])
@@ -531,7 +531,7 @@ describe("provider-neutral AOS runtime composition", () => {
     })
 
     expect(
-      screen.queryByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+      screen.queryByText(en.runErrors.HGW_PROVIDER_UNAVAILABLE)
     ).not.toBeInTheDocument()
     expect(thread().getState().messages).toEqual([])
     expect(thread().composer.getState().text).toBe("")
@@ -602,7 +602,7 @@ describe("the workspace over one ACP connection", () => {
 
     await user.click(screen.getByRole("button", { name: "Retry response" }))
 
-    expect(await screen.findByText(en.runErrors.AOS_SESSION_BUSY)).toBeVisible()
+    expect(await screen.findByText(en.runErrors.HGW_SESSION_BUSY)).toBeVisible()
     expect(proxy.prompts).toHaveLength(0)
     expect(screen.getByText("Draft the plan")).toBeVisible()
     expect(screen.getByText("First answer")).toBeVisible()

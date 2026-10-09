@@ -1,0 +1,10 @@
+# Operator-only, added after the harness overlay when the gateway configuration
+# has no `guest` block. It mounts the Caddyfile alone, without the overlay's
+# guest site, so the guest lane serves nothing instead of a guest page whose
+# /api/v1 answers 502.
+services:
+  caddy:
+    configs: !override
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+        mode: 0444

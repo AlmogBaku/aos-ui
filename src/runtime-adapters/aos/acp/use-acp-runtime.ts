@@ -206,8 +206,8 @@ function rewound(
 
 /** The normalized failure behind a refusal the operator can act on. */
 const REFUSAL_CODES: Readonly<Record<number, string>> = {
-  [HGW_JSONRPC_ERRORS.turnInProgress]: "AOS_SESSION_BUSY",
-  [HGW_JSONRPC_ERRORS.temporarilyUnavailable]: "AOS_PROVIDER_UNAVAILABLE",
+  [HGW_JSONRPC_ERRORS.turnInProgress]: "HGW_SESSION_BUSY",
+  [HGW_JSONRPC_ERRORS.temporarilyUnavailable]: "HGW_PROVIDER_UNAVAILABLE",
 }
 
 /** How a resume ended: replayed, refused for good, or left behind by a rebinding. */

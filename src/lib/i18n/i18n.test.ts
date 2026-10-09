@@ -95,7 +95,7 @@ describe("run error messages", () => {
   it("keeps the proxy description for an unknown or absent run error code", async () => {
     const english = await getDictionary("en")
 
-    expect(runErrorMessage(english, "AOS_NOT_A_CODE", "Proxy said this")).toBe(
+    expect(runErrorMessage(english, "HGW_NOT_A_CODE", "Proxy said this")).toBe(
       "Proxy said this"
     )
     expect(runErrorMessage(english, undefined, "Proxy said this")).toBe(

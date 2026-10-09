@@ -15,6 +15,7 @@ type Service = {
   environment?: Record<string, string>
   expose?: string[]
   network_mode?: string
+  configs?: Array<{ source: string; target: string }>
   ports?: Port[]
   user?: string
   secrets?: Array<{
@@ -178,6 +179,12 @@ describe("container orchestration", () => {
     // Docker forwards a published port to the container's interface, so
     // Caddy listens there; the host side above stays on loopback.
     expect(config.services.caddy.environment?.AOS_UI_CADDY_BIND).toBe("0.0.0.0")
+    // An empty public host leaves Caddy's host matcher empty, and Caddy
+    // refuses to start.
+    expect(
+      composeConfig(["compose.yaml"], { AOS_UI_PUBLIC_HOST: "" }).services.caddy
+        .environment?.AOS_UI_PUBLIC_HOST
+    ).toBe("localhost")
     expect(config.services.web.build?.target).toBe("web")
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.json")
@@ -221,7 +228,7 @@ describe("container orchestration", () => {
     ] as const) {
       expect(site).toContain("bind {$AOS_UI_CADDY_BIND:127.0.0.1}")
       expect(site).toContain(
-        `@foreign not host {$${host}} 127.0.0.1 localhost\n\t\trespond @foreign 421`
+        `@foreign {\n\t\t\tnot host 127.0.0.1 localhost\n\t\t\tnot host {$${host}:localhost}\n\t\t}\n\t\trespond @foreign 421`
       )
       expect(site).toContain(`reverse_proxy /api/v1/* {$${gateway}}`)
       expect(site).toContain(`reverse_proxy {$${web}}`)
@@ -320,7 +327,7 @@ describe("container orchestration", () => {
       ["compose.yaml", "compose.hermes.yaml", "compose.push.yaml"],
       harnessEnvironment("hermes", {
         HARNESS_GW_PUSH_STATE_DIR: root,
-        HARNESS_GW_VAPID_PRIVATE_KEY_FILE: PLACEHOLDER_FILE,
+        HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE: PLACEHOLDER_FILE,
         HARNESS_GW_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
       })
     ).services.gateway!
@@ -374,6 +381,42 @@ describe("container orchestration", () => {
       AOS_UI_GUEST_WEB_HOST: "127.0.0.1",
     })
     expect(toolsMcp!.command?.join(" ")).toContain("--host 127.0.0.1")
+  })
+
+  it("moves bundled OpenCode onto host loopback with the host-network overlay", () => {
+    const { gateway, opencode } = composeConfig(
+      [
+        "compose.yaml",
+        "compose.opencode.yaml",
+        "deploy/compose.host.yaml",
+        "deploy/compose.host.opencode.yaml",
+      ],
+      harnessEnvironment("opencode")
+    ).services
+
+    for (const service of [gateway, opencode]) {
+      expect(service!.network_mode).toBe("host")
+      expect(service!.expose ?? []).toEqual([])
+    }
+    expect(opencode!.environment).toMatchObject({
+      AOS_UI_OPENCODE_HOST: "127.0.0.1",
+      AOS_UI_TOOLS_MCP_URL: "http://127.0.0.1:4110/mcp",
+    })
+  })
+
+  it("mounts no guest site under the operator-only overlay", () => {
+    const caddyFiles = (operatorOnly: boolean) =>
+      composeConfig(
+        [
+          "compose.yaml",
+          "compose.hermes.yaml",
+          ...(operatorOnly ? ["deploy/compose.operator-only.yaml"] : []),
+        ],
+        harnessEnvironment("hermes")
+      ).services.caddy.configs?.map((config) => config.target)
+
+    expect(caddyFiles(false)).toContain("/etc/caddy/lanes/guest.caddy")
+    expect(caddyFiles(true)).toEqual(["/etc/caddy/Caddyfile"])
   })
 
   it("uses the Vite development target and source mount behind Caddy", () => {

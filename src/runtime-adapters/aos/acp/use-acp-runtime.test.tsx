@@ -712,7 +712,7 @@ describe("useAcpRuntime", () => {
       textUpdate("user_message", "u1", "Ship it"),
       textUpdate("agent_message", "a1", "On it"),
     ]
-    const FAILURE = { code: "AOS_PROVIDER_RUN_FAILED", message: "Broke" }
+    const FAILURE = { code: "HGW_PROVIDER_RUN_FAILED", message: "Broke" }
 
     /** A thread holding the history the provider saved, and replays again. */
     async function mountWithHistory() {

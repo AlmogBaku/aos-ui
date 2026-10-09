@@ -4,7 +4,10 @@
 http://:18081 {
 	bind {$AOS_UI_CADDY_BIND:127.0.0.1}
 	route {
-		@foreign not host {$AOS_UI_GUEST_PUBLIC_HOST} 127.0.0.1 localhost
+		@foreign {
+			not host 127.0.0.1 localhost
+			not host {$AOS_UI_GUEST_PUBLIC_HOST:localhost}
+		}
 		respond @foreign 421
 		reverse_proxy /api/v1/* {$AOS_UI_GATEWAY_GUEST_UPSTREAM:gateway:4101}
 		reverse_proxy {$AOS_UI_WEB_GUEST_UPSTREAM:web:4201}

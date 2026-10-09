@@ -143,7 +143,7 @@ The launcher accepts these environment variables:
 
 The three `AOS_UI_OPENAI_COMPATIBLE_*` variables are all-or-none.
 
-Set `AOS_RUNTIME_PROXY_URL` for an Agent using `aos-invite-link` to the
+Set `AOS_GATEWAY_URL` for an Agent using `aos-invite-link` to the
 configured operator gateway origin. The skill calls the operator invitation
 endpoint, so it needs network access but no signing key.
 

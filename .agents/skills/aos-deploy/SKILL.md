@@ -45,11 +45,12 @@ browser uses. Point `HARNESS_GW_CONFIG_FILE` at the absolute host path in
 `/etc/aos-ui/aos-ui.env`, beside the harness overlay's secret-file variables
 (`HARNESS_GW_HERMES_TOKEN_FILE`, `HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE`, or
 the OpenClaw and OpenCode equivalents). Set `AOS_UI_PUBLIC_HOST` and
-`AOS_UI_GUEST_PUBLIC_HOST` to the names the browser uses, never `localhost` or
-`127.0.0.1`. The gateway's `invite` command requires `--config` or
+`AOS_UI_GUEST_PUBLIC_HOST` to the names the browser uses. The gateway's `invite` command requires `--config` or
 `HARNESS_GW_CONFIG_FILE`; it never discovers a default path. On a host whose
-exit-node routes capture the Docker bridges, add `-f deploy/compose.host.yaml`
-after the harness overlay (see `docs/deployment.md#host-networking`). For Web
+exit-node routes capture the Docker bridges, or whose Hermes listens on host
+loopback, fill the unit's `@AOS_HOST_NETWORK@` slot with
+`-f deploy/compose.host.yaml` (plus `deploy/compose.host.opencode.yaml` for
+OpenCode; see `docs/deployment.md#host-networking`). For Web
 Push deployments, also set `HARNESS_GW_PUSH_VAPID_SUBJECT` (a `mailto:` or
 `https:` contact URL) in the env file; `deploy/setup-push.sh`
 appends the three push variables plus `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID`,
@@ -73,7 +74,7 @@ on Linux so container volumes are owned by the correct host user.
 The `aos-invite-link` skill mints bearer invitations with one `curl` to the
 operator lane's `POST /api/v1/guest-invitations`, the one gateway request
 admitted without an `Origin`, so any shell-capable agent that can reach the
-operator lane can mint them. Set `AOS_RUNTIME_PROXY_URL` to that operator URL
+operator lane can mint them. Set `AOS_GATEWAY_URL` to that operator URL
 in the harness environment only after an explicit opt-in; without it the skill
 reports setup-needed. Never give the native runtime the gateway configuration
 or the invitation signing-key file.
@@ -117,7 +118,7 @@ docker run --rm -v /tmp/harness-gw-test.yaml:/config/config.yaml:ro \
   config check --config /config/config.yaml
 ```
 
-It prints `configuration is valid` on success. A failure logs a `proxy.start_failed` event whose message begins `Invalid proxy configuration in <path>:` with one line per failing field; fix `/tmp/harness-gw-test.yaml` and retry. `config check` does not read the secret files, so a wrong secret path only shows when the gateway starts.
+It prints `configuration is valid` on success. A failure logs a `gateway.start_failed` event whose message begins `Invalid proxy configuration in <path>:` with one line per failing field; fix `/tmp/harness-gw-test.yaml` and retry. `config check` does not read the secret files, so a wrong secret path only shows when the gateway starts.
 
 ### 3. Install and restart the gateway
 

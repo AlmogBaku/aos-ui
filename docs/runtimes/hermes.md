@@ -109,7 +109,7 @@ never exposes Hermes' native `/auth`, `/api`, or WebSocket routes.
 ## Create a guest invitation
 
 The installed `aos-invite-link` skill uses `curl` against the operator
-gateway's `/api/v1/guest-invitations` endpoint. Set `AOS_RUNTIME_PROXY_URL` to a
+gateway's `/api/v1/guest-invitations` endpoint. Set `AOS_GATEWAY_URL` to a
 reachable operator origin in the Hermes environment. This works for native and
 containerized Hermes without exposing the invitation signing key. From the
 harness-gw checkout, an operator can also sign one locally:

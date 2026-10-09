@@ -6,14 +6,18 @@ are starting points, not host-independent commands.
 ## Private operator UI
 
 Copy `deploy/systemd/aos-ui.service.template` to `/etc/systemd/system/aos-ui.service`,
-replacing `@AOS_CHECKOUT@` with the absolute checkout path and `@AOS_RUNTIME@` with
-the selected runtime name (e.g. `hermes`, `openclaw`, `opencode`). The template
-lists only `compose.yaml` and the harness overlay; add any further `-f` after the
-harness overlay, in the same order in `ExecStart`, `ExecReload`, and `ExecStop`:
-`compose.push.yaml` when push is enabled, then
-`@AOS_CHECKOUT@/deploy/compose.host.yaml` when the host needs host networking
-(its exit-node routes capture the Docker bridge subnets), then an optional
-host-owned overlay such as `/etc/aos-ui/compose.service.yaml`. With
+replacing `@AOS_HOST_NETWORK@` first, then `@AOS_CHECKOUT@` with the absolute
+checkout path and `@AOS_RUNTIME@` with the selected runtime name (e.g. `hermes`,
+`openclaw`, `opencode`). `@AOS_HOST_NETWORK@` becomes nothing for the bridged
+shape, or `-f @AOS_CHECKOUT@/deploy/compose.host.yaml` when the host needs host
+networking (its exit-node routes capture the Docker bridge subnets, or Hermes
+listens on host loopback); OpenCode then also needs
+`-f @AOS_CHECKOUT@/deploy/compose.host.opencode.yaml` after it. Add any other
+`-f` in the same order in `ExecStart`, `ExecReload`, and `ExecStop`:
+`compose.push.yaml` when push is enabled and
+`deploy/compose.operator-only.yaml` when the gateway has no guest listener go
+between the harness overlay and that slot, and an optional host-owned overlay
+such as `/etc/aos-ui/compose.service.yaml` goes last. With
 `deploy/compose.host.yaml`, nothing is published: Caddy listens on
 `127.0.0.1:18080` and `127.0.0.1:18081` itself, and the gateway configuration
 must list `127.0.0.1` as both listener hosts. Set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` in
@@ -77,7 +81,7 @@ Set the Compose secret-file variables for the Hermes token and guest invitation
 signing key (`HARNESS_GW_HERMES_TOKEN_FILE` and
 `HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE`, the `compose.hermes.yaml` secrets
 block), and `AOS_UI_PUBLIC_HOST`/`AOS_UI_GUEST_PUBLIC_HOST` for the names the
-browser uses (never `localhost` or `127.0.0.1`). For Web Push, also add
+browser uses. For Web Push, also add
 `HARNESS_GW_PUSH_VAPID_SUBJECT` (a `mailto:` or `https:` contact URL) to
 `/etc/aos-ui/aos-ui.env`; `deploy/setup-push.sh` appends the three push
 variables plus `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID`, each only when missing,

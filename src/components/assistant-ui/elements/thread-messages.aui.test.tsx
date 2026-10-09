@@ -260,15 +260,15 @@ describe("failed turn presentation", () => {
   }>([
     {
       failure: "a normalized code as localized AOS copy, not the Agent's words",
-      error: { code: "AOS_PROVIDER_RUN_FAILED" },
-      name: `AOS ${en.runErrors.AOS_PROVIDER_RUN_FAILED}`,
+      error: { code: "HGW_PROVIDER_RUN_FAILED" },
+      name: `AOS ${en.runErrors.HGW_PROVIDER_RUN_FAILED}`,
     },
     {
       // The description is already the headline, so it is not repeated as detail.
       failure:
         "a code this build cannot know by the provider's own description",
       error: {
-        code: "AOS_UNKNOWN_TO_THIS_BUILD",
+        code: "HGW_UNKNOWN_TO_THIS_BUILD",
         message: "The upstream model returned 503.",
       },
       name: "AOS The upstream model returned 503.",
@@ -277,10 +277,10 @@ describe("failed turn presentation", () => {
     {
       failure: "the provider's description beside a localized headline",
       error: {
-        code: "AOS_SESSION_BUSY",
+        code: "HGW_SESSION_BUSY",
         message: "run 9f2 is still streaming",
       },
-      name: `AOS ${en.runErrors.AOS_SESSION_BUSY}`,
+      name: `AOS ${en.runErrors.HGW_SESSION_BUSY}`,
       detail: "run 9f2 is still streaming",
     },
     {
@@ -310,12 +310,12 @@ describe("failed turn presentation", () => {
       <LocalThread
         locale="he"
         direction="rtl"
-        initialMessages={failedTurn({ code: "AOS_PROVIDER_RUN_FAILED" })}
+        initialMessages={failedTurn({ code: "HGW_PROVIDER_RUN_FAILED" })}
       />
     )
 
     const notice = screen.getByRole("alert", {
-      name: `AOS ${he.runErrors.AOS_PROVIDER_RUN_FAILED}`,
+      name: `AOS ${he.runErrors.HGW_PROVIDER_RUN_FAILED}`,
     })
     expect(notice).toHaveAttribute("dir", "rtl")
     expect(document.body.textContent).not.toContain("[object Object]")

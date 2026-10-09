@@ -37,15 +37,15 @@ in the query.
 
 | Response | Where it comes from |
 | --- | --- |
-| `421 Misdirected Request` | Caddy: the request's `Host` is not `127.0.0.1`, `localhost`, or the lane's `AOS_UI_PUBLIC_HOST` / `AOS_UI_GUEST_PUBLIC_HOST`. Set the name the browser uses; never set those variables to `localhost` or `127.0.0.1`, which Caddy already lists. |
-| `502 Bad Gateway` | Caddy cannot reach the web server or gateway lane. Under `compose.dev.yaml`, the guest lane always answers 502, because Vite serves the operator surface only. |
+| `421 Misdirected Request` | Caddy: the request's `Host` is not `127.0.0.1`, `localhost`, or the lane's `AOS_UI_PUBLIC_HOST` / `AOS_UI_GUEST_PUBLIC_HOST`. Set the name the browser uses. |
+| `502 Bad Gateway` | Caddy cannot reach the web server or gateway lane. Under `compose.dev.yaml`, the guest lane always answers 502, because Vite serves the operator surface only. On the guest lane's `/api/v1` with no gateway guest listener, add `deploy/compose.operator-only.yaml`; see [Run without the guest lane](deployment.md#run-without-the-guest-lane). |
 | `404` on an `/api` path | The web server answers no `/api` path, and the gateway answers nothing outside `/api/v1`; operator-only gateway routes such as invitations and push answer 404 on the guest lane. |
 | `405` | The web server accepts only GET and HEAD. |
 | `503` on `/runtime-config.json` | The web server cannot read its `AOS_UI_RUNTIME_CONFIG_FILE`, or the file is not a JSON object. |
 
 ## The gateway does not start
 
-The gateway's startup log (`proxy.start_failed`) names the configuration file
+The gateway's startup log (`gateway.start_failed`) names the configuration file
 and one indented line per failing field, without values. `harness-gw config
 check --config <file>` runs the same validation without starting anything. File
 ownership and mode rules, discovery, `HARNESS_GW_*` overrides, and every field
@@ -115,9 +115,25 @@ Hermes cookies or credentials.
 
 AOS reconnects to the native Session without submitting a prompt, keeping the conversation on screen under a "Reconnecting to AOS…" notice until the Session rejoins. Recovery and auto-continue policy remain Hermes settings.
 
+## Caddy does not start
+
+`module name 'host': module value cannot be null` in Caddy's log means `AOS_UI_PUBLIC_HOST` or
+`AOS_UI_GUEST_PUBLIC_HOST` is set but empty in an environment that bypasses
+Compose, which maps an empty value to `localhost`. Unset the variable or give
+it a name.
+
+## A published port hangs, or a container cannot reach the host
+
+On a host using a Tailscale exit node or a similar VPN client, a policy routing
+table (52 for Tailscale) sends Docker's bridge ranges, such as
+`172.16.0.0/12`, to the VPN interface. `ip route show table all | grep
+172.` lists such routes. Run the [host-networking shape](deployment.md#host-networking),
+or add an `ip rule` with a higher priority than the VPN's that looks up the
+`main` table for the Docker bridge subnets.
+
 ## The gateway container cannot reach Hermes
 
-A host service bound only to `127.0.0.1` is not reachable through Docker's host gateway. Bind Hermes to an appropriate trusted interface or provide another container-reachable host, then update the private gateway config's `runtime.baseUrl`. Alternatively run the host-networking shape, adding `-f deploy/compose.host.yaml` after the harness overlay, with the gateway's listeners on `127.0.0.1`; see [Deployment](deployment.md).
+A host service bound only to `127.0.0.1` is not reachable through Docker's host gateway, and Hermes' `Host` check rejects `host.docker.internal`, so a bridged gateway cannot use that name for a Hermes on the host. Run the host-networking shape, adding `-f deploy/compose.host.yaml` after the harness overlay, with the gateway's listeners and `runtime.baseUrl` on `127.0.0.1`; see [Deployment](deployment.md#host-networking). Otherwise bind Hermes to a trusted interface the bridge can reach under a `Host` name Hermes accepts, and update the private gateway config's `runtime.baseUrl`.
 
 From the gateway container, verify the configured host and port resolve and
 accept connections. The browser reaches only the same-origin `/api/v1` path.

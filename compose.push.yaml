@@ -24,4 +24,4 @@ services:
 
 secrets:
   vapid-private-key:
-    file: ${HARNESS_GW_VAPID_PRIVATE_KEY_FILE:?set HARNESS_GW_VAPID_PRIVATE_KEY_FILE to the VAPID private key file}
+    file: ${HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE:?set HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE to the VAPID private key file}

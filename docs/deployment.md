@@ -83,8 +83,7 @@ On each lane, `/api/v1/*` goes to the gateway and everything else to the web
 server. Which port a request reaches, never its path, decides whether it is a
 guest's. Caddy answers only `127.0.0.1`, `localhost`, and the lane's
 `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other `Host` gets 421.
-Set those variables to the name the browser uses, such as a tailnet name, and
-never to `localhost` or `127.0.0.1`, which Caddy rejects as a duplicate host.
+Set those variables to the name the browser uses, such as a tailnet name.
 
 The gateway is API-only: it answers nothing outside `/api/v1`. Its liveness
 endpoint is `/api/v1/healthz` (always HTTP 200; `degraded` in the body means
@@ -154,12 +153,8 @@ stat -c '%U %a' /absolute/private/path/harness-gw.yaml
 ```
 
 The overlays always open the guest lane, and the example configures the
-gateway's guest listener. For an operator-only deployment, remove the `guest`
-block from the gateway configuration and leave the guest port unexposed. The
-one Hermes token and runtime instance remain unchanged.
-TODO(ALM-36): confirm whether Caddy's guest site may stay mounted with no
-gateway guest listener (it would answer 502 on `/api/v1`) or needs a private
-overlay that drops it.
+gateway's guest listener; see [Run without the guest lane](#run-without-the-guest-lane)
+for an operator-only deployment.
 
 Read [Run with Hermes](runtimes/hermes.md) for tools registration, profile,
 and authentication setup.
@@ -212,19 +207,56 @@ into the OpenCode container (default `$HOME/.aws`).
 
 Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 
+## Run without the guest lane
+
+Each harness overlay mounts Caddy's guest site, `deploy/caddy/guest.caddy`, at
+`/etc/caddy/lanes/guest.caddy`, which the Caddyfile imports. With no gateway
+guest listener, that site would serve the guest page while its `/api/v1`
+answers 502. For an operator-only deployment:
+
+1. Remove the `guest` block from the gateway configuration.
+2. Add `-f deploy/compose.operator-only.yaml` after the harness overlay. It
+   mounts the Caddyfile without the guest site, so Caddy does not listen on
+   the guest lane at all.
+3. Keep `AOS_UI_GUEST_BIND_ADDRESS` at its loopback default and route no
+   ingress to the guest port.
+
+The one runtime instance and its credentials are unchanged, and the guest
+invitation signing-key file is still required by the overlay.
+
 ## Host networking
 
 `deploy/compose.host.yaml` runs every service on the host network, each bound
 to loopback: Caddy on `18080` and `18081`, the gateway on `4100` and `4101`,
-the web server on `4200` and `4201`, and `tools-mcp` on `4110`. Use it on a
-host whose exit-node routes capture the Docker bridge subnets, where a
-bridged, published port is unreachable. Add it after the harness overlay (and
-after `compose.push.yaml` when push is enabled):
+the web server on `4200` and `4201`, and `tools-mcp` on `4110`. Use it with
+exactly one harness overlay, after it (and after `compose.push.yaml` when push
+is enabled):
 
 ```bash
 docker compose -f compose.yaml -f compose.hermes.yaml \
   -f deploy/compose.host.yaml up --build
 ```
+
+With `compose.opencode.yaml`, also add `deploy/compose.host.opencode.yaml`
+after it: OpenCode then listens on `127.0.0.1:4096`, so the gateway
+configuration's OpenCode base URL becomes `http://127.0.0.1:4096`, and it
+registers the tools server as `http://127.0.0.1:4110/mcp`.
+
+Use host networking in either of these cases:
+
+- **An exit node captures the Docker bridges.** A Tailscale exit node (and
+  similar VPN clients) installs a policy routing table, 52 for Tailscale, whose
+  routes cover the private ranges Docker assigns to its bridges, such as
+  `172.16.0.0/12`, and send them to the VPN interface. The host then cannot
+  reach its own containers: a bridged, published port hangs, and a container
+  cannot reach a host service. Use this overlay, or add an `ip rule` with a
+  higher priority than the VPN's rules that looks up the `main` table for the
+  Docker bridge subnets.
+- **Hermes listens on the host.** A bridged gateway must reach Hermes at an
+  address Hermes accepts in its `Host` check, and Hermes rejects
+  `host.docker.internal`. Use this overlay so the gateway reaches a host-local
+  Hermes on `127.0.0.1`, or bind Hermes where the bridge can reach it under a
+  `Host` name it accepts.
 
 Compose ignores published ports here, so `AOS_UI_WEB_PUBLISHED_PORT` and the
 bind variables have no effect: the lanes are `http://127.0.0.1:18080` and
@@ -242,7 +274,7 @@ these three variables:
 
 ```bash
 HARNESS_GW_PUSH_STATE_DIR=/var/lib/harness-gw/push     # operator-owned directory
-HARNESS_GW_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key
+HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key
 HARNESS_GW_PUSH_VAPID_SUBJECT=mailto:ops@example.com   # or https: URL
 ```
 
@@ -259,7 +291,7 @@ HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.yaml \
 HARNESS_GW_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
 HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
 HARNESS_GW_PUSH_STATE_DIR=/var/lib/harness-gw/push \
-HARNESS_GW_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
 HARNESS_GW_PUSH_VAPID_SUBJECT=mailto:ops@example.com \
   docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml up --build
 ```
@@ -420,19 +452,33 @@ front because the gateway rejects non-loopback `http:` origins.
 
 The selected native runtime must listen on an address reachable from the
 gateway container. A host-loopback-only Hermes or OpenClaw listener is not
-reachable through `host.docker.internal`; use
-[host networking](#host-networking) or a reachable address.
+reachable through `host.docker.internal`, and Hermes rejects that name in its
+`Host` check anyway; use [host networking](#host-networking) or a reachable
+address.
 
 ## Systemd and a private operator UI
 
 For a host-managed deployment, one template `aos-ui.service.template` in
 [`deploy/systemd`](../deploy/systemd) runs the Compose service as
-`Type=oneshot, RemainAfterExit=yes`. The unit's `ExecStart` passes
-`-f compose.yaml -f compose.<runtime>.yaml`; a runtime deployment therefore
-needs both files. Further overlays, such as `compose.push.yaml`,
-`deploy/compose.host.yaml`, or a host-owned overlay, go after the harness
-overlay in all three `Exec` lines. `ExecReload` recreates the containers
-without tearing down the stack. `TimeoutStartSec=10min` covers the initial
+`Type=oneshot, RemainAfterExit=yes`. Each `Exec` line builds the Compose file
+list as `-f compose.yaml -f compose.<runtime>.yaml`, then the
+`@AOS_HOST_NETWORK@` slot, so a runtime deployment needs both files. Replace
+the slot with nothing for the bridged shape, or with
+`-f @AOS_CHECKOUT@/deploy/compose.host.yaml` for
+[host networking](#host-networking) (OpenCode adds
+`-f @AOS_CHECKOUT@/deploy/compose.host.opencode.yaml` after it); substitute it
+before `@AOS_CHECKOUT@`:
+
+```bash
+sed -e 's|@AOS_HOST_NETWORK@|-f @AOS_CHECKOUT@/deploy/compose.host.yaml|' \
+  -e 's|@AOS_CHECKOUT@|/absolute/path/to/aos-ui|g' -e 's|@AOS_RUNTIME@|hermes|g' \
+  deploy/systemd/aos-ui.service.template > /etc/systemd/system/aos-ui.service
+```
+
+Further overlays, such as `compose.push.yaml` or
+`deploy/compose.operator-only.yaml`, go between the harness overlay and the
+slot, and a host-owned overlay after it, in all three `Exec` lines.
+`ExecReload` recreates the containers without tearing down the stack. `TimeoutStartSec=10min` covers the initial
 image build.
 
 The service owns both lanes:
@@ -511,7 +557,7 @@ HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.yaml \
   HARNESS_GW_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
   HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   HARNESS_GW_PUSH_STATE_DIR=/absolute/operator/dir \
-  HARNESS_GW_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+  HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
   HARNESS_GW_PUSH_VAPID_SUBJECT=mailto:ops@example.com \
   docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml config --quiet
 HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.yaml \
@@ -528,6 +574,12 @@ AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   HARNESS_GW_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
   HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
+AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
+  HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.opencode.yaml \
+  HARNESS_GW_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
+  HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  docker compose -f compose.yaml -f compose.opencode.yaml \
+    -f deploy/compose.host.yaml -f deploy/compose.host.opencode.yaml config --quiet
 ```
 
 When container behavior changes, also build the affected image and smoke the

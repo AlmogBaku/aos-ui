@@ -342,7 +342,7 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
         type: "incomplete",
         reason: "error",
         error: {
-          code: "AOS_PROVIDER_RUN_FAILED",
+          code: "HGW_PROVIDER_RUN_FAILED",
           message: "The upstream model returned 529 (overloaded).",
           provider: "Fixture Cloud",
           model: "fixture-balanced",

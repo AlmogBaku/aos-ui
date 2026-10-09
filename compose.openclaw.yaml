@@ -54,7 +54,7 @@ services:
 
   caddy:
     environment:
-      AOS_UI_GUEST_PUBLIC_HOST: ${AOS_UI_GUEST_PUBLIC_HOST:-}
+      AOS_UI_GUEST_PUBLIC_HOST: ${AOS_UI_GUEST_PUBLIC_HOST:-localhost}
     ports:
       - ${AOS_UI_GUEST_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}:18081
     configs:

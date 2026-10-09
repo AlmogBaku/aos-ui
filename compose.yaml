@@ -9,7 +9,9 @@ services:
       # Docker forwards a published port to the container's interface, so
       # Caddy listens on it here; the published ports below stay on loopback.
       AOS_UI_CADDY_BIND: 0.0.0.0
-      AOS_UI_PUBLIC_HOST: ${AOS_UI_PUBLIC_HOST:-}
+      # Never empty: an empty name leaves Caddy's host matcher with no host and
+      # Caddy refuses to start. `localhost` adds nothing to the loopback names.
+      AOS_UI_PUBLIC_HOST: ${AOS_UI_PUBLIC_HOST:-localhost}
     ports:
       - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_WEB_PUBLISHED_PORT:-3000}:18080
     configs:

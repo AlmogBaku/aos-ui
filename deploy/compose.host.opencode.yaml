@@ -1,0 +1,13 @@
+# Host networking for the bundled OpenCode server, added after
+# deploy/compose.host.yaml with compose.opencode.yaml. OpenCode then listens on
+# host loopback, so the gateway configuration's OpenCode base URL is
+# http://127.0.0.1:4096 instead of the opencode:4096 service address, and
+# OpenCode registers the tools MCP server on loopback because the tools-mcp
+# name does not resolve on the host network.
+services:
+  opencode:
+    network_mode: host
+    expose: !reset []
+    environment:
+      AOS_UI_OPENCODE_HOST: 127.0.0.1
+      AOS_UI_TOOLS_MCP_URL: http://127.0.0.1:4110/mcp

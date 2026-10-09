@@ -104,10 +104,11 @@ overlays) gives each lane one origin: `/api/v1/*`, HTTP and WebSocket, goes to
 that lane's gateway listener, and everything else to that lane's aos-ui web
 server listener. The lane is the port, never the path.
 
-- Each site answers only its own `Host` names, `127.0.0.1`, `localhost`, and
-  the optional `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other
-  name gets 421. Never set those variables to `localhost` or `127.0.0.1`:
-  Caddy rejects the duplicate host and does not start.
+- Each site answers only `127.0.0.1`, `localhost`, and the optional
+  `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other name gets 421.
+  Setting either variable to a loopback name is harmless. Compose maps an
+  empty value to `localhost`; run outside Compose, Caddy refuses to start with
+  either variable set but empty.
 - `AOS_UI_CADDY_BIND` sets the bind address (default `127.0.0.1`; Compose sets
   `0.0.0.0` inside the container and publishes the port on loopback).
 - The upstreams default to the Compose service names and are overridden by
@@ -119,149 +120,59 @@ server listener. The lane is the port, never the path.
 
 ## Gateway configuration
 
-The harness-gw gateway reads one private YAML file. Start from the example for
-the selected runtime in harness-gw's `examples/`:
+The harness-gw gateway reads one private YAML file. Every key, its default,
+its `HARNESS_GW_*` override, and its validation rules are documented in
+harness-gw's
+[configuration reference](https://github.com/AlmogBaku/harness-gw/blob/main/docs/configuration.md);
+the wire and HTTP API, including origin rules, are in its
+[`docs/protocol.md`](https://github.com/AlmogBaku/harness-gw/blob/main/docs/protocol.md).
+Start from the example for the selected runtime in harness-gw's `examples/`:
 [`config.hermes.example.yaml`](https://github.com/AlmogBaku/harness-gw/blob/main/examples/config.hermes.example.yaml),
 [`config.openclaw.example.yaml`](https://github.com/AlmogBaku/harness-gw/blob/main/examples/config.openclaw.example.yaml),
 or
 [`config.opencode.example.yaml`](https://github.com/AlmogBaku/harness-gw/blob/main/examples/config.opencode.example.yaml).
-The schema, with every key documented, is harness-gw's `src/config.ts`; the
-wire and HTTP API, including origin rules, are in
-[`docs/protocol.md`](https://github.com/AlmogBaku/harness-gw/blob/main/docs/protocol.md).
-TODO(ALM-36): harness-gw has no configuration reference doc yet; once it does,
-replace the gateway sections below with a link to it.
 
-What an aos-ui operator needs to know:
+What an aos-ui operator needs beyond that reference:
 
-- **Path.** `--config`, then `HARNESS_GW_CONFIG_FILE`, then
-  `${XDG_CONFIG_HOME:-$HOME/.config}/harness-gw/config.yaml`. The `invite`
-  command never discovers a path. `harness-gw config check --config <path>`
-  validates the file, its `HARNESS_GW_*` overrides, and the schema, and starts
-  nothing.
-- **File checks.** The file must be a regular file owned by the gateway user or
-  root and never group- or world-writable. Compose bind-mounts keep host
-  ownership, so it must be owned by `AOS_UI_HOST_UID` at mode `0600` or
-  `0640`, or by root at `0644`.
-- **Listeners.** `listen` is the trusted operator listener and the optional
-  `guest.listen` the guest one; in Compose they are ports `4100` and `4101`
-  behind Caddy. A wildcard host needs `exposure: private-container`. The
-  operator listener has no application authentication: network access grants
-  full operator access. Operator and guest share one runtime instance and
-  credential.
-- **Origins.** Each listener's `publicOrigin` (and optional `allowedOrigins`,
-  which defaults to it) must list the exact origin the browser uses, such as
-  `http://127.0.0.1:3000` for the operator lane in Compose and
-  `http://127.0.0.1:3001` for the guest lane. A WebSocket upgrade or
-  state-changing request with a foreign, `null`, or missing `Origin` is refused
-  with 403, so a client that is not a browser must still send a listed
-  `Origin`. The one exception is invitation creation on the operator listener,
-  which the `aos-invite-link` skill's `curl` calls without one. A
-  non-loopback origin must be `https:`.
-- **Runtime.** `runtime.kind` is `hermes`, `openclaw`, or `opencode`, with that
-  runtime's private connection fields and secret files; see the harness-gw
-  runtime guides under `docs/runtimes/`. `runtime.mediaArtifacts` (default
-  `true`) turns native assistant media into Artifacts; with `false`, a Hermes
-  `MEDIA:` line, native path included, stays visible to every reader of the
-  Session, guests too.
-- **Secrets.** Every secret file is an absolute path to a regular,
-  non-symlinked, owner-only file. Guest invitation signing keys are 43
-  base64url characters encoding 32 bytes. Secret values never belong in the
-  YAML file, the Compose environment, `VITE_*`, the public runtime
-  configuration, or the browser bundle.
-- **Environment overrides.** Every scalar field can be set by `HARNESS_GW_`
-  followed by its path in upper snake case, for example
-  `HARNESS_GW_LISTEN_PORT`, `HARNESS_GW_RUNTIME_BASE_URL`, or
-  `HARNESS_GW_PUSH_VAPID_SUBJECT`. Arrays, `allowedOrigins`, and the whole
-  `mcpApps` block are file-only, and a guest override needs a `guest` block in
-  the file.
-- **Errors.** An invalid configuration logs `proxy.start_failed` with a
-  message beginning `Invalid proxy configuration in <path>:` and one line per
-  failing field path, naming the variable that set it; values are never
-  included. A key this release no longer accepts is an unrecognized key and
-  stops the gateway. Logs mask credential fields and URL userinfo, query, and
-  fragment.
-
-Runtime slash-command suggestions are enabled on the operator surface only.
-The guest listener advertises none and refuses any guest message or steer whose
-text starts with `/`.
+- **Validate first.** `harness-gw config check --config <path>` validates the
+  file and its `HARNESS_GW_*` overrides and starts nothing. An invalid
+  configuration logs `gateway.start_failed` naming each failing field, never
+  its value.
+- **Ownership under Compose.** The harness overlays bind-mount the file, which
+  keeps its host ownership, so it must be owned by `AOS_UI_HOST_UID` at mode
+  `0600` or `0640`, or by root at `0644`, and never be group- or
+  world-writable.
+- **Listeners.** In Compose the operator listener (`listen`) is port `4100` and
+  the guest listener (`guest.listen`) port `4101`, both behind Caddy; a
+  wildcard host needs `exposure: private-container`. Under
+  `deploy/compose.host.yaml` both listen on `127.0.0.1`. The operator listener
+  has no application authentication.
+- **Origins.** Each listener's `publicOrigin` must be the exact origin the
+  browser uses: `http://127.0.0.1:3000` for the operator lane and
+  `http://127.0.0.1:3001` for the guest lane under the default Compose ports,
+  or the HTTPS name in front of them. A non-loopback origin must be `https:`.
+  The `aos-invite-link` skill's `curl` creates invitations without an
+  `Origin`, which the operator listener allows for that one route.
+- **Operator-only.** A configuration with no `guest` block has no guest
+  listener; see [Deployment](deployment.md#run-without-the-guest-lane) for the
+  matching Compose change.
 
 ### Voice providers {#voice-providers}
 
-Add a `voice` block to route transcription (`POST {baseUrl}/audio/transcriptions`)
-and/or read-aloud synthesis (`POST {baseUrl}/audio/speech`) through an
-OpenAI-compatible speech provider. Omitting the block leaves only the runtime's
-native speech interfaces active. The block must contain at least one of
-`transcription` or `speech`; the example gateway configs intentionally omit it.
-
-```yaml
-voice:
-  transcription:
-    provider: openai-compatible
-    baseUrl: https://stt.example.test/v1
-    apiKeyFile: /run/secrets/voice-stt-key
-    model: whisper-1
-    mode: fallback
-    language: he
-    timeoutMs: 60000
-  speech:
-    provider: openai-compatible
-    baseUrl: https://tts.example.test/v1
-    apiKeyFile: /run/secrets/voice-tts-key
-    model: tts-1
-    voice: alloy
-    format: mp3
-    mode: override
-    timeoutMs: 60000
-```
-
-Each direction (`transcription`, `speech`) accepts:
-
-| Field        | Default    | Meaning                                                                                                                                                                                                                             |
-| ------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider`   | required   | Must be `"openai-compatible"`.                                                                                                                                                                                                      |
-| `baseUrl`    | required   | Base URL including the API version segment (e.g. `/v1`). Must be `https:` or a loopback host when `apiKeyFile` is set. Upstream redirects are refused.                                                                              |
-| `apiKeyFile` | —          | Optional absolute path to an owner-only secret file carrying the API key. Same ownership rules as `runtime.tokenFile`. The key is never inline, never an environment value, and is unrelated to `AOS_UI_OPENAI_COMPATIBLE_API_KEY`. |
-| `model`      | required   | Model identifier forwarded to the provider.                                                                                                                                                                                         |
-| `mode`       | `fallback` | `"fallback"` or `"override"` (see below).                                                                                                                                                                                           |
-| `timeoutMs`  | `60000`    | Per-request timeout in milliseconds (1 000–300 000).                                                                                                                                                                                |
-
-`transcription` additionally accepts:
-
-| Field      | Default | Meaning                                                  |
-| ---------- | ------- | -------------------------------------------------------- |
-| `language` | —       | Optional BCP-47-like language hint (e.g. `he`, `en-US`). |
-
-`speech` additionally accepts:
-
-| Field    | Default | Meaning                                        |
-| -------- | ------- | ---------------------------------------------- |
-| `voice`  | —       | Voice identifier forwarded to the provider.    |
-| `format` | `mp3`   | Audio format: `mp3`, `opus`, `wav`, or `flac`. |
-
-#### Mode semantics
-
-`"fallback"` uses the gateway provider only where the runtime cannot serve speech:
-at the capability level when the runtime reports speech unavailable (OpenClaw,
-OpenCode), and at request time when the runtime's native call fails. On Hermes,
-which advertises speech availability per transport, fallback is request-time
-only: the native call is attempted first, and the gateway provider is used only
-if that call fails.
-
-`"override"` always uses the gateway provider, regardless of runtime capability.
-
-Provider failures surface as `503 temporarily_unavailable`. An unsupported audio
-type or oversized request surfaces as `400 invalid_request`. The gateway never logs
-audio content or transcript text; it logs one redacted `voice.fallback` event
-per direction naming the direction and the runtime's public error code.
+A `voice` block routes transcription and read-aloud through an
+OpenAI-compatible speech provider; without it only the runtime's native speech
+is used. Its fields and `fallback`/`override` modes are in harness-gw's
+configuration reference. Its `apiKeyFile` entries are files mounted into the
+gateway container, never values in `.env` or the Compose environment, and are
+unrelated to OpenCode's `AOS_UI_OPENAI_COMPATIBLE_API_KEY`; see
+[Deployment](deployment.md#voice-provider-key-files) for the mount.
 
 ### MCP Apps fallback {#mcp-apps-fallback}
 
-MCP App servers are registered in the runtime's own MCP configuration, never
-in AOS. On Hermes and OpenCode the gateway reads an App's view itself, through
-its own MCP client, from the server URL the runtime reports. By default it
-connects only to Streamable HTTP servers that ask for no credentials. Add an
-`mcpApps` block to let it reach a server at another address, or one that needs
-headers:
+On Hermes and OpenCode the gateway reads an App's view through its own MCP
+client from the server URL the runtime reports. A Hermes on the host registers
+the `aos-ui` tools server as `http://127.0.0.1:4110/mcp`, which a gateway in a
+Compose container cannot reach, so the gateway configuration overrides it:
 
 ```yaml
 mcpApps:
@@ -269,43 +180,19 @@ mcpApps:
     servers:
       aos-ui:
         url: http://tools-mcp:4110/mcp
-      desktop:
-        headers:
-          Authorization: { file: /etc/aos-ui/secrets/desktop-ui-authorization }
 ```
 
-- The key under `servers` is the MCP server name exactly as the runtime reports
-  it. Each entry needs `url`, `headers`, or both.
-- `url` replaces the URL the runtime reports; the gateway connects there
-  instead. Use it when the gateway reaches the server at a different address
-  than the harness does. A Hermes on the host registers
-  `http://127.0.0.1:4110/mcp`, but a gateway in a Compose container has its own
-  loopback, so harness-gw's Hermes example overrides `aos-ui` with the Compose
-  service address `http://tools-mcp:4110/mcp`. It must be an `http:` or
-  `https:` URL without credentials, query, or fragment. Only the runtime's
-  report decides whether a server is reachable at all: an override never adds
-  a server the runtime does not report with a URL.
-- Each header's `file` holds the whole header value (for example
-  `Bearer …`). It follows the same rules as `runtime.tokenFile`: absolute,
-  regular, non-symlinked, owner-only, 1–8192 bytes, one line. Every file is read
-  once at startup, so a changed value needs a gateway restart.
-- A server with headers is reached only over `https:` or on a loopback host,
-  whether the URL is the override or the runtime's; anything else is refused.
-  A `url` over plain HTTP to a host other than loopback is accepted only
-  without headers.
-- Header values never appear in logs, errors, capabilities, or browser
-  responses.
-- OpenClaw serves Apps natively and ignores this block.
-
+harness-gw's Hermes example already sets this. Under
+`deploy/compose.host.yaml` the loopback URL works and `tools-mcp` does not
+resolve, so drop the override there. An override never adds a server the
+runtime does not report. OpenClaw serves Apps natively and ignores the block.
 See [MCP Apps](mcp-apps.md) for what a view may do once it is served.
 
 ### MCP App files {#mcp-app-files}
 
-A tool call can name files for its App's view to show, as `present_artifact`
-names the file it presents. The gateway reads such a file for the view through
-the runtime, and the view never sees its path; see [MCP Apps](mcp-apps.md#files)
-for the routes. An `mcpApps.files` block decides which calls and folders
-qualify:
+`present_artifact` names the file it presents, and the gateway reads it for
+the view through the runtime; the view never sees its path. An `mcpApps.files`
+block decides which calls and folders qualify:
 
 ```yaml
 mcpApps:
@@ -322,80 +209,26 @@ mcpApps:
       resource: ui://aos-ui/artifact
 ```
 
-- `servers` names the MCP servers whose calls may name files, as the harness
-  configures them. The default is `[aos-ui]`, which also matches a harness
-  that names the server `aos_ui`. A call from any other server gets no files,
-  and neither does a native tool that shares a name with one of `aos-ui`'s.
-- `operator` and `guest` each hold one role's folders: `agentFolder` serves
-  the Agent's own folder, `allow` adds folders, and `deny` takes folders away.
-  Every entry is an absolute path, and a denial beats an allowance.
-- Operators get the Agent's folder by default. Guests get nothing until
+- `servers` defaults to `[aos-ui]` (which also matches `aos_ui`); a call from
+  any other server gets no files.
+- Operators get the Agent's own folder by default. Guests get nothing until
   `guest` allows a folder, and a guest read must pass the `operator` folders
-  too, so a guest never reads what an operator may not.
-- Where the runtime reports no Agent folder, only `allow` counts; with nothing
-  allowed, a view gets no files.
-- A `deny` entry holds in any letter case; an `allow` entry matches the path
-  exactly.
-- These are refused whatever the folders say, matched per path component in
-  any letter case:
-  - the folders `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
-    `.git`, `.config/gcloud`, and `.config/gh`;
-  - the credential names an Artifact path refuses, such as `.env`, `.env.*`,
-    `.envrc`, `auth.json`, `credentials`, and `config.yaml`, plus `.netrc`,
-    `.npmrc`, `.pypirc`, and `.pgpass`;
-  - the SSH keys `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ecdsa_sk`, `id_ed25519`,
-    and `id_ed25519_sk`;
-  - every name ending in `.pem`, `.key`, `.p12`, or `.pfx`. `*.key` also
-    blocks Keynote decks.
-- The folders judge the path as the call wrote it and, where the runtime
-  reports it, the real path the runtime will read, so a symbolic link cannot
-  lead out of an allowed folder. Both are judged again on every request. A
-  guest reads files only on a runtime that reports real paths.
-- `viewer` names the view a published attachment opens in: `server` is an
-  MCP server as the harness configures it, and `resource` one of its `ui://`
-  resources. The default is `aos-ui`'s `ui://aos-ui/artifact`, and `aos-ui`
-  again matches `aos_ui`. The view reads only that server's resources and
-  calls no tool. Folders do not apply to an attachment: its bytes are the
-  ones the Agent published. A runtime that cannot read the viewer, or a
-  viewer out of reach, leaves the attachment on its card with no view.
-- The folders themselves are compared as written, and a link among them is
-  never followed. Where the runtime reports real paths, a folder that sits
-  behind a symbolic link, the Agent's own included, serves nothing until its
-  real location is in `allow` too, in both sets for a guest. The log records
-  each such refusal as `real_path_denied`.
+  too. A denial beats an allowance.
+- Credential folders and names (`.ssh`, `.env`, `*.pem`, SSH keys, and the
+  rest of harness-gw's list) are refused whatever the folders say, and a
+  symbolic link cannot lead out of an allowed folder.
+- `viewer` names the view a published attachment opens in; the default is
+  `aos-ui`'s `ui://aos-ui/artifact`.
+
+The full rules are in harness-gw's configuration reference; see
+[MCP Apps](mcp-apps.md#files) for the routes.
 
 ### Web Push (optional)
 
-Add a `push` block to enable closed-app OS notifications via Web Push. Omitting
-the block leaves tab-only delivery active; no other behavior changes.
-
-```yaml
-push:
-  stateDir: /var/lib/harness-gw/push
-  vapid:
-    subject: mailto:ops@example.com
-    privateKeyFile: /run/secrets/vapid-private-key
-```
-
-`stateDir` must exist and be writable by the gateway user before the gateway starts.
-It holds one JSON file of device registrations (push endpoints and their keys;
-no conversation content), up to 32 per operator. The gateway refuses to start if
-the directory is missing or unwritable — there is no silent fallback.
-
-Generate a VAPID key pair once:
-
-```bash
-bunx web-push generate-vapid-keys
-```
-
-Keep only the private key (a 43-character base64url scalar). Write it to a
-file, set its permissions to `0600`, and pass the path as `privateKeyFile`. The
-public key is derived at gateway startup; do not configure it separately.
-
-For Compose deployments, `compose.push.yaml` passes push settings to the gateway
-as container environment variables; the private configuration file needs no
-`push` block. Add `-f compose.push.yaml` after the runtime overlay and set
-`HARNESS_GW_PUSH_STATE_DIR`, `HARNESS_GW_VAPID_PRIVATE_KEY_FILE`, and
+For Compose deployments, `compose.push.yaml` passes push settings to the
+gateway as container environment variables, so the private configuration file
+needs no `push` block. Add `-f compose.push.yaml` after the runtime overlay and
+set `HARNESS_GW_PUSH_STATE_DIR`, `HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE`, and
 `HARNESS_GW_PUSH_VAPID_SUBJECT` (see
 [Deployment](deployment.md#web-push-state-and-vapid-secret)). Omitting the
 overlay leaves tab-only delivery active with no additional variables required.

@@ -34,7 +34,7 @@ cp -R <checkout>/shared/invite-link <workspace>/skills/aos-invite-link
 openclaw skills list --agent <agent> --json
 ```
 
-For `aos-invite-link`, set `AOS_RUNTIME_PROXY_URL` to the operator gateway
+For `aos-invite-link`, set `AOS_GATEWAY_URL` to the operator gateway
 origin in the Gateway's environment.
 
 ## Install the creator (only if asked)

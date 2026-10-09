@@ -163,38 +163,36 @@ export const he = {
     email: "מדוא״ל",
   },
   runErrors: {
-    AOS_RECONNECT_EXHAUSTED:
-      "לא הצלחנו לשחזר את החיבור להרצה הזו. רעננו את השיחה כדי להמשיך.",
-    AOS_CONNECTION_INTERRUPTED: "החיבור נקטע. מתחברים מחדש להרצה הזו…",
-    AOS_SEND_UNCERTAIN:
+    HGW_CONNECTION_INTERRUPTED: "החיבור נקטע. מתחברים מחדש להרצה הזו…",
+    HGW_SEND_UNCERTAIN:
       "ייתכן שההודעה הזו נתקבלה. מתחברים מחדש לפני שליחה נוספת.",
-    AOS_INTERACTION_UNCERTAIN:
+    HGW_INTERACTION_UNCERTAIN:
       "ייתכן שהתשובה שלכם נתקבלה. מתחברים מחדש לפני תשובה נוספת.",
-    AOS_INTERACTION_FAILED: "לא ניתן היה להחיל את התשובה שלכם.",
-    AOS_INTERACTION_EXPIRED: "הבקשה הזו אינה ממתינה יותר לתשובה.",
-    AOS_INTERACTION_LOST:
+    HGW_INTERACTION_FAILED: "לא ניתן היה להחיל את התשובה שלכם.",
+    HGW_INTERACTION_EXPIRED: "הבקשה הזו אינה ממתינה יותר לתשובה.",
+    HGW_INTERACTION_LOST:
       "השיחה הזו ממתינה לשאלה שלא ניתן עוד לענות עליה כאן. עצרו את הפנייה כדי להמשיך.",
-    AOS_SESSION_IN_USE:
+    HGW_SESSION_IN_USE:
       "השיחה הזו פתוחה באפליקציה אחרת. המשיכו בה שם, או התחילו שיחה חדשה.",
-    AOS_PROVIDER_RUN_FAILED: "הספק לא הצליח להשלים את ההרצה הזו.",
-    AOS_PROVIDER_AGENT_UNAVAILABLE:
+    HGW_PROVIDER_RUN_FAILED: "הספק לא הצליח להשלים את ההרצה הזו.",
+    HGW_PROVIDER_AGENT_UNAVAILABLE:
       "הספק לא הצליח להפעיל את הסוכן עבור השיחה הזו.",
-    AOS_PROVIDER_BILLING_FAILED: "הספק דיווח על בעיית חיוב או מגבלת שימוש.",
-    AOS_PROVIDER_RETRYABLE_FAILURE:
+    HGW_PROVIDER_BILLING_FAILED: "הספק דיווח על בעיית חיוב או מגבלת שימוש.",
+    HGW_PROVIDER_RETRYABLE_FAILURE:
       "ספק המודל החזיר שגיאה בפנייה הזו. נסו שוב, החליפו מודל, או המשיכו בשיחה חדשה.",
-    AOS_PROVIDER_UNAVAILABLE: "הספק אינו זמין באופן זמני.",
-    AOS_SESSION_BUSY: "השיחה הזו עדיין עסוקה בפנייה קודמת.",
-    AOS_SESSION_LIMIT: "הספק הגיע למגבלת השיחות הפעילות.",
-    AOS_RESET_REQUIRED:
+    HGW_PROVIDER_UNAVAILABLE: "הספק אינו זמין באופן זמני.",
+    HGW_SESSION_BUSY: "השיחה הזו עדיין עסוקה בפנייה קודמת.",
+    HGW_SESSION_LIMIT: "הספק הגיע למגבלת השיחות הפעילות.",
+    HGW_RESET_REQUIRED:
       "יש ליישב את ההרצה הזו עם היסטוריית הספק לפני שהיא תמשיך.",
-    AOS_OUTCOME_UNKNOWN:
+    HGW_OUTCOME_UNKNOWN:
       "AOS לא הצליח לאשר איך ההרצה הזו הסתיימה, ולכן היא נסגרה. ייתכן שהעבודה שלה לא הושלמה.",
-    AOS_STOP_UNCERTAIN:
+    HGW_STOP_UNCERTAIN:
       "לא ניתן לאשר את העצירה. יישבו את השיחה לפני שליחה נוספת.",
-    AOS_STREAM_OVERFLOW:
+    HGW_STREAM_OVERFLOW:
       "ההרצה הזו הפיקה יותר אירועים ממה שסביבת העבודה יכולה להכיל בבטחה.",
-    AOS_COMMAND_WITH_ATTACHMENTS: "לא ניתן לשלוח פקודות עם קבצים מצורפים.",
-    AOS_REWIND_CONFLICT:
+    HGW_COMMAND_WITH_ATTACHMENTS: "לא ניתן לשלוח פקודות עם קבצים מצורפים.",
+    HGW_REWIND_CONFLICT:
       "לא ניתן ליצור מחדש את התשובה הזו כי היסטוריית השיחה השתנתה.",
     temporarily_unavailable: "השירות אינו זמין באופן זמני. נסו שוב.",
     rate_limited: "יותר מדי בקשות. נסו שוב בעוד רגע.",

@@ -179,7 +179,9 @@ the guest lane. An external TLS reverse proxy is optional.
   `/runtime-config.json` with the served build id, the guest page policy, and
   `/healthz`. It answers nothing under `/api` and refuses non-GET requests.
   `deploy/Caddyfile` and `deploy/caddy/guest.caddy` own lane routing and Host
-  checks; `deploy/compose.host.yaml` is the host-networking shape.
+  checks; `deploy/compose.host.yaml` (plus `deploy/compose.host.opencode.yaml`
+  for OpenCode) is the host-networking shape, and
+  `deploy/compose.operator-only.yaml` drops the guest site.
 - MCP Apps: `src/components/mcp-apps` owns the sandbox frame, its CSP, and the
   host handlers; `src/runtime-adapters/aos/aos-mcp-apps.ts` adapts the SDK's
   MCP App client to `contracts.ts`. The view schemas come from
@@ -380,7 +382,7 @@ Additional checks by area:
     HARNESS_GW_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
     HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     HARNESS_GW_PUSH_STATE_DIR=/absolute/operator/dir \
-    HARNESS_GW_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+    HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
     HARNESS_GW_PUSH_VAPID_SUBJECT=mailto:ops@example.com \
     docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml config --quiet
   HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.openclaw.yaml \
@@ -393,9 +395,16 @@ Additional checks by area:
     HARNESS_GW_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
     HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
+  AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
+    HARNESS_GW_CONFIG_FILE=/absolute/private/path/harness-gw.opencode.yaml \
+    HARNESS_GW_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
+    HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    docker compose -f compose.yaml -f compose.opencode.yaml \
+      -f deploy/compose.host.yaml -f deploy/compose.host.opencode.yaml config --quiet
   ```
 
-  `deploy/compose.host.yaml` goes after the harness overlay. `compose.dev.yaml`
+  `deploy/compose.host.yaml` goes after the harness overlay (and after
+  `compose.push.yaml`), with exactly one harness overlay. `compose.dev.yaml`
   runs the Vite dev server in `web` (operator surface only). Build affected
   images and smoke Caddy's `/healthz`, the gateway's `/api/v1/healthz`, and a
   streaming turn when runtime container behavior changes. The compose test

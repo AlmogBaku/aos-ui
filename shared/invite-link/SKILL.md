@@ -27,7 +27,7 @@ modify an Agent unless the user asks; this skill creates only the invitation.
 The conversation reference is optional. Omit `ref` to generate a random
 URL-safe reference. The invited Session is created lazily on first Send.
 
-Require `AOS_RUNTIME_PROXY_URL` to name the operator gateway URL reachable from
+Require `AOS_GATEWAY_URL` to name the operator gateway URL reachable from
 the native runtime. If it is missing, `curl` is unavailable, or the request
 fails, report setup-needed with that exact cause. Send one POST only; never
 retry an uncertain response.
@@ -39,7 +39,7 @@ cookie. Never mint an invitation through a browser tool.
 curl --fail-with-body --silent --show-error \
   --header 'content-type: application/json' \
   --data-binary "$request_json" \
-  "${AOS_RUNTIME_PROXY_URL%/}/api/v1/guest-invitations"
+  "${AOS_GATEWAY_URL%/}/api/v1/guest-invitations"
 ```
 
 Errors carry a JSON `error.description` naming the cause. Report it verbatim:

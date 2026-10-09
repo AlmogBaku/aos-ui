@@ -169,41 +169,39 @@ export const en = {
     email: "From email",
   },
   runErrors: {
-    AOS_RECONNECT_EXHAUSTED:
-      "The connection to this run could not be restored. Reload the Session to continue.",
-    AOS_CONNECTION_INTERRUPTED:
+    HGW_CONNECTION_INTERRUPTED:
       "The connection was interrupted. Reconnecting to this run…",
-    AOS_SEND_UNCERTAIN:
+    HGW_SEND_UNCERTAIN:
       "This message may have been received. Reconnecting before you send again.",
-    AOS_INTERACTION_UNCERTAIN:
+    HGW_INTERACTION_UNCERTAIN:
       "Your response may have been received. Reconnecting before you respond again.",
-    AOS_INTERACTION_FAILED: "Your response could not be applied.",
-    AOS_INTERACTION_EXPIRED:
+    HGW_INTERACTION_FAILED: "Your response could not be applied.",
+    HGW_INTERACTION_EXPIRED:
       "This request is no longer waiting for a response.",
-    AOS_INTERACTION_LOST:
+    HGW_INTERACTION_LOST:
       "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
-    AOS_SESSION_IN_USE:
+    HGW_SESSION_IN_USE:
       "This Session is open in another app. Use it there, or start a new Session.",
-    AOS_PROVIDER_RUN_FAILED: "The provider could not complete this run.",
-    AOS_PROVIDER_AGENT_UNAVAILABLE:
+    HGW_PROVIDER_RUN_FAILED: "The provider could not complete this run.",
+    HGW_PROVIDER_AGENT_UNAVAILABLE:
       "The provider could not start this Agent for this Session.",
-    AOS_PROVIDER_BILLING_FAILED:
+    HGW_PROVIDER_BILLING_FAILED:
       "The provider reported a billing or quota problem.",
-    AOS_PROVIDER_RETRYABLE_FAILURE:
+    HGW_PROVIDER_RETRYABLE_FAILURE:
       "The model provider returned an error for this turn. Retry, switch models, or continue in a new Session.",
-    AOS_PROVIDER_UNAVAILABLE: "The provider is temporarily unavailable.",
-    AOS_SESSION_BUSY: "This Session is still busy with an earlier turn.",
-    AOS_SESSION_LIMIT: "The provider has reached its limit of active Sessions.",
-    AOS_RESET_REQUIRED:
+    HGW_PROVIDER_UNAVAILABLE: "The provider is temporarily unavailable.",
+    HGW_SESSION_BUSY: "This Session is still busy with an earlier turn.",
+    HGW_SESSION_LIMIT: "The provider has reached its limit of active Sessions.",
+    HGW_RESET_REQUIRED:
       "This run must be reconciled with provider history before it can continue.",
-    AOS_OUTCOME_UNKNOWN:
+    HGW_OUTCOME_UNKNOWN:
       "AOS could not confirm how this run ended, so it was closed. Its work may be incomplete.",
-    AOS_STOP_UNCERTAIN:
+    HGW_STOP_UNCERTAIN:
       "Stop could not be confirmed. Reconcile this Session before sending again.",
-    AOS_STREAM_OVERFLOW:
+    HGW_STREAM_OVERFLOW:
       "This run produced more events than the workspace can safely buffer.",
-    AOS_COMMAND_WITH_ATTACHMENTS: "Commands cannot be sent with attachments.",
-    AOS_REWIND_CONFLICT:
+    HGW_COMMAND_WITH_ATTACHMENTS: "Commands cannot be sent with attachments.",
+    HGW_REWIND_CONFLICT:
       "This response can no longer be regenerated because the Session history changed.",
     temporarily_unavailable:
       "The service is temporarily unavailable. Please try again.",

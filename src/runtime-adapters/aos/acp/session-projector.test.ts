@@ -356,7 +356,7 @@ describe("applyUpdate messages", () => {
 
   it("shows a failure awaiting Stop while the Session stays running", () => {
     const error = {
-      code: "AOS_INTERACTION_LOST",
+      code: "HGW_INTERACTION_LOST",
       message: "Stop the turn to continue.",
     }
     const failing = fold([
@@ -970,8 +970,8 @@ describe("applyUpdate execution", () => {
     ],
     [
       "a normalized code alone",
-      { code: "AOS_PROVIDER_RUN_FAILED" },
-      { code: "AOS_PROVIDER_RUN_FAILED" },
+      { code: "HGW_PROVIDER_RUN_FAILED" },
+      { code: "HGW_PROVIDER_RUN_FAILED" },
     ],
     ["no failure detail when it named neither", {}, undefined],
   ])(

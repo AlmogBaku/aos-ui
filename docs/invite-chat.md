@@ -83,7 +83,7 @@ operator gateway's `/api/v1/guest-invitations` endpoint. That endpoint admits a
 request with no `Origin`, as the skill's `curl` sends; one that carries an
 `Origin` outside the operator listener's `allowedOrigins` returns 403. An
 unknown Agent ID returns 404, and the guest lane answers 404 for the route. Set
-`AOS_RUNTIME_PROXY_URL` to a reachable operator origin in the Hermes
+`AOS_GATEWAY_URL` to a reachable operator origin in the Hermes
 environment; native and containerized installs need only network access to
 that listener, not the signing key. The endpoint accepts the same invitation
 fields and applies the same defaults as the CLI.

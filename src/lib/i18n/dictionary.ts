@@ -168,27 +168,26 @@ export type Dictionary = {
   }
   /** Localized copy for the normalized `AOS_*` run failure codes. */
   runErrors: {
-    AOS_RECONNECT_EXHAUSTED: string
-    AOS_CONNECTION_INTERRUPTED: string
-    AOS_SEND_UNCERTAIN: string
-    AOS_INTERACTION_UNCERTAIN: string
-    AOS_INTERACTION_FAILED: string
-    AOS_INTERACTION_EXPIRED: string
-    AOS_INTERACTION_LOST: string
-    AOS_PROVIDER_RUN_FAILED: string
-    AOS_PROVIDER_AGENT_UNAVAILABLE: string
-    AOS_PROVIDER_BILLING_FAILED: string
-    AOS_PROVIDER_RETRYABLE_FAILURE: string
-    AOS_PROVIDER_UNAVAILABLE: string
-    AOS_SESSION_BUSY: string
-    AOS_SESSION_IN_USE: string
-    AOS_SESSION_LIMIT: string
-    AOS_RESET_REQUIRED: string
-    AOS_OUTCOME_UNKNOWN: string
-    AOS_STOP_UNCERTAIN: string
-    AOS_STREAM_OVERFLOW: string
-    AOS_COMMAND_WITH_ATTACHMENTS: string
-    AOS_REWIND_CONFLICT: string
+    HGW_CONNECTION_INTERRUPTED: string
+    HGW_SEND_UNCERTAIN: string
+    HGW_INTERACTION_UNCERTAIN: string
+    HGW_INTERACTION_FAILED: string
+    HGW_INTERACTION_EXPIRED: string
+    HGW_INTERACTION_LOST: string
+    HGW_PROVIDER_RUN_FAILED: string
+    HGW_PROVIDER_AGENT_UNAVAILABLE: string
+    HGW_PROVIDER_BILLING_FAILED: string
+    HGW_PROVIDER_RETRYABLE_FAILURE: string
+    HGW_PROVIDER_UNAVAILABLE: string
+    HGW_SESSION_BUSY: string
+    HGW_SESSION_IN_USE: string
+    HGW_SESSION_LIMIT: string
+    HGW_RESET_REQUIRED: string
+    HGW_OUTCOME_UNKNOWN: string
+    HGW_STOP_UNCERTAIN: string
+    HGW_STREAM_OVERFLOW: string
+    HGW_COMMAND_WITH_ATTACHMENTS: string
+    HGW_REWIND_CONFLICT: string
     // Generic codes the guest boundary substitutes for a private failure.
     temporarily_unavailable: string
     rate_limited: string

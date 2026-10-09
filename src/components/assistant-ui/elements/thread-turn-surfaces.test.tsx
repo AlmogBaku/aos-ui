@@ -119,7 +119,7 @@ describe("turn failure detail", () => {
           type: "incomplete",
           reason: "error",
           error: {
-            code: "AOS_PROVIDER_RUN_FAILED",
+            code: "HGW_PROVIDER_RUN_FAILED",
             message: "The upstream model returned 529.",
             provider: "Fixture Cloud",
             model: "fixture-balanced",
@@ -142,7 +142,7 @@ describe("turn failure detail", () => {
         initialMessages={turn([{ type: "text", text: "Half an answer" }], {
           type: "incomplete",
           reason: "error",
-          error: { code: "AOS_PROVIDER_RUN_FAILED" },
+          error: { code: "HGW_PROVIDER_RUN_FAILED" },
         })}
       />
     )

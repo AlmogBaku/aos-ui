@@ -17,8 +17,14 @@ http://:18080 {
 	bind {$AOS_UI_CADDY_BIND:127.0.0.1}
 	route {
 		# Only this lane's own names, so a rebound DNS name gets nothing. The
-		# public host is unset by default, leaving loopback only.
-		@foreign not host {$AOS_UI_PUBLIC_HOST} 127.0.0.1 localhost
+		# public host is unset by default, leaving loopback only. Two `not`
+		# lines, so a public host that is itself a loopback name is no
+		# duplicate. It must not be set but empty: Compose maps empty to
+		# localhost.
+		@foreign {
+			not host 127.0.0.1 localhost
+			not host {$AOS_UI_PUBLIC_HOST:localhost}
+		}
 		respond @foreign 421
 		reverse_proxy /api/v1/* {$AOS_UI_GATEWAY_UPSTREAM:gateway:4100}
 		reverse_proxy {$AOS_UI_WEB_UPSTREAM:web:4200}

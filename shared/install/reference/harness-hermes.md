@@ -29,7 +29,7 @@ ln -s <checkout>/shared/invite-link <profile-home>/skills/aos-invite-link
 ```
 
 `<profile-home>` is `~/.hermes` for the default profile. For
-`aos-invite-link`, set `AOS_RUNTIME_PROXY_URL` to the operator gateway origin in
+`aos-invite-link`, set `AOS_GATEWAY_URL` to the operator gateway origin in
 the profile's environment. A running `hermes serve` caches the skills index:
 ask the operator to restart it, then check with
 `hermes -p <profile> skills list`.
