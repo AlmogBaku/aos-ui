@@ -87,6 +87,7 @@ export const he = {
     backToAgents: "חזרה לסוכנים",
     searchAgents: "חיפוש סוכנים",
     searchSessions: "חיפוש שיחות",
+    searchingSessions: "מתבצע חיפוש בשיחות…",
     openSessions: "שיחות פתוחות",
     history: "היסטוריה",
     preferences: "העדפות",

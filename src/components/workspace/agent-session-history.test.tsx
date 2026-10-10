@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -9,8 +10,12 @@ import userEvent from "@testing-library/user-event"
 import type { ComponentProps } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import type { SessionSearchResult } from "@/runtime-adapters/contracts"
+
+import { useFakeClock } from "../../../test/support/fake-clock"
 import {
   AgentSessionHistory,
+  SESSION_SEARCH_DEBOUNCE_MS,
   type AgentSessionHistoryCopy,
 } from "./agent-session-history"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
@@ -19,6 +24,7 @@ afterEach(cleanup)
 
 const copy: AgentSessionHistoryCopy = {
   searchSessions: "Search Sessions",
+  searchingSessions: "Searching sessions…",
   newSession: "New session",
   openSessions: "Open sessions",
   history: "History",
@@ -104,6 +110,15 @@ const navigation: AgentSessionNavigation = {
 }
 
 type HistoryProps = ComponentProps<typeof AgentSessionHistory>
+
+function searchResult(sessionId: string): SessionSearchResult {
+  return {
+    sessionId,
+    agentId: "agent-a",
+    title: sessionId,
+    updatedAt: "2026-09-08T09:00:00.000Z",
+  }
+}
 
 /** Renders the history over `navigation` with no query and inert callbacks. */
 function renderHistory(props: Partial<HistoryProps> = {}) {
@@ -202,8 +217,73 @@ describe("AgentSessionHistory", () => {
 
     view.rerender({ query: "missing" })
     expect(screen.getByText("No matching Sessions")).toBeVisible()
+    // Without a provider search the titles answer alone, with nothing pending.
+    expect(screen.queryByRole("status")).toBeNull()
     await user.click(screen.getByRole("button", { name: "Clear search" }))
     expect(onQueryChange).toHaveBeenCalledWith("")
+  })
+
+  it("adds the provider's matches to the title filter once typing pauses", async () => {
+    const clock = useFakeClock()
+    const onSearch = vi.fn(async () => [searchResult("history-match")])
+    renderHistory({ query: " research ", onSearch })
+
+    // The title filter answers at once while the provider search waits.
+    expect(screen.getByText("Shared research")).toBeVisible()
+    expect(screen.queryByText("Shared findings")).toBeNull()
+    expect(screen.getByRole("status")).toHaveTextContent("Searching sessions…")
+    await act(() => clock.advance(SESSION_SEARCH_DEBOUNCE_MS - 1))
+    expect(onSearch).not.toHaveBeenCalled()
+
+    await act(() => clock.advance(1))
+    expect(onSearch).toHaveBeenCalledExactlyOnceWith("research", "agent-a")
+    expect(screen.getByText("Shared research")).toBeVisible()
+    expect(screen.getByText("Shared findings")).toBeVisible()
+    expect(screen.queryByRole("status")).toBeNull()
+  })
+
+  it("keeps the title filter when the provider search fails", async () => {
+    const clock = useFakeClock()
+    renderHistory({
+      query: "research",
+      onSearch: () => Promise.reject(new Error("search refused")),
+    })
+
+    await act(() => clock.advance(SESSION_SEARCH_DEBOUNCE_MS))
+    expect(screen.getByText("Shared research")).toBeVisible()
+    expect(screen.queryByText("Shared findings")).toBeNull()
+    expect(screen.queryByRole("status")).toBeNull()
+  })
+
+  it("lets only the current query's answer narrow the list", async () => {
+    const clock = useFakeClock()
+    const answers: Array<(rows: SessionSearchResult[]) => void> = []
+    const onSearch = vi.fn(
+      () =>
+        new Promise<readonly SessionSearchResult[]>((resolve) =>
+          answers.push(resolve)
+        )
+    )
+    const view = renderHistory({ query: "alpha", onSearch })
+    await act(() => clock.advance(SESSION_SEARCH_DEBOUNCE_MS))
+    view.rerender({ query: "beta" })
+    await act(() => clock.advance(SESSION_SEARCH_DEBOUNCE_MS))
+    expect(onSearch.mock.calls).toEqual([
+      ["alpha", "agent-a"],
+      ["beta", "agent-a"],
+    ])
+
+    await act(async () => answers[1]!([searchResult("history-match")]))
+    // The older query answers last and is dropped.
+    await act(async () => answers[0]!([searchResult("open-match")]))
+    expect(screen.getByText("Shared findings")).toBeVisible()
+    expect(screen.queryByText("Shared research")).toBeNull()
+    expect(screen.queryByRole("status")).toBeNull()
+
+    // A new query does not inherit the previous query's matches.
+    view.rerender({ query: "gamma" })
+    expect(screen.queryByText("Shared findings")).toBeNull()
+    expect(screen.getByRole("status")).toHaveTextContent("Searching sessions…")
   })
 
   it("offers the same row menu on every listed Session", async () => {

@@ -93,6 +93,7 @@ export const en = {
     backToAgents: "Back to Agents",
     searchAgents: "Search Agents",
     searchSessions: "Search Sessions",
+    searchingSessions: "Searching sessions…",
     openSessions: "Open sessions",
     history: "History",
     preferences: "Preferences",

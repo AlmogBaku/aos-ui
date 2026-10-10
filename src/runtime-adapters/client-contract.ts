@@ -27,6 +27,7 @@ export type ClientMatchesContract = [
   Assert<Same<Client.TodoStatus, Contract.TodoStatus>>,
   Assert<Same<Client.TodoItem, Contract.TodoItem>>,
   Assert<Same<Client.SessionCreationOptions, Contract.SessionCreationOptions>>,
+  Assert<Same<Client.SessionSearchResult, Contract.SessionSearchResult>>,
   Assert<Same<Client.RuntimeQuestionOption, Contract.RuntimeQuestionOption>>,
   Assert<Same<Client.RuntimeQuestion, Contract.RuntimeQuestion>>,
   Assert<Same<Client.RuntimeQuestionRequest, Contract.RuntimeQuestionRequest>>,

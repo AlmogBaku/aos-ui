@@ -455,6 +455,11 @@ const script = {
    * `__acpStub.releaseRejoin()`; later rejoins answer at once.
    */
   holdRejoin: false,
+  /**
+   * Message text, by Session id, that `_hgw/sessions/search` matches beside
+   * each title, the way a runtime that searches content does.
+   */
+  sessionContent: {} as Record<string, string>,
   recovered: {
     messageId: "reconnect-answer",
     text: "Recovered after reconnect.",
@@ -889,6 +894,19 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("_hgw/session/part", (_params, id) =>
         this.respond(id, {})
       )
+      this.handlers.set("_hgw/sessions/search", (params, id) => {
+        const meta = asRecord(asRecord(params._meta).hgw)
+        const query = String(meta.query ?? "").toLowerCase()
+        const sessions = script.sessions.filter(
+          (session) =>
+            (meta.agentId === undefined ||
+              session._meta.hgw.agentId === meta.agentId) &&
+            `${session.title} ${script.sessionContent[session.sessionId] ?? ""}`
+              .toLowerCase()
+              .includes(query)
+        )
+        this.respond(id, { sessions })
+      })
       this.handlers.set("session/set_config_option", (params, id) => {
         const configOptions = script.configOptions.map((option) =>
           option.configId === params.configId &&
@@ -1350,4 +1368,59 @@ test("AOS proxy answers a permission request on the tool call it guards, and one
   await expect.poll(replies).toEqual([allowed, allowed])
   await expect(page.getByText("Answered: Allow once")).toBeVisible()
   await expect(choices).toHaveCount(0)
+})
+
+test("AOS proxy search adds a Session the provider matched by content to the title filter", async ({
+  page,
+}) => {
+  await serveAcp(page, {
+    sessions: [
+      ...script.sessions,
+      {
+        sessionId: "session-notes",
+        cwd: "/srv/demo",
+        title: "Analysis notes",
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        _meta: {
+          hgw: {
+            agentId: AGENT_ID,
+            status: "idle",
+            archived: false,
+            unread: false,
+          },
+        },
+      },
+    ],
+    sessionContent: { "session-notes": "The pricing page converts poorly." },
+  })
+  await page.goto("/")
+
+  const inspector = page.getByRole("complementary", { name: "Agent details" })
+  const searchBox = inspector.getByRole("searchbox", {
+    name: "Search Sessions",
+  })
+  const notes = inspector.getByRole("button", {
+    name: /^Open session: Analysis notes/,
+  })
+  await expect(notes).toBeVisible()
+
+  // No title holds the word, so only the provider's content match shows it.
+  await searchBox.fill("pricing")
+  await expect
+    .poll(() => recorded(page, "_hgw/sessions/search"))
+    .toEqual([
+      {
+        method: "_hgw/sessions/search",
+        params: { _meta: { hgw: { query: "pricing", agentId: AGENT_ID } } },
+      },
+    ])
+  await expect(notes).toBeVisible()
+  await expect(
+    inspector.getByRole("button", { name: /^Open session: Research/ })
+  ).toHaveCount(0)
+
+  await searchBox.fill("")
+  await expect(
+    inspector.getByRole("button", { name: /^Open session: Research/ })
+  ).toBeVisible()
 })

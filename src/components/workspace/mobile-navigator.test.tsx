@@ -56,6 +56,7 @@ const copy: MobileNavigatorCopy = {
   close: "Close navigation",
   searchAgents: "Search Agents",
   searchSessions: "Search Sessions",
+  searchingSessions: "Searching sessions…",
   openSessions: "Open sessions",
   history: "History",
   newAgent: "New Agent",
