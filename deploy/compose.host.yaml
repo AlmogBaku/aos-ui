@@ -28,6 +28,9 @@ services:
     environment:
       AOS_UI_WEB_HOST: 127.0.0.1
       AOS_UI_GUEST_WEB_HOST: 127.0.0.1
+      # On the host network a wildcard bind reaches every host interface, so
+      # the bridged shape's acknowledgement does not carry over.
+      AOS_UI_WEB_EXPOSURE: ""
 
   gateway:
     network_mode: host

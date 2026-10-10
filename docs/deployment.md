@@ -71,7 +71,7 @@ Each runtime guide explains how to register the server with that harness.
 ## Lanes and Caddy
 
 A harness overlay adds the `gateway` service (image
-`${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.1.1@sha256:5a5f1b800eb1155fa59d7bfd71a31ebad6cee6fdbf52957e9a6f5614d3a02750}`) and the guest lane.
+`${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.1.2@sha256:a3032af08781a35f8fad1abbd20c3a147240a7651ae629fa30b8b04ea19e8771}`) and the guest lane.
 Caddy is then the only published lane listener:
 
 | Lane     | Host port (default) | Caddy   | Gateway listener | Web server listener |

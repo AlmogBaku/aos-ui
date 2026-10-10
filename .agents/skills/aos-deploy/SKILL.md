@@ -72,9 +72,9 @@ already-managed systemd service. Set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID`
 on Linux so container volumes are owned by the correct host user.
 
 The `aos-invite-link` skill mints bearer invitations with one `curl` to the
-operator lane's `POST /api/v1/guest-invitations`, the one gateway request
-admitted without an `Origin`, so any shell-capable agent that can reach the
-operator lane can mint them. Set `AOS_GATEWAY_URL` to that operator URL
+operator lane's `POST /api/v1/guest-invitations`. The gateway admits any
+request that carries no `Origin` (only a foreign or `null` one is refused), so
+any shell-capable agent that can reach the operator lane can mint them. Set `AOS_GATEWAY_URL` to that operator URL
 in the harness environment only after an explicit opt-in; without it the skill
 reports setup-needed. Never give the native runtime the gateway configuration
 or the invitation signing-key file.
@@ -103,29 +103,29 @@ Use this procedure when an operator needs to change a key in the live gateway YA
 The YAML holds paths to secrets, not secret values. A backup is safe:
 
 ```bash
-cp /etc/aos-ui/harness-gw.yaml /tmp/harness-gw-backup-$(date +%Y%m%d).yaml
+cp /etc/harness-gw/config.yaml /tmp/harness-gw-backup-$(date +%Y%m%d).yaml
 ```
 
 ### 2. Prepare and validate the new configuration
 
-Copy the live YAML to a temporary path, apply the changes there, then check it with the gateway image's `config check`, which validates the file, its `HARNESS_GW_*` overrides, and the schema and starts nothing:
+Copy the live YAML to a temporary path, apply the changes there, then check it with `config check` inside the running gateway container. It validates the file, its `HARNESS_GW_*` overrides, and the schema, reads every secret file the configuration names, and starts nothing; the container already has those secrets mounted:
 
 ```bash
-cp /etc/aos-ui/harness-gw.yaml /tmp/harness-gw-test.yaml
+cp /etc/harness-gw/config.yaml /tmp/harness-gw-test.yaml
 # Apply changes to /tmp/harness-gw-test.yaml
-docker run --rm -v /tmp/harness-gw-test.yaml:/config/config.yaml:ro \
-  "${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.1.0}" \
-  config check --config /config/config.yaml
+docker ps --format '{{.Names}}' | grep -- '-gateway-1$'
+docker cp /tmp/harness-gw-test.yaml <that container>:/tmp/config.yaml
+docker exec <that container> bun run src/cli.ts config check --config /tmp/config.yaml
 ```
 
-It prints `configuration is valid` on success. A failure logs a `gateway.start_failed` event whose message begins `Invalid proxy configuration in <path>:` with one line per failing field; fix `/tmp/harness-gw-test.yaml` and retry. `config check` does not read the secret files, so a wrong secret path only shows when the gateway starts.
+It prints `configuration is valid` on success. A failure logs a `gateway.start_failed` event with one line per failing field, or names the secret file it could not read; fix `/tmp/harness-gw-test.yaml` and retry.
 
 ### 3. Install and restart the gateway
 
 Install the file with the owner and mode startup requires, then restart the gateway container, which reads its configuration only when it starts:
 
 ```bash
-install -o root -g root -m 0644 /tmp/harness-gw-test.yaml /etc/aos-ui/harness-gw.yaml
+install -o root -g root -m 0644 /tmp/harness-gw-test.yaml /etc/harness-gw/config.yaml
 docker ps --format '{{.Names}}' | grep -- '-gateway-1$'
 docker restart <that container>
 docker exec <that container> cat /run/harness-gw/config.yaml
