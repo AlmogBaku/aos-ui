@@ -31,7 +31,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@fontsource/michroma": "^5.3.0",
-    "@harness-gw/sdk": "file:/home/anakin/projects/harness-gw/harness-gw-sdk-0.0.0.tgz",
+    "@harness-gw/sdk": "0.1.1",
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@pierre/diffs": "1.4.3",
