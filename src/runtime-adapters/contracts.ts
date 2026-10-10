@@ -123,6 +123,12 @@ export type SessionCreationOptions = {
   title: string
 }
 
+/** One Session a provider search matched, enough to name and open its row. */
+export type SessionSearchResult = Pick<
+  SessionMetadata,
+  "sessionId" | "agentId" | "updatedAt"
+> & { title: string }
+
 export type WorkspaceAdapter = {
   /** All supported native identities, including hidden Agents and creators. */
   listAgents(): Promise<AgentSummary[]>
@@ -169,6 +175,14 @@ export type WorkspaceAdapter = {
    * caller reloads the thread list, so its cursor belongs to this Agent.
    */
   scopeSessionCatalog?: (agentId: string) => void
+  /**
+   * Searches the provider's Sessions, optionally for one Agent. The provider
+   * decides what matches: titles at least, message content where it can.
+   */
+  searchSessions?: (
+    query: string,
+    agentId?: string
+  ) => Promise<readonly SessionSearchResult[]>
   /** What the runtime declares about the Session actions the UI may offer. */
   sessionActionCapabilities?: () => Promise<SessionActionCapabilities>
   /**

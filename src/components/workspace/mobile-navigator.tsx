@@ -30,6 +30,7 @@ import styles from "./mobile-navigator.module.css"
 import {
   AgentSessionHistory,
   type AgentSessionHistoryCopy,
+  type AgentSessionHistoryProps,
 } from "./agent-session-history"
 import type { SessionRowMenuHandlers } from "./session-row-menu"
 import { RowIndicators, UnreadDot } from "./status-dots"
@@ -127,6 +128,7 @@ export type MobileNavigatorProps = {
   renderAgentIcon?: (agent: WorkspaceAgent) => ReactNode
   className?: string
   onActionError?: (error: unknown) => void
+  onSearchSessions?: AgentSessionHistoryProps["onSearch"]
 }
 
 type SessionSnapshot = {
@@ -285,6 +287,7 @@ export function MobileNavigator({
   renderAgentIcon,
   className,
   onActionError,
+  onSearchSessions,
 }: MobileNavigatorProps) {
   const navigatorRef = useRef<HTMLDivElement>(null)
   const [agentQuery, setAgentQuery] = useState("")
@@ -517,6 +520,7 @@ export function MobileNavigator({
             onAgentDetails ? () => onAgentDetails(state.agentId) : undefined
           }
           onActionError={onActionError}
+          onSearchSessions={onSearchSessions}
         />
       )}
     </div>
@@ -546,6 +550,7 @@ type SessionsViewProps = {
   onRemoveOpenSession?: (sessionId: string) => void
   onAgentDetails?: () => void
   onActionError?: (error: unknown) => void
+  onSearchSessions?: AgentSessionHistoryProps["onSearch"]
 }
 
 function SessionsView({
@@ -571,6 +576,7 @@ function SessionsView({
   onRemoveOpenSession,
   onAgentDetails,
   onActionError,
+  onSearchSessions,
 }: SessionsViewProps) {
   return (
     <>
@@ -648,6 +654,7 @@ function SessionsView({
         }
         threadListRuntime={threadListRuntime}
         onActionError={onActionError}
+        onSearch={onSearchSessions}
       />
     </>
   )

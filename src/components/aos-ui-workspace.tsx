@@ -710,6 +710,7 @@ function WorkspaceContent({
         onUnarchiveSession={unarchiveSession}
         onDeleteSession={deleteSession}
         sessionActions={sessionActions}
+        onSearchSessions={workspace.searchSessions}
         onOpenAgentBuilder={openAgentBuilder}
         onManageAgents={() => setManagementOpen(true)}
         onConversationObscuredChange={setConversationObscured}

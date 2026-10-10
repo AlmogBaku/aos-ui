@@ -87,6 +87,7 @@ export type Dictionary = {
     backToAgents: string
     searchAgents: string
     searchSessions: string
+    searchingSessions: string
     openSessions: string
     history: string
     preferences: string

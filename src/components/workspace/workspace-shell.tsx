@@ -68,7 +68,10 @@ import {
   type MobileNavigatorCopy,
 } from "./mobile-navigator"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
-import { AgentSessionHistory } from "./agent-session-history"
+import {
+  AgentSessionHistory,
+  type AgentSessionHistoryProps,
+} from "./agent-session-history"
 import { SessionPlatformIcon } from "./session-platform-icon"
 import {
   SessionThreadListItem,
@@ -165,6 +168,8 @@ export type WorkspaceShellProps = {
   onCloseSidePanel?: () => void
   conversationHeader?: ReactNode
   navigationHidden?: boolean
+  /** The provider's Session search; absent, the search box filters titles. */
+  onSearchSessions?: AgentSessionHistoryProps["onSearch"]
   children: ReactNode
 }
 
@@ -351,6 +356,7 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     close: dictionary.actions.closePanel,
     searchAgents: dictionary.mobileNavigation.searchAgents,
     searchSessions: dictionary.mobileNavigation.searchSessions,
+    searchingSessions: dictionary.mobileNavigation.searchingSessions,
     openSessions: dictionary.mobileNavigation.openSessions,
     history: dictionary.mobileNavigation.history,
     newAgent: dictionary.actions.newAgent,
@@ -910,6 +916,7 @@ type InspectorPanelProps = Pick<
   | "onActionError"
   | "threadListRuntime"
   | "sessionActions"
+  | "onSearchSessions"
 > & {
   agent: WorkspaceAgent | null
   navigation: AgentSessionNavigation | null
@@ -930,6 +937,7 @@ function InspectorPanel({
   agent,
   navigation,
   artifactOutputs,
+  onSearchSessions,
 }: InspectorPanelProps) {
   const [query, setQuery] = useState("")
 
@@ -983,6 +991,7 @@ function InspectorPanel({
             sessionMenu={sessionMenu}
             threadListRuntime={threadListRuntime}
             onActionError={onActionError}
+            onSearch={onSearchSessions}
           />
         </div>
       ) : null}
@@ -1172,6 +1181,7 @@ export function WorkspaceShell({
   onCloseSidePanel,
   conversationHeader,
   navigationHidden = false,
+  onSearchSessions,
   children,
 }: WorkspaceShellProps) {
   const shellRef = useRef<HTMLElement>(null)
@@ -1490,6 +1500,7 @@ export function WorkspaceShell({
     sessionMenu,
     agent: selectedAgent,
     artifactOutputs,
+    onSearchSessions,
   }
   const skipLink = (
     <a
@@ -1798,6 +1809,7 @@ export function WorkspaceShell({
               availability={sessionActions}
               sessionMenu={sessionMenu}
               onActionError={onActionError}
+              onSearchSessions={onSearchSessions}
               onStateChange={dispatchMobileNavigator}
               onOpenSession={(_agentId, sessionId) =>
                 runAction(() => onOpenSession(sessionId), onActionError)

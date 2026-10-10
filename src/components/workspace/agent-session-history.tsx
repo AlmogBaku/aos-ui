@@ -5,6 +5,7 @@ import {
   type ThreadListRuntime,
 } from "@assistant-ui/react"
 import { ChevronDown, Pin, Plus, Search } from "lucide-react"
+import { useEffect, useEffectEvent, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
@@ -12,6 +13,7 @@ import { cn } from "@/lib/utils"
 import type {
   SessionActionCapabilities,
   SessionPlatform,
+  SessionSearchResult,
 } from "@/runtime-adapters/contracts"
 
 import {
@@ -37,6 +39,8 @@ import styles from "./agent-session-history.module.css"
 
 export type AgentSessionHistoryCopy = SessionHistoryLoadMoreCopy & {
   searchSessions: string
+  /** Announced while the provider search for the typed query runs. */
+  searchingSessions: string
   newSession: string
   openSessions: string
   history: string
@@ -86,6 +90,69 @@ export type AgentSessionHistoryProps = {
   sessionMenu?: SessionRowMenuHandlers
   threadListRuntime?: ThreadListRuntime
   onActionError?: (error: unknown) => void
+  /**
+   * The provider's Session search. Without it the search box filters the
+   * loaded titles alone; with it, a pause in typing also adds the Sessions the
+   * provider matched.
+   */
+  onSearch?: (
+    query: string,
+    agentId: string
+  ) => Promise<readonly SessionSearchResult[]>
+}
+
+/** How long typing pauses before the provider is searched. */
+export const SESSION_SEARCH_DEBOUNCE_MS = 300
+
+type ProviderMatches = {
+  agentId: string
+  query: string
+  sessionIds: ReadonlySet<string>
+}
+
+/**
+ * Searches the provider once typing pauses. Matches belong to the query and
+ * Agent they answered, so an answer for an older query never stands for the
+ * current one, and the search is pending until the current one is answered.
+ */
+function useProviderSessionSearch(
+  onSearch: AgentSessionHistoryProps["onSearch"],
+  query: string,
+  agentId: string
+) {
+  const search = useEffectEvent((query: string, agentId: string) =>
+    onSearch ? onSearch(query, agentId) : Promise.resolve([])
+  )
+  const enabled = Boolean(onSearch)
+  const [matches, setMatches] = useState<ProviderMatches | null>(null)
+
+  useEffect(() => {
+    if (!enabled || !query) return
+    let current = true
+    const settle = (sessionIds: ReadonlySet<string>) => {
+      if (current) setMatches({ agentId, query, sessionIds })
+    }
+    const timer = setTimeout(() => {
+      search(query, agentId).then(
+        (results) => settle(new Set(results.map((row) => row.sessionId))),
+        // A failed search leaves the loaded titles to answer alone.
+        () => settle(new Set())
+      )
+    }, SESSION_SEARCH_DEBOUNCE_MS)
+    return () => {
+      current = false
+      clearTimeout(timer)
+    }
+  }, [agentId, enabled, query])
+
+  const answered =
+    matches && matches.agentId === agentId && matches.query === query
+      ? matches.sessionIds
+      : null
+  return {
+    matchedIds: answered,
+    searching: enabled && Boolean(query) && !answered,
+  }
 }
 
 function normalizeSearch(value: string, locale: Locale) {
@@ -350,14 +417,21 @@ export function AgentSessionHistory({
   sessionMenu,
   threadListRuntime,
   onActionError,
+  onSearch,
 }: AgentSessionHistoryProps) {
   const normalizedQuery = normalizeSearch(query, locale)
+  const { matchedIds, searching } = useProviderSessionSearch(
+    onSearch,
+    query.trim(),
+    navigation.agentId
+  )
   const openIds = new Set(
     navigation.openSessions.map((session) => session.sessionId)
   )
   const filter = (session: WorkspaceSession) =>
     !normalizedQuery ||
-    normalizeSearch(session.title, locale).includes(normalizedQuery)
+    normalizeSearch(session.title, locale).includes(normalizedQuery) ||
+    Boolean(matchedIds?.has(session.sessionId))
   const historySessions = navigation.historySessions.filter(
     (session) => !openIds.has(session.sessionId)
   )
@@ -448,7 +522,11 @@ export function AgentSessionHistory({
             handlers={sessionMenu ?? {}}
           />
         ) : null}
-        {!hasResults ? (
+        {searching ? (
+          <div className={styles.empty} role="status" aria-busy="true">
+            <p>{copy.searchingSessions}</p>
+          </div>
+        ) : !hasResults ? (
           <div className={styles.empty}>
             <p>{hasSessions ? copy.noSearchResults : copy.noSessions}</p>
             {normalizedQuery ? (
