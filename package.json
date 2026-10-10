@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "type": "module",
   "private": true,
+  "license": "Apache-2.0",
   "scripts": {
     "dev": "vite",
     "opencode:serve": "bun run scripts/opencode-serve.ts",
