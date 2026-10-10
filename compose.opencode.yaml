@@ -2,7 +2,7 @@
 # which reaches it on the Compose network only, and opens the guest lane.
 services:
   gateway:
-    image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.1.2@sha256:a3032af08781a35f8fad1abbd20c3a147240a7651ae629fa30b8b04ea19e8771}
+    image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.1.3@sha256:a01d8da1a34fd6e6769ad89829d23c30f43cc22fb9fa3f46911e5bfa934480f5}
     user: "${AOS_UI_HOST_UID:-1000}:${AOS_UI_HOST_GID:-1000}"
     environment:
       HARNESS_GW_CONFIG_FILE: /run/harness-gw/config.yaml
