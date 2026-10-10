@@ -92,7 +92,7 @@ and explicit `fixture` mode):
 docker run --rm -p 127.0.0.1:4100:4100 \
   -v /absolute/private/path/config.yaml:/run/harness-gw/config.yaml:ro \
   -v /absolute/private/path/hermes-token:/run/secrets/hermes-token:ro \
-  ghcr.io/almogbaku/harness-gw:0.1.2 \
+  ghcr.io/almogbaku/harness-gw:0.1.3 \
   serve --config /run/harness-gw/config.yaml
 
 # Terminal 2, in this checkout
