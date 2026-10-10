@@ -53,8 +53,9 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 - Optional voice controls (microphone transcription and read-aloud) and restricted guest invitations
 
 The browser has one real runtime: the harness-gw gateway, a separate project
-that puts one native runtime behind ACP v2. The browser speaks ACP over a
-single WebSocket per tab to the gateway, and uses its `/api/v1` HTTP API only
+that puts one native runtime behind ACP v2. Through the gateway's published
+browser client, [`@harness-gw/sdk`](https://www.npmjs.com/package/@harness-gw/sdk),
+the browser speaks ACP over a single WebSocket per tab, and uses its `/api/v1` HTTP API only
 for bytes (attachments, Artifacts, audio) and discovery. Hermes is AOS's
 primary and first-supported harness. The gateway can also attach to OpenClaw
 or OpenCode, which is documented last as the newest attachment path. There is
@@ -69,8 +70,9 @@ harness-gw gateway against an authenticated harness separately.
 
 - An independently operated Hermes, OpenClaw, or OpenCode runtime, plus that runtime's private credentials
 - [Bun](https://bun.sh/)
-- A [harness-gw](https://github.com/AlmogBaku/harness-gw) checkout, or its
-  container image, for anything beyond the fixture preview
+- [Docker](https://docs.docker.com/get-docker/), to run the published
+  [harness-gw](https://github.com/AlmogBaku/harness-gw) image for anything
+  beyond the fixture preview
 - A current desktop browser
 
 Install AOS UI:
@@ -85,9 +87,13 @@ For local development against a real runtime (the browser supports only `aos`
 and explicit `fixture` mode):
 
 ```bash
-# Terminal 1, in the harness-gw checkout: start from its example config for
-# the selected runtime (examples/config.<runtime>.example.yaml)
-bun run serve --config /absolute/private/path/config.yaml
+# Terminal 1: the gateway, from a private copy of its example config for the
+# selected runtime (examples/config.<runtime>.example.yaml in harness-gw)
+docker run --rm -p 127.0.0.1:4100:4100 \
+  -v /absolute/private/path/config.yaml:/run/harness-gw/config.yaml:ro \
+  -v /absolute/private/path/hermes-token:/run/secrets/hermes-token:ro \
+  ghcr.io/almogbaku/harness-gw:0.1.2 \
+  serve --config /run/harness-gw/config.yaml
 
 # Terminal 2, in this checkout
 AOS_UI_RUNTIME_MODE=aos \
@@ -96,10 +102,10 @@ AOS_UI_GATEWAY_TARGET=http://127.0.0.1:4100 \
 ```
 
 Open <http://localhost:3000>. Vite forwards only `/api/v1` to the gateway,
-which owns provider credentials and all native communication. Configure the
-private gateway copy to listen on `127.0.0.1:4100`, use
-`http://localhost:3000` as its public origin, and point its runtime at the
-selected native server. See [the runtime guides](docs/runtime-capabilities.md)
+which owns provider credentials and all native communication. In the private
+gateway config, use `http://localhost:3000` as the public origin and point the
+runtime at the selected native server. Run `config check` in place of `serve`
+first to validate the file and every secret file it names. See [the runtime guides](docs/runtime-capabilities.md)
 and the harness-gw [README](https://github.com/AlmogBaku/harness-gw#readme);
 runtime selection is server-side, not a browser runtime mode.
 
@@ -118,7 +124,9 @@ The fixture is deterministic and cannot create or modify native Agents. Continue
 Compose runs three pieces behind one origin per lane: Caddy, the only
 published port; the aos-ui web server (`bun run web:serve`), which serves the
 built app and `/runtime-config.json`; and, under a harness overlay, the
-harness-gw gateway, which answers `/api/v1`. Runtime selection comes from
+harness-gw gateway, which answers `/api/v1`. Each harness overlay pulls the
+gateway image pinned by digest; set `HARNESS_GW_IMAGE` to run another build.
+Runtime selection comes from
 `/runtime-config.json`, so operators can switch between the gateway and
 explicit fixture mode without rebuilding the frontend.
 
@@ -147,7 +155,10 @@ Every Compose file set also starts the `tools-mcp` service on `127.0.0.1:4110`
 (`AOS_UI_TOOLS_MCP_PORT`); register `http://127.0.0.1:4110/mcp` with your
 harness as described in its runtime guide.
 
-See [Deployment](docs/deployment.md) for native-runtime overlays, networking, health checks, and persistence.
+On a host that runs the stack with host networking, add
+`deploy/compose.host.yaml` after the harness overlay. See
+[Deployment](docs/deployment.md) for native-runtime overlays, networking,
+health checks, and persistence.
 
 ## Documentation
 
