@@ -208,6 +208,7 @@ function rewound(
 const REFUSAL_CODES: Readonly<Record<number, string>> = {
   [HGW_JSONRPC_ERRORS.turnInProgress]: "HGW_SESSION_BUSY",
   [HGW_JSONRPC_ERRORS.temporarilyUnavailable]: "HGW_PROVIDER_UNAVAILABLE",
+  [HGW_JSONRPC_ERRORS.requestTooLarge]: "HGW_REQUEST_TOO_LARGE",
 }
 
 /** How a resume ended: replayed, refused for good, or left behind by a rebinding. */

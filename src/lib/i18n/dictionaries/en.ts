@@ -194,6 +194,7 @@ export const en = {
     HGW_PROVIDER_UNAVAILABLE: "The provider is temporarily unavailable.",
     HGW_SESSION_BUSY: "This Session is still busy with an earlier turn.",
     HGW_SESSION_LIMIT: "The provider has reached its limit of active Sessions.",
+    HGW_REQUEST_TOO_LARGE: "This message is too large to send.",
     HGW_RESET_REQUIRED:
       "This run must be reconciled with provider history before it can continue.",
     HGW_OUTCOME_UNKNOWN:
