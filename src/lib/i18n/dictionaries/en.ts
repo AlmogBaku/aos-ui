@@ -137,6 +137,8 @@ export const en = {
     hideAgentDetails: "Hide Agent details",
     hideAgent: "Hide agent",
     discardDraft: "Discard draft agent",
+    muteNotifications: "Mute notifications",
+    unmuteNotifications: "Unmute notifications",
     switchToEnglish: "Switch to English",
     switchToHebrew: "Switch to Hebrew",
   },
@@ -243,12 +245,14 @@ export const en = {
   agentManagement: {
     description: "Choose which Agents appear in your workspace.",
     showInWorkspace: "Show in workspace",
+    notifications: "Notifications",
     managedByProvider: "Managed by provider",
     shownInWorkspace: "Shown in workspace",
     hiddenFromWorkspace: "Hidden from workspace",
     loading: "Loading Agents…",
     loadFailed: "Agents could not be loaded. Try again.",
     updateFailed: "Visibility could not be saved. Try again.",
+    muteFailed: "Notifications could not be saved. Try again.",
     retry: "Try again",
   },
   creator: {

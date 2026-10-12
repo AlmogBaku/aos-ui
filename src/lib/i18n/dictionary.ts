@@ -139,6 +139,9 @@ export type Dictionary = {
     hideAgent: string
     /** Retires an unfinished creator interview, which owns nothing else. */
     discardDraft: string
+    /** Silences an Agent's notifications everywhere, or brings them back. */
+    muteNotifications: string
+    unmuteNotifications: string
     switchToEnglish: string
     switchToHebrew: string
   }
@@ -235,12 +238,14 @@ export type Dictionary = {
   agentManagement: {
     description: string
     showInWorkspace: string
+    notifications: string
     managedByProvider: string
     shownInWorkspace: string
     hiddenFromWorkspace: string
     loading: string
     loadFailed: string
     updateFailed: string
+    muteFailed: string
     retry: string
   }
   creator: {

@@ -131,6 +131,8 @@ export const he = {
     hideAgentDetails: "הסתרת פרטי הסוכן",
     hideAgent: "הסתר סוכן",
     discardDraft: "בטל טיוטת סוכן",
+    muteNotifications: "השתקת התראות",
+    unmuteNotifications: "ביטול השתקת ההתראות",
     switchToEnglish: "מעבר לאנגלית",
     switchToHebrew: "מעבר לעברית",
   },
@@ -232,12 +234,14 @@ export const he = {
   agentManagement: {
     description: "בחרו אילו סוכנים יופיעו בסביבת העבודה.",
     showInWorkspace: "הצגה בסביבת העבודה",
+    notifications: "התראות",
     managedByProvider: "מנוהל על ידי הספק",
     shownInWorkspace: "מוצג בסביבת העבודה",
     hiddenFromWorkspace: "מוסתר מסביבת העבודה",
     loading: "הסוכנים נטענים…",
     loadFailed: "לא ניתן לטעון את הסוכנים. נסו שוב.",
     updateFailed: "לא ניתן לשמור את ההצגה בסביבת העבודה. נסו שוב.",
+    muteFailed: "לא ניתן לשמור את הגדרת ההתראות. נסו שוב.",
     retry: "ניסיון חוזר",
   },
   creator: {

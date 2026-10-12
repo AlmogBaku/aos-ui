@@ -1607,6 +1607,14 @@ export function useWorkspaceNavigation({
     await refreshAfterVisibilityChange()
   }
 
+  /** A mute is the runtime's to store, like visibility; the roster re-reads. */
+  async function setAgentMuted(agentId: string, muted: boolean) {
+    if (!workspace.updateAgent)
+      throw new Error("Agent updates are unavailable from this provider")
+    await workspace.updateAgent(agentId, { muted })
+    await refreshAgentCatalog()
+  }
+
   function retryWorkspace() {
     setAgentError(null)
     setActionError(null)
@@ -1635,6 +1643,7 @@ export function useWorkspaceNavigation({
     openAgentBuilder,
     discardDraft,
     hideAgent,
+    setAgentMuted,
     refreshAfterVisibilityChange,
     retryWorkspace,
   })

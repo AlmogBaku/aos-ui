@@ -937,6 +937,39 @@ describe("WorkspaceShell", () => {
     expect(onHideAgent).toHaveBeenCalledExactlyOnceWith("agent-mica")
   })
 
+  it.each([
+    [false, en.actions.muteNotifications, true],
+    [true, en.actions.unmuteNotifications, false],
+  ] as const)(
+    "offers a rail row muted=%s the switch to its opposite",
+    async (muted, label, next) => {
+      const user = userEvent.setup()
+      const onSetAgentMuted = vi.fn()
+      renderShell({
+        onSetAgentMuted,
+        agents: [
+          { ...agents[0]!, muteEditable: false },
+          { ...agents[1]!, muteEditable: true, ...(muted ? { muted } : {}) },
+        ],
+      })
+
+      fireEvent.contextMenu(agentRow(/^Mica,/), { clientX: 16, clientY: 24 })
+      await user.click(await screen.findByRole("menuitem", { name: label }))
+      expect(onSetAgentMuted).toHaveBeenCalledExactlyOnceWith(
+        "agent-mica",
+        next
+      )
+
+      // A runtime that cannot store Aster's mute offers it no menu at all.
+      fireEvent.contextMenu(agentRow(/^Aster,/), { clientX: 16, clientY: 24 })
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("menuitem", { name: en.actions.muteNotifications })
+        ).toBeNull()
+      )
+    }
+  )
+
   it("offers no Agent row menu when the runtime cannot hide an Agent", async () => {
     renderShell()
 

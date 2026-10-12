@@ -546,6 +546,7 @@ function WorkspaceContent({
     openAgentBuilder,
     discardDraft,
     hideAgent,
+    setAgentMuted,
     refreshAfterVisibilityChange,
     retryWorkspace,
   } = useWorkspaceNavigation({ bundle, locale, dictionary, now, readNow })
@@ -694,6 +695,7 @@ function WorkspaceContent({
         selectedAgentIsDraft={selectedAgentIsDraft}
         onSelectAgent={selectAgent}
         onHideAgent={capabilities.agentUpdates ? hideAgent : undefined}
+        onSetAgentMuted={capabilities.agentUpdates ? setAgentMuted : undefined}
         onDiscardDraft={discardDraft}
         onOpenSession={openSession}
         onCloseSession={closeSession}

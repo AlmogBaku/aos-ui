@@ -41,7 +41,11 @@ import type {
   SessionPlatform,
 } from "@/runtime-adapters/contracts"
 
-import { AgentRowContextMenu } from "./agent-row-menu"
+import {
+  AgentRowContextMenu,
+  agentRowMenuCopy,
+  type AgentRowMenuHandlers,
+} from "./agent-row-menu"
 import { WorkspacePreferences } from "./workspace-preferences"
 import styles from "./workspace-shell.module.css"
 import {
@@ -156,6 +160,8 @@ export type WorkspaceShellProps = {
   onSelectAgent: (agentId: string) => WorkspaceActionResult
   /** Absent when the runtime cannot change Agent visibility. */
   onHideAgent?: (agentId: string) => WorkspaceActionResult
+  /** Absent when the runtime cannot update Agents; per Agent, `muteEditable`. */
+  onSetAgentMuted?: (agentId: string, muted: boolean) => WorkspaceActionResult
   onDiscardDraft?: (agentId: string) => WorkspaceActionResult
   /** `agentId` names the owner of a Session the catalog has not loaded. */
   onOpenSession: (sessionId: string, agentId?: string) => WorkspaceActionResult
@@ -408,6 +414,7 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     },
     unread: dictionary.status.unread,
     agentRow: agentRowCopy(dictionary),
+    agentMenu: agentRowMenuCopy(dictionary),
   }
 }
 
@@ -420,8 +427,6 @@ type AgentsPanelProps = Pick<
   | "environmentLabel"
   | "agentBuilderAvailable"
   | "onSelectAgent"
-  | "onHideAgent"
-  | "onDiscardDraft"
   | "onOpenAgentBuilder"
   | "onManageAgents"
   | "onActionError"
@@ -429,8 +434,8 @@ type AgentsPanelProps = Pick<
   onAfterSelectAgent?: () => void
   activityButton?: ReactNode
   commandsHost?: boolean
-  /** Raised for a draft whose Session a discard would destroy. */
-  onConfirmDiscardDraft?: (agent: { agentId: string; name: string }) => void
+  /** What each row's menu offers, the same as the phone's Agent list. */
+  agentMenu?: (agent: WorkspaceAgent) => AgentRowMenuHandlers
 }
 
 function AgentsPanel({
@@ -441,13 +446,11 @@ function AgentsPanel({
   environmentLabel,
   agentBuilderAvailable = true,
   onSelectAgent,
-  onHideAgent,
-  onDiscardDraft,
   onOpenAgentBuilder,
   onManageAgents,
   onActionError,
   onAfterSelectAgent,
-  onConfirmDiscardDraft,
+  agentMenu,
   activityButton,
   commandsHost = false,
 }: AgentsPanelProps) {
@@ -498,22 +501,8 @@ function AgentsPanel({
               key={agent.id}
               agentId={agent.id}
               locale={locale}
-              dictionary={dictionary}
-              onHide={
-                onHideAgent &&
-                ((agentId) =>
-                  runAction(() => onHideAgent(agentId), onActionError))
-              }
-              onDiscardDraft={
-                onDiscardDraft &&
-                ((agentId) => {
-                  // A pending interview destroys nothing, so it needs no
-                  // question; one that owns a Session does.
-                  if (draftSessionId(agentId) && onConfirmDiscardDraft)
-                    onConfirmDiscardDraft({ agentId, name: agent.name })
-                  else runAction(() => onDiscardDraft(agentId), onActionError)
-                })
-              }
+              copy={agentRowMenuCopy(dictionary)}
+              {...agentMenu?.(agent)}
             >
               <button
                 className={cn(styles.agentButton, "gap-2 p-2")}
@@ -1174,6 +1163,7 @@ export function WorkspaceShell({
   selectedAgentIsDraft = false,
   onSelectAgent,
   onHideAgent,
+  onSetAgentMuted,
   onDiscardDraft,
   onOpenSession,
   onCloseSession,
@@ -1486,6 +1476,27 @@ export function WorkspaceShell({
       onUnarchiveSession,
     ]
   )
+  /** One menu per Agent row, for the rail and the phone's Agent list alike. */
+  const agentMenu = (agent: WorkspaceAgent): AgentRowMenuHandlers => ({
+    muted: agent.muted === true,
+    onSetMuted:
+      onSetAgentMuted && agent.muteEditable
+        ? (muted) =>
+            runAction(() => onSetAgentMuted(agent.id, muted), onActionError)
+        : undefined,
+    onHide:
+      onHideAgent &&
+      (() => runAction(() => onHideAgent(agent.id), onActionError)),
+    onDiscardDraft:
+      onDiscardDraft &&
+      (() => {
+        // A pending interview destroys nothing, so it needs no question; one
+        // that owns a Session does.
+        if (draftSessionId(agent.id))
+          setDraftDiscard({ agentId: agent.id, name: agent.name })
+        else runAction(() => onDiscardDraft(agent.id), onActionError)
+      }),
+  })
   const agentsPanelProps: AgentsPanelProps = {
     agents: rosterAgents,
     locale,
@@ -1494,8 +1505,7 @@ export function WorkspaceShell({
     environmentLabel,
     agentBuilderAvailable,
     onSelectAgent,
-    onHideAgent,
-    onDiscardDraft,
+    agentMenu,
     onOpenAgentBuilder,
     onManageAgents: () => {
       dispatchMobileNavigator({ type: "DISMISS" })
@@ -1637,7 +1647,6 @@ export function WorkspaceShell({
           >
             <AgentsPanel
               {...agentsPanelProps}
-              onConfirmDiscardDraft={setDraftDiscard}
               activityButton={activityButton}
               commandsHost
             />
@@ -1870,6 +1879,7 @@ export function WorkspaceShell({
               renderAgentIcon={(agent) => (
                 <WorkspaceAgentTile agent={agent} size={32} />
               )}
+              agentMenu={agentMenu}
             />
           </FocusDrawer>
         ) : null}
