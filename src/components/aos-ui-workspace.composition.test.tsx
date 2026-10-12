@@ -400,7 +400,7 @@ describe("AosUiApp fixture composition", () => {
   })
 
   // Full mount: the details panel's New Session failure reaches the
-  // workspace's error surface.
+  // workspace's error surface as that action's own failure.
   it("surfaces new-Session failures from the empty state", async () => {
     const user = userEvent.setup()
     const rejectSession = async (): Promise<never> => {
@@ -418,9 +418,18 @@ describe("AosUiApp fixture composition", () => {
       ).getByRole("button", { name: en.actions.newSession })
     )
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Provider rejected the Session"
+    const alert = await screen.findByRole("alert")
+    expect(alert).toHaveTextContent("Provider rejected the Session")
+    // The action failed, not the workspace, so there is nothing to reload.
+    expect(alert).not.toHaveTextContent("The workspace could not be loaded.")
+    expect(
+      within(alert).queryByRole("button", { name: "Try again" })
+    ).toBeNull()
+
+    await user.click(
+      within(alert).getByRole("button", { name: "Dismiss notification" })
     )
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 
   it("ignores delayed todo events from the previously visible Session", async () => {

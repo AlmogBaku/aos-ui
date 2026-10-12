@@ -65,7 +65,7 @@ const threadTexts = (runtime: TestRuntime) =>
     )
 
 const workspaceError = (nav: WorkspaceNavigation) =>
-  (nav.agentError ?? nav.sessionError ?? nav.actionError)?.message
+  (nav.agentError ?? nav.sessionError ?? nav.threadListError)?.message
 
 /** Opens the builder and waits until its interview Session exists. */
 async function openInterview(
@@ -207,6 +207,7 @@ describe("AosUiApp fixture composition", () => {
     await expectDraftRetired(() => pending.nav)
     expect(pending.runtime.workspace.listAllSessionMetadata()).toEqual(before)
     expect(workspaceError(pending.nav)).toBeUndefined()
+    expect(pending.nav.actionError).toBeNull()
 
     cleanup()
     const started = renderNavigation(creatorFixture(), fixtureClock)
@@ -421,9 +422,11 @@ describe("AosUiApp fixture composition", () => {
       })
     )
 
+    // Accepting the created Agent is what failed, not the workspace.
     await waitFor(() =>
-      expect(workspaceError(view.nav)).toBe("Agent catalog refresh failed")
+      expect(view.nav.actionError?.message).toBe("Agent catalog refresh failed")
     )
+    expect(workspaceError(view.nav)).toBeUndefined()
     expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
   })
 

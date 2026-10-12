@@ -142,6 +142,7 @@ const workspaceCopy = {
     retry: "Try again",
     loading: "Loading workspace…",
     unavailable: "The workspace could not be loaded.",
+    actionFailed: "That action could not be completed.",
     sessionUnavailable:
       "This Session could not be shown. Open another Session from the list.",
     tasks: "Session todos",
@@ -158,6 +159,7 @@ const workspaceCopy = {
     retry: "ניסיון חוזר",
     loading: "סביבת העבודה נטענת…",
     unavailable: "לא ניתן לטעון את סביבת העבודה.",
+    actionFailed: "לא ניתן היה להשלים את הפעולה.",
     sessionUnavailable: "לא ניתן להציג את השיחה הזו. פתחו שיחה אחרת מהרשימה.",
     tasks: "משימות השיחה",
     tasksUnavailable: "ספק זה אינו מציע משימות ביצוע.",
@@ -528,6 +530,7 @@ function WorkspaceContent({
     sessionsLoading,
     agentError,
     sessionError,
+    threadListError,
     actionError,
     setActionError,
     tabUndo,
@@ -564,7 +567,9 @@ function WorkspaceContent({
       ),
     [displayAgents, sessionActions, workspace]
   )
-  const workspaceError = agentError ?? sessionError ?? actionError
+  // A Session action's failure costs that action alone: it never says the
+  // workspace failed to load, and there is nothing for Retry to reload.
+  const workspaceError = agentError ?? sessionError ?? threadListError
   // `/new` is the composer's spelling of the New Session action: a Session is
   // the workspace's to open, so the command runs here and never becomes a turn.
   // Text after the command seeds the new Session's draft instead of being lost.
@@ -733,6 +738,13 @@ function WorkspaceContent({
               locale={locale}
               error={workspaceError}
               onRetry={retryWorkspace}
+            />
+          ) : actionError ? (
+            <ErrorToast
+              locale={locale}
+              title={workspaceCopy[locale].actionFailed}
+              message={actionError.message}
+              onDismiss={() => setActionError(null)}
             />
           ) : null}
           {assistantInstructions ? (

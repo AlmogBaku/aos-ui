@@ -217,7 +217,10 @@ export function useWorkspaceNavigation({
     Readonly<Record<string, string>>
   >({})
   const tabUndo = useSessionTabUndo()
+  // An action's failure is that action's alone; a thread list that cannot
+  // reload is the workspace's, and Retry is what clears it.
   const [actionError, setActionError] = useState<Error | null>(null)
+  const [threadListError, setThreadListError] = useState<Error | null>(null)
   // The runtime's answer for one workspace and refresh; any other pair still
   // waits for its own, so its actions read null and stay hidden meanwhile.
   const [sessionActionsAnswer, setSessionActionsAnswer] = useState<{
@@ -771,7 +774,7 @@ export function useWorkspaceNavigation({
       scopedCatalogAgent.current = agentId
       workspace.scopeSessionCatalog(agentId)
       void runtime.threads.reload().catch((reason: unknown) => {
-        setActionError(toError(reason))
+        setThreadListError(toError(reason))
       })
     },
     [runtime, workspace]
@@ -1074,7 +1077,7 @@ export function useWorkspaceNavigation({
     if (reconciledDisagreement.current === key) return
     reconciledDisagreement.current = key
     void runtime.threads.reload().catch((reason: unknown) => {
-      setActionError(toError(reason))
+      setThreadListError(toError(reason))
     })
   }, [
     catalogSessionIds,
@@ -1617,11 +1620,12 @@ export function useWorkspaceNavigation({
 
   function retryWorkspace() {
     setAgentError(null)
+    setThreadListError(null)
     setActionError(null)
     setAgentsLoading(true)
     setRefreshKey((key) => key + 1)
     void runtime.threads.reload().catch((reason: unknown) => {
-      setActionError(toError(reason))
+      setThreadListError(toError(reason))
     })
   }
 
@@ -1665,6 +1669,7 @@ export function useWorkspaceNavigation({
     sessionsLoading,
     agentError,
     sessionError,
+    threadListError,
     actionError,
     setActionError,
     tabUndo,
