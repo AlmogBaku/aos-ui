@@ -76,6 +76,12 @@ export type PushSubscriptionManager = {
 /** How long a browser that refused to subscribe is left alone. */
 const SUBSCRIBE_RETRY_MS = 60_000
 
+/**
+ * A page kept open re-sends its registration this often, so the proxy keeps
+ * counting the device fresh enough to be shown names and what is asked.
+ */
+const REGISTRATION_REFRESH_MS = 24 * 60 * 60 * 1000
+
 const openMessageSchema = z.object({
   type: z.string().max(64),
   agentId: z.string().min(1).max(512).optional(),
@@ -104,6 +110,7 @@ export function createPushSubscriptionManager({
   /** Endpoint and body the proxy accepted; holding them is what makes push active. */
   let heldEndpoint: string | undefined
   let heldBody: string | undefined
+  let heldAt: number | undefined
   /** When subscribing last failed, so a sync per arrival cannot become a storm. */
   let refusedAt: number | undefined
   const listeners = new Set<PushListeners>()
@@ -129,6 +136,7 @@ export function createPushSubscriptionManager({
   const release = () => {
     heldEndpoint = undefined
     heldBody = undefined
+    heldAt = undefined
   }
   const retire = async (endpoint: string | undefined) => {
     if (endpoint) await client.deletePushSubscription(endpoint)
@@ -243,10 +251,16 @@ export function createPushSubscriptionManager({
           heldEndpoint && heldEndpoint !== live.endpoint
             ? heldEndpoint
             : undefined
-        if (body !== heldBody || heldEndpoint !== live.endpoint) {
+        if (
+          body !== heldBody ||
+          heldEndpoint !== live.endpoint ||
+          heldAt === undefined ||
+          now() - heldAt > REGISTRATION_REFRESH_MS
+        ) {
           await client.putPushSubscription(registration.data)
           heldEndpoint = live.endpoint
           heldBody = body
+          heldAt = now()
         }
         await retire(rotated)
         changed()

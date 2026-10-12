@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -343,6 +344,32 @@ describe("AosUiApp fixture composition", () => {
     await waitFor(() => expect(agentIds(view.nav)).toContain("agent-sora"))
     expect(view.nav.selectedAgentId).toBe("agent-aster")
     expect(draftAgents(view.nav)).toEqual([])
+  })
+
+  // Full mount: the Activity row reaches the rail's own selection only
+  // through the workspace.
+  it("opens a created Agent from its ready row in Activity", async () => {
+    const view = renderWorkspace(creatorFixture(), fixtureClock)
+    const provider = view.runtime.workspace as FixtureWorkspace
+    fireEvent.click(await screen.findByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const interview = interviewSession(provider)!
+    // Elsewhere, so the creation itself does not move the selection.
+    fireEvent.click(screen.getByRole("button", { name: /^Aster,/ }))
+
+    await act(async () =>
+      provider.completeAgentCreation(interview.sessionId, sora)
+    )
+    fireEvent.click(
+      (await screen.findAllByRole("button", { name: /^Activity, / }))[0]!
+    )
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Sora is ready/ })
+    )
+
+    expect(
+      await screen.findByRole("button", { name: /^Sora, .*Selected Agent/ })
+    ).toBeVisible()
   })
 
   it("waits for the catalog to list the created Agent before resolving the draft", async () => {

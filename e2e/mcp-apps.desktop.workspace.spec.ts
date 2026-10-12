@@ -57,34 +57,45 @@ test("an MCP App renders through the double frame, talks to the host, and enters
   ).toBeVisible()
 })
 
-test("the artifact view renders report.pdf, preview.png, test.html, pip, and download", async ({
+/** Sends a message and waits for its run to finish. */
+const send = async (page: import("./test").Page, text: string) => {
+  await page.getByRole("textbox", { name: "Message input" }).fill(text)
+  await page.getByRole("button", { name: "Send message" }).click()
+  await expect(page.getByRole("button", { name: "Stop response" })).toBeHidden({
+    timeout: 10_000,
+  })
+}
+
+/**
+ * The artifact view frame is the inner frame inside the sandbox proxy. The
+ * message's frame is named for its file, and comes before the side panel's.
+ */
+const artifactFrame = (page: import("./test").Page, filename: string) =>
+  page
+    .locator(`iframe[aria-label="${filename}"]`)
+    .first()
+    .contentFrame()
+    .locator("iframe")
+    .contentFrame()
+
+/** The view inside the side panel named for `filename`. */
+const panelView = (page: import("./test").Page, filename: string) =>
+  page
+    .getByRole("complementary", { name: filename })
+    .locator("iframe")
+    .first()
+    .contentFrame()
+    .locator("iframe")
+    .contentFrame()
+
+test("the artifact view shows report.pdf as a card that downloads, opens the side panel, and goes full screen", async ({
   page,
 }) => {
   await page.goto("/en")
   await ready(page)
 
-  // Helper: send a message and wait for the run to finish.
-  const send = async (text: string) => {
-    await page.getByRole("textbox", { name: "Message input" }).fill(text)
-    await page.getByRole("button", { name: "Send message" }).click()
-    await expect(
-      page.getByRole("button", { name: "Stop response" })
-    ).toBeHidden({ timeout: 10_000 })
-  }
-
-  // The artifact view frame is the inner frame inside the sandbox proxy. The
-  // message's frame is named for its file, and comes before the side panel's.
-  const artifactFrame = (filename: string) =>
-    page
-      .locator(`iframe[aria-label="${filename}"]`)
-      .first()
-      .contentFrame()
-      .locator("iframe")
-      .contentFrame()
-
-  // --- report.pdf ---
-  await send("Publish an artifact")
-  const pdfFrame = artifactFrame("report.pdf")
+  await send(page, "Publish an artifact")
+  const pdfFrame = artifactFrame(page, "report.pdf")
   // In its message the PDF is a card, without its pages.
   const card = pdfFrame.getByRole("button", { name: "View report.pdf" })
   await expect(card).toBeVisible()
@@ -104,12 +115,7 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   // The side panel, named for the file, renders the PDF's pages, while the
   // message keeps its card.
   const panel = page.getByRole("complementary", { name: "report.pdf" })
-  const panelFrame = panel
-    .locator("iframe")
-    .first()
-    .contentFrame()
-    .locator("iframe")
-    .contentFrame()
+  const panelFrame = panelView(page, "report.pdf")
   await expect(
     panelFrame.getByText("Synthetic fixture file for AOS UI.")
   ).toBeVisible()
@@ -148,19 +154,31 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   await page.keyboard.press("Escape")
   await expect(exit).toBeHidden()
   await expect(card).toBeVisible()
+})
 
-  // --- preview.png ---
-  await send("Show a png artifact")
-  const pngFrame = artifactFrame("preview.png")
+test("the artifact view shows preview.png alone in its message", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  await ready(page)
+
+  await send(page, "Show a png artifact")
+  const pngFrame = artifactFrame(page, "preview.png")
   // In its message the image shows alone, and opens the side panel.
   // A broken image would show its file card in its place.
   await expect(pngFrame.getByAltText("preview.png")).toBeVisible()
   await expect(pngFrame.getByRole("button", { name: "Download" })).toHaveCount(
     0
   )
+})
 
-  // --- test.html ---
-  await send("Show an html artifact")
+test("the artifact view runs test.html sandboxed, refusing its fetch and its navigation", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  await ready(page)
+
+  await send(page, "Show an html artifact")
   // In its message the HTML is a card; the side panel runs its scripts in a
   // sandboxed iframe whose policy refuses the fetch the fixture tries.
   const reached: string[] = []
@@ -168,16 +186,10 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
     if (new URL(request.url()).hostname === "files.invalid")
       reached.push(request.url())
   })
-  await artifactFrame("test.html")
+  await artifactFrame(page, "test.html")
     .getByRole("button", { name: "View test.html" })
     .click()
-  const htmlView = page
-    .getByRole("complementary", { name: "test.html" })
-    .locator("iframe")
-    .first()
-    .contentFrame()
-    .locator("iframe")
-    .contentFrame()
+  const htmlView = panelView(page, "test.html")
   const htmlInner = htmlView.frameLocator('iframe[title="HTML preview"]')
   await expect(htmlInner.getByText("scripts are on")).toBeVisible()
   await expect(htmlInner.getByText("fetch blocked")).toBeVisible()

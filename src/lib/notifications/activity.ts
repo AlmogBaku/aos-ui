@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+import { HGW_REQUEST_TEXT_MAX } from "@harness-gw/sdk/protocol"
 import type { WorkspaceActivityEvent } from "@/runtime-adapters/contracts"
 
 const opaqueId = z.string().min(1).max(512)
@@ -9,6 +10,7 @@ const base = {
   agentId: opaqueId,
   sessionId: opaqueId,
   occurredAt: activityTimestamp,
+  replayed: z.literal(true).optional(),
 }
 const turn = z.object({
   ...base,
@@ -21,6 +23,15 @@ const attention = z.object({
   type: z.literal("attention-requested"),
   attentionKind: z.enum(["question", "permission"]),
   requestId: opaqueId,
+  /** Kept in this tab's memory only; nothing persists or crosses tabs with it. */
+  // A malformed preview drops the preview, never the request it describes.
+  requestText: z
+    .string()
+    .min(1)
+    .max(HGW_REQUEST_TEXT_MAX)
+    .optional()
+    .catch(undefined),
+  requestMore: z.number().int().min(1).optional().catch(undefined),
 })
 const resolution = z.object({
   ...base,

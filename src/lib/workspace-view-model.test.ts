@@ -5,7 +5,6 @@ import {
   buildAgentSessionView,
   agentStatusFromSessions,
   agentUnreadFromSessions,
-  workspaceUnreadCount,
 } from "./workspace-view-model"
 
 it("does not call an Agent idle when owned execution status is unknown", () => {
@@ -42,27 +41,6 @@ it("aggregates provider unread state per owning Agent only", () => {
   expect(
     agentUnreadFromSessions(agent, [{ ...owned, status: "waiting-for-input" }])
   ).toBe(false)
-})
-
-it("counts unread and awaiting Sessions once each for the Activity bell", () => {
-  const base = {
-    agentId: "a",
-    updatedAt: "2026-09-07T00:00:00.000Z",
-    status: "idle",
-  } as const
-  expect(
-    workspaceUnreadCount([
-      { ...base, sessionId: "read" },
-      { ...base, sessionId: "unread", unread: true },
-      { ...base, sessionId: "waiting", status: "waiting-for-input" },
-      {
-        ...base,
-        sessionId: "both",
-        status: "waiting-for-input",
-        unread: true,
-      },
-    ])
-  ).toBe(3)
 })
 
 const now = new Date("2026-09-03T12:00:00.000Z")

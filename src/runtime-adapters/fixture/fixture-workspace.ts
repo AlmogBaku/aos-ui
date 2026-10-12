@@ -7,6 +7,7 @@ import type {
   AgentUpdate,
   SessionCreationOptions,
   SessionMetadata,
+  SessionStatus,
   TodoItem,
   WorkspaceActivityEvent,
   WorkspaceAdapter,
@@ -187,6 +188,20 @@ type ActivitySubscription = {
   onError?: (error: Error) => void
 }
 
+/** The status a published Activity event leaves its Session in. */
+const activityStatuses: Record<
+  WorkspaceActivityEvent["type"],
+  SessionStatus | null
+> = {
+  "turn-started": "running",
+  "turn-finished": "idle",
+  "turn-failed": "failed",
+  "attention-requested": "waiting-for-input",
+  "attention-resolved": "running",
+  "agent-ready": null,
+  "agent-activation-failed": null,
+}
+
 type FixtureTurnActivity = {
   agentId: string
   sessionId: string
@@ -203,6 +218,8 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   readonly #activityIdFactory: () => string
   readonly #agents: AgentSummary[]
   readonly #hiddenAgents: Set<string>
+  /** Kept for a hidden Agent too, so it holds once the Agent is shown again. */
+  readonly #mutedAgents = new Set<string>()
   readonly #sessions: SessionMetadata[]
   readonly #todos: Map<string, TodoItem[]>
   readonly #todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
@@ -215,6 +232,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }>()
   readonly #sessionTitles: Map<string, string>
   #sessionSequence = 0
+  #exposedSessionId: string | null = null
 
   constructor({
     clock = () => new Date(),
@@ -278,6 +296,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
         visibility: this.#hiddenAgents.has(agent.id)
           ? ("hidden" as const)
           : (agent.visibility ?? ("visible" as const)),
+        ...(this.#mutedAgents.has(agent.id) ? { muted: true as const } : {}),
       }))
     )
   }
@@ -291,11 +310,15 @@ export class FixtureWorkspace implements WorkspaceAdapter {
         selectable: managed && summary.visibility === "visible",
         editable: managed,
         avatarEditable: managed,
+        muteEditable: managed,
       }
     })
   }
 
-  async updateAgent(agentId: string, { visibility, avatar }: AgentUpdate) {
+  async updateAgent(
+    agentId: string,
+    { visibility, avatar, muted }: AgentUpdate
+  ) {
     if (agentId === this.agentCreator?.id)
       throw new Error("The creator is managed by the provider")
     const agent = this.#agents.find(
@@ -308,6 +331,8 @@ export class FixtureWorkspace implements WorkspaceAdapter {
       throw new Error("Invalid Agent visibility")
     if (avatar === null) delete agent.avatar
     else if (avatar !== undefined) agent.avatar = avatar
+    if (muted === true) this.#mutedAgents.add(agentId)
+    else if (muted === false) this.#mutedAgents.delete(agentId)
     this.#publishCatalog()
   }
 
@@ -361,8 +386,13 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     return { rename: true, archive: true, delete: true, pin: true }
   }
 
-  /** Native runtimes debounce exposure; the preview has no read-state clock. */
-  reportFocus() {}
+  /**
+   * Native runtimes debounce exposure; the preview has no read-state clock, so
+   * it only keeps the exposed Session from becoming unread.
+   */
+  reportFocus(sessionId: string | null) {
+    this.#exposedSessionId = sessionId
+  }
 
   async createSession(agentId: string, options?: SessionCreationOptions) {
     const agent =
@@ -432,6 +462,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   publishActivityScenario(name: FixtureActivityScenarioName) {
     for (const event of buildFixtureActivityScenario(name)) {
+      this.#reflectActivity(event)
       this.#publishActivity(event)
     }
   }
@@ -468,12 +499,15 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     result: "finished" | "failed"
   ) {
     if (!activity) return
-    this.#publishActivity({
+    const event: WorkspaceActivityEvent = {
       id: `${activity.turnId}:${result}`,
       ...activity,
       occurredAt: this.#clock().toISOString(),
       type: result === "finished" ? "turn-finished" : "turn-failed",
-    })
+    }
+    // The turn's end is what moves a resumed Session off "running".
+    this.#reflectActivity(event)
+    this.#publishActivity(event)
   }
 
   publishAttention(
@@ -489,20 +523,17 @@ export class FixtureWorkspace implements WorkspaceAdapter {
       sessionId,
       occurredAt: this.#clock().toISOString(),
     }
-    this.#publishActivity(
+    const event: WorkspaceActivityEvent =
       kind === "resolved"
-        ? {
-            ...eventBase,
-            type: "attention-resolved",
-            requestId,
-          }
+        ? { ...eventBase, type: "attention-resolved", requestId }
         : {
             ...eventBase,
             type: "attention-requested",
             attentionKind: kind,
             requestId,
           }
-    )
+    this.#reflectActivity(event)
+    this.#publishActivity(event)
   }
 
   subscribeAgentCatalog(listener: () => void) {
@@ -560,6 +591,26 @@ export class FixtureWorkspace implements WorkspaceAdapter {
       occurredAt: this.#clock().toISOString(),
       type,
     })
+  }
+
+  /**
+   * A published event moves its Session as a provider would: to the status
+   * the event leaves, and unread unless it is the Session being looked at.
+   */
+  #reflectActivity(event: WorkspaceActivityEvent) {
+    const session = this.#sessions.find(
+      ({ sessionId, agentId }) =>
+        sessionId === event.sessionId && agentId === event.agentId
+    )
+    if (!session) return
+    session.status = activityStatuses[event.type] ?? session.status
+    if (
+      event.type !== "turn-started" &&
+      event.type !== "attention-resolved" &&
+      session.sessionId !== this.#exposedSessionId
+    )
+      session.unread = true
+    this.#publishSessions()
   }
 
   #projectSessions(requested: ReadonlySet<string>) {

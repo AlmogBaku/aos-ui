@@ -12,6 +12,7 @@ import {
   renderWorkspace,
   resetWorkspaceBetweenTests,
   useCatalogRuntime,
+  useFixtureBundle,
   type WorkspaceNavigation,
 } from "./aos-ui-workspace.test-helpers"
 
@@ -58,6 +59,21 @@ describe("Agent management", () => {
     await waitFor(() => expectCreatorConversation(view.nav))
   })
 
+  it("mutes an Agent through the runtime's own update, and the rail reads it back", async () => {
+    const view = renderNavigation(() => useFixtureBundle())
+    await waitFor(() => expect(view.nav.selectedAgentId).toBe("agent-aster"))
+    const updateAgent = vi.spyOn(view.runtime.workspace, "updateAgent")
+
+    await act(() => view.nav.setAgentMuted("agent-lumen", true))
+
+    expect(updateAgent).toHaveBeenCalledExactlyOnceWith("agent-lumen", {
+      muted: true,
+    })
+    expect(
+      view.nav.displayAgents.find(({ id }) => id === "agent-lumen")
+    ).toMatchObject({ muted: true, muteEditable: true })
+  })
+
   // Full mount: hiding goes through the dialog, then reconciles the rail and
   // the conversation's empty roster, three parts only the workspace joins.
   it("shows hidden Agents and reconciles hiding the selected and last visible Agent", async () => {
@@ -87,6 +103,7 @@ describe("Agent management", () => {
     })
     for (const toggle of await within(reopened).findAllByRole("switch", {
       checked: true,
+      name: /^Show in workspace:/,
     })) {
       await user.click(toggle)
       await waitFor(() =>

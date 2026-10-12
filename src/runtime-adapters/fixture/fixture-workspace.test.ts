@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { attentionLevel, bellSessions } from "@/lib/attention-level"
+
 import { ActivityStore } from "../../lib/notifications/store"
 import type { SessionMetadata, WorkspaceActivityEvent } from "../contracts"
 import { getWorkspaceCapabilities } from "../workspace-state"
@@ -307,6 +309,8 @@ describe("FixtureWorkspace", () => {
         type: "attention-requested",
         attentionKind: "question",
         requestId: "fixture-question-roadmap",
+        requestText: expect.any(String),
+        requestMore: 1,
       }),
       expect.objectContaining({
         id: "fixture:attention:aster-launch:permission:requested",
@@ -315,6 +319,7 @@ describe("FixtureWorkspace", () => {
         type: "attention-requested",
         attentionKind: "permission",
         requestId: "fixture-permission-launch",
+        requestText: expect.any(String),
       }),
       expect.objectContaining({
         id: "fixture:attention:lumen-roadmap:question:resolved",
@@ -358,7 +363,12 @@ describe("FixtureWorkspace", () => {
     ])
 
     for (const event of received) {
-      expect(Object.keys(event).sort()).toEqual(
+      // Only an attention request may carry a preview of what it asks.
+      const preview = ["requestMore", "requestText"]
+      const keys = Object.keys(event).filter(
+        (key) => event.type !== "attention-requested" || !preview.includes(key)
+      )
+      expect(keys.sort()).toEqual(
         event.type === "attention-requested"
           ? [
               "agentId",
@@ -414,6 +424,87 @@ describe("FixtureWorkspace", () => {
         }),
       ])
     )
+  })
+
+  it("moves a published scenario's Session as a provider would, leaving the exposed one read", () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    workspace.reportFocus("thread-aster-market")
+    for (const scenario of [
+      "turn-completed",
+      "delayed-non-selected",
+      "permission",
+      "resolution",
+    ] as const)
+      workspace.publishActivityScenario(scenario)
+
+    const state = (sessionId: string) => {
+      const session = workspace
+        .listAllSessionMetadata()
+        .find((item) => item.sessionId === sessionId)
+      return `${session?.status} ${session?.unread === true ? "unread" : "read"}`
+    }
+    expect({
+      exposed: state("thread-aster-market"),
+      finished: state("thread-mica-quarterly"),
+      waiting: state("thread-aster-launch"),
+      answered: state("thread-lumen-roadmap"),
+    }).toEqual({
+      exposed: "idle read",
+      finished: "idle unread",
+      waiting: "waiting-for-input unread",
+      // An answer resumes the turn it stopped.
+      answered: "running unread",
+    })
+  })
+
+  it("ends an answered question's turn as idle once the turn finishes", () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const status = () =>
+      workspace
+        .listAllSessionMetadata()
+        .find(({ sessionId }) => sessionId === "thread-aster-launch")?.status
+    const turn = workspace.beginRunActivity("thread-aster-launch")
+    workspace.publishAttention("thread-aster-launch", "question", "q-1")
+    workspace.publishAttention("thread-aster-launch", "resolved", "q-1")
+    expect(status()).toBe("running")
+
+    workspace.finishRunActivity(turn, "finished")
+
+    expect(status()).toBe("idle")
+  })
+
+  it("stores a mute through its own update, for a hidden Agent too, and reports it editable", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const bell = async () =>
+      attentionLevel(
+        bellSessions(
+          await workspace.listAgents(),
+          workspace.listAllSessionMetadata()
+        )
+      ).count
+    // Lumen waits on the operator and Nori failed unread.
+    expect(await bell()).toBe(2)
+    const lumen = async () =>
+      (await workspace.listAgentCatalog()).find(
+        ({ summary }) => summary.id === "agent-lumen"
+      )
+    await workspace.updateAgent("agent-lumen", { visibility: "hidden" })
+    await workspace.updateAgent("agent-lumen", { muted: true })
+    await workspace.updateAgent("agent-lumen", { visibility: "visible" })
+    expect(await lumen()).toMatchObject({
+      muteEditable: true,
+      summary: { muted: true },
+    })
+    expect(await bell()).toBe(1)
+
+    await workspace.updateAgent("agent-lumen", { muted: false })
+    expect((await lumen())?.summary).not.toHaveProperty("muted")
+    // The creator is the provider's, so its mute is too.
+    expect(
+      (await workspace.listAgentCatalog()).find(
+        ({ summary }) => summary.role === "creator"
+      )
+    ).toMatchObject({ muteEditable: false })
   })
 
   it("clones activity payloads and isolates throwing listeners until cleanup", () => {

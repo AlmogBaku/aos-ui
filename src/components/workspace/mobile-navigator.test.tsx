@@ -16,6 +16,9 @@ import {
   type MobileNavigatorState,
 } from "./mobile-navigator"
 import type { WorkspaceAgent, WorkspaceSession } from "./workspace-shell"
+import { agentRowCopy } from "./agent-row-label"
+import { agentRowMenuCopy } from "./agent-row-menu"
+import { en } from "@/lib/i18n/dictionaries/en"
 
 afterEach(cleanup)
 
@@ -32,6 +35,7 @@ const agents: WorkspaceAgent[] = [
     description: "Shapes the final answer",
     status: "attention",
     unread: true,
+    attention: { count: 1, waiting: 1, failed: 0, top: "waiting" },
   },
 ]
 
@@ -60,7 +64,6 @@ const copy: MobileNavigatorCopy = {
   openSessions: "Open sessions",
   history: "History",
   newAgent: "New Agent",
-  draftLabel: "draft",
   newSession: "New Session",
   manageAgents: "Manage Agents",
   preferences: "Preferences",
@@ -78,10 +81,8 @@ const copy: MobileNavigatorCopy = {
   lastSelected: "Last selected",
   statusLabel: "Status",
   status: {
-    active: "Active",
     idle: "Idle",
     running: "Running",
-    attention: "Needs attention",
     unknown: "Unknown",
     waitingForInput: "Waiting for input",
     failed: "Failed",
@@ -111,6 +112,8 @@ const copy: MobileNavigatorCopy = {
     removeOpenSession: "Remove from open sessions",
     unavailable: "Unavailable for this runtime",
   },
+  agentRow: agentRowCopy(en),
+  agentMenu: agentRowMenuCopy(en),
 }
 
 const defaultProps = (): MobileNavigatorProps => ({
@@ -253,12 +256,14 @@ describe("MobileNavigator", () => {
     })
   })
 
-  it("shows aggregate unread state and filters Agents by name or description", () => {
+  it("shows each Agent's count and filters Agents by name or description", () => {
     const props = defaultProps()
     render(<MobileNavigator {...props} />)
 
-    const writer = screen.getByRole("button", { name: /Writer.*Unread/ })
-    expect(within(writer).getByTitle("Needs attention")).toBeVisible()
+    const writer = screen.getByRole("button", {
+      name: /^Writer, .*1 waiting for you/,
+    })
+    expect(within(writer).getByText("1")).toHaveAttribute("aria-hidden", "true")
     fireEvent.change(screen.getByRole("searchbox", { name: "Search Agents" }), {
       target: { value: "primary sources" },
     })
@@ -266,6 +271,27 @@ describe("MobileNavigator", () => {
     expect(
       screen.queryByRole("button", { name: /Writer/ })
     ).not.toBeInTheDocument()
+  })
+
+  it("offers each Agent row the rail's menu on a long press", async () => {
+    const user = userEvent.setup()
+    const onSetMuted = vi.fn()
+    const props = defaultProps()
+    props.agentMenu = (agent) =>
+      agent.id === "agent-b" ? { muted: false, onSetMuted } : {}
+    render(<MobileNavigator {...props} />)
+
+    // A long press reaches Base UI's context menu as this event.
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Writer,/ }), {
+      clientX: 16,
+      clientY: 24,
+    })
+    await user.click(
+      await screen.findByRole("menuitem", {
+        name: en.actions.muteNotifications,
+      })
+    )
+    expect(onSetMuted).toHaveBeenCalledExactlyOnceWith(true)
   })
 
   it("renders a browsed Agent's open and historical Sessions and opens the chosen owner pair", () => {

@@ -10,13 +10,13 @@ import type {
   ActivityNoticeState,
   ActivityView,
 } from "./use-activity-coordinator"
-import { useId, useState } from "react"
-import { Bell, BellDot, X } from "lucide-react"
+import { useId, useLayoutEffect, useRef, useState } from "react"
+import { ArrowLeft, Bell, SlidersHorizontal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import {
-  needsAttention,
-  type ActivityRecord,
-} from "@/lib/notifications/activity"
+import { attentionLabels, type AttentionLevel } from "@/lib/attention-level"
+import type { Inbox, InboxRow } from "@/lib/notifications/inbox"
+import { ActivityRow, rowCopy } from "./activity-row"
+import { AttentionBadge } from "./attention-badge"
 import styles from "./activity.module.css"
 
 export type BrowserSettingsView = {
@@ -42,84 +42,55 @@ export type BrowserSettingsView = {
 }
 export function ActivityBell({
   dictionary,
-  unread,
+  attention,
+  ring,
   open,
   onOpen,
 }: {
   dictionary: Dictionary
-  unread: number
+  attention: AttentionLevel
+  /** Each new value swings the bell once; the value it mounts with does not. */
+  ring: number
   open: boolean
   onOpen: () => void
 }) {
+  const [mountedRing] = useState(ring)
   return (
     <Button
       className={styles.bell}
       variant="ghost"
       size="icon"
       type="button"
-      aria-label={`${dictionary.activity.title}, ${unread} ${dictionary.activity.unread}`}
+      aria-label={[
+        dictionary.activity.title,
+        ...attentionLabels(attention, dictionary.activity),
+      ].join(", ")}
       aria-haspopup="dialog"
       aria-expanded={open}
       onClick={onOpen}
     >
-      <Bell />
-      {unread > 0 ? (
-        <span className={styles.count} aria-hidden="true">
-          {unread > 9 ? "9+" : unread}
-        </span>
+      {/* A new key restarts the one-shot swing from the start. */}
+      <Bell
+        key={ring}
+        className={ring === mountedRing ? undefined : styles.ringing}
+      />
+      {/* The bell counts and never runs, so it has no running dot. */}
+      {attention.count ? (
+        <AttentionBadge
+          level={attention}
+          runningLabel={dictionary.status.running}
+        />
       ) : null}
     </Button>
   )
 }
 
-export function activityLabel(record: ActivityRecord, dictionary: Dictionary) {
-  const copy = dictionary.activity
-  switch (record.type) {
-    case "turn-finished":
-      return copy.runFinished
-    case "turn-failed":
-      return copy.runFailed
-    case "attention-requested":
-      return copy.inputRequested
-    case "agent-ready":
-      return copy.agentReady
-    case "agent-activation-failed":
-      return copy.activationFailed
-  }
-}
+const emptyInbox: Inbox = { waiting: [], unread: [], muted: [] }
 
-function AttentionDot({ label }: { label: string }) {
-  return (
-    <span className={styles.attentionDot} title={label} aria-hidden="true" />
-  )
-}
-
-function ActivityMarker({
-  unread,
-  attention,
-  dictionary,
-}: {
-  unread: number
-  attention: boolean
-  dictionary: Dictionary
-}) {
-  if (!unread && !attention) return null
-  return (
-    <span className={styles.marker}>
-      {attention ? (
-        <AttentionDot label={dictionary.activity.needsAttention} />
-      ) : (
-        <BellDot aria-hidden="true" />
-      )}
-      <span className="sr-only">
-        {attention
-          ? dictionary.activity.needsAttention
-          : `${unread} ${dictionary.activity.unread}`}
-      </span>
-    </span>
-  )
-}
-
+/**
+ * The Sessions that need the operator, one row each, waiting ones first. The
+ * notification settings take the drawer's body in its place, behind Back.
+ */
 export function ActivityPanel({
   activity,
   locale,
@@ -135,114 +106,164 @@ export function ActivityPanel({
 }) {
   const copy = dictionary.activity
   const prefix = useId()
-  const [opening, setOpening] = useState<string | null>(null)
-  const items = activity?.items ?? []
-  const sections = [
-    {
-      title: copy.needsAttention,
-      empty: copy.emptyAttention,
-      items: items.filter((item) => item.available && needsAttention(item)),
-    },
-    {
-      title: copy.earlier,
-      empty: copy.emptyEarlier,
-      items: items.filter((item) => !item.available || !needsAttention(item)),
-    },
-  ]
-  const formatter = new Intl.DateTimeFormat(locale, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
+  const [opening, setOpening] = useState(false)
+  // Each step in or out moves focus, as the phone drawer's levels do: to the
+  // settings heading, then back to the button that opened them.
+  const [view, setView] = useState({ settings: false, moved: false })
+  const settingsButton = useRef<HTMLButtonElement>(null)
+  const settingsHeading = useRef<HTMLHeadingElement>(null)
+  useLayoutEffect(() => {
+    if (view.moved)
+      (view.settings ? settingsHeading : settingsButton).current?.focus()
+  }, [view])
+  const inbox = activity?.inbox ?? emptyInbox
+  const now = activity?.readNow() ?? new Date()
+  // A row already waiting when the drawer opened is not news; each one that
+  // arrives while it is open is announced, once. Adjusting state from the
+  // previous render keeps the rows already announced.
+  const [announced, setAnnounced] = useState(() => ({
+    seen: new Set(inbox.waiting.map(({ key }) => key)),
+    text: "",
+  }))
+  const arrivals = inbox.waiting.filter(({ key }) => !announced.seen.has(key))
+  if (arrivals.length)
+    setAnnounced({
+      seen: new Set([...announced.seen, ...arrivals.map(({ key }) => key)]),
+      text: arrivals.map((row) => rowCopy(row, dictionary).summary).join(". "),
+    })
+  const groups = [
+    { title: copy.waitingGroup, rows: inbox.waiting, quiet: false },
+    { title: copy.unreadGroup, rows: inbox.unread, quiet: false },
+    { title: copy.mutedGroup, rows: inbox.muted, quiet: true },
+  ].filter(({ rows }) => rows.length)
+  // Only answering clears a waiting Session, muted or not.
+  const markable =
+    inbox.unread.length > 0 ||
+    inbox.muted.some(({ state }) => state !== "waiting")
+
+  const open = (row: InboxRow) => {
+    if (opening) return
+    setOpening(true)
+    void Promise.resolve(activity?.openRow(row))
+      .then((opened) => {
+        if (opened) onOpened()
+      })
+      .finally(() => setOpening(false))
+  }
+  /** The row leaves once the provider says so; focus moves on before it does. */
+  const markRead = (row: InboxRow, from: HTMLElement) => {
+    const panel = from.closest<HTMLElement>("[data-activity-panel]")
+    const rows = [
+      ...(panel?.querySelectorAll<HTMLElement>("[data-activity-row]") ?? []),
+    ]
+    const index = rows.findIndex(
+      (element) => element.dataset.activityRow === row.key
+    )
+    ;(
+      rows[index + 1] ??
+      rows[index - 1] ??
+      panel?.querySelector<HTMLElement>("h2")
+    )?.focus()
+    activity?.markRowRead(row)
+  }
+
   return (
-    <div className={styles.panel}>
-      <div className={styles.heading}>
-        <h2>{copy.title}</h2>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!items.some((item) => !item.read)}
-          onClick={() => activity?.markAllRead()}
-        >
-          {copy.markAllRead}
-        </Button>
-      </div>
-      {activity?.error ? (
-        <p role="status" className={styles.explanation}>
-          {copy.connectionError}
+    <div className={styles.panel} data-activity-panel>
+      {view.settings ? (
+        <div className={styles.heading}>
+          <Button
+            className={styles.back}
+            variant="ghost"
+            size="icon-sm"
+            aria-label={copy.backToActivity}
+            onClick={() => setView({ settings: false, moved: true })}
+          >
+            <ArrowLeft />
+          </Button>
+          <h2 ref={settingsHeading} tabIndex={-1}>
+            {copy.settings}
+          </h2>
+        </div>
+      ) : (
+        <div className={styles.heading}>
+          <h2 tabIndex={-1}>{copy.title}</h2>
+          {/* Only answering clears a waiting Session, so only unread rows enable it. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!markable}
+            onClick={() => activity?.markAllRead()}
+          >
+            {copy.markAllRead}
+          </Button>
+          <Button
+            ref={settingsButton}
+            variant="ghost"
+            size="icon-sm"
+            aria-label={copy.settings}
+            onClick={() => setView({ settings: true, moved: true })}
+          >
+            <SlidersHorizontal />
+          </Button>
+        </div>
+      )}
+      <div className={styles.body}>
+        {/* Mounted empty, so the arrival is what gets announced. */}
+        <p role="status" className="sr-only">
+          {announced.text}
         </p>
-      ) : null}
-      {activity && !activity.supported ? (
-        <p className={styles.explanation}>{copy.activityUnavailable}</p>
-      ) : null}
-      {sections.map((section, index) => (
-        <section
-          className={styles.section}
-          key={section.title}
-          aria-labelledby={`${prefix}-${index}`}
-        >
-          <h3 id={`${prefix}-${index}`}>{section.title}</h3>
-          {section.items.length ? (
-            <ul className={styles.list}>
-              {section.items.map((item) => {
-                const agent = item.agentName ?? copy.agentFallback
-                const session = item.sessionTitle ?? copy.sessionFallback
-                return (
-                  <li key={item.id} className={styles.item}>
-                    <div className={styles.itemHeading}>
-                      <p>{activityLabel(item, dictionary)}</p>
-                      <ActivityMarker
-                        unread={item.read ? 0 : 1}
-                        attention={item.available && needsAttention(item)}
+        {view.settings ? (
+          <div className={styles.settings}>
+            <ActivitySettings dictionary={dictionary} settings={settings} />
+          </div>
+        ) : (
+          <>
+            {activity?.error ? (
+              <p role="status" className={styles.explanation}>
+                {copy.connectionError}
+              </p>
+            ) : null}
+            {activity && !activity.supported ? (
+              <p className={styles.explanation}>{copy.activityUnavailable}</p>
+            ) : null}
+            {groups.length ? (
+              groups.map((group, index) => (
+                <section
+                  className={styles.group}
+                  key={group.title}
+                  aria-labelledby={`${prefix}-${index}`}
+                >
+                  <h3 id={`${prefix}-${index}`}>
+                    {group.title}{" "}
+                    <span className={styles.groupCount}>
+                      {group.rows.length}
+                    </span>
+                  </h3>
+                  <ul className={styles.rows}>
+                    {group.rows.map((row) => (
+                      <ActivityRow
+                        key={row.key}
+                        row={row}
+                        quiet={group.quiet}
                         dictionary={dictionary}
+                        locale={locale}
+                        now={now}
+                        onOpen={() => open(row)}
+                        onMarkRead={(from) => markRead(row, from)}
                       />
-                    </div>
-                    <p className={styles.target}>
-                      <bdi>{agent}</bdi>
-                      <span aria-hidden="true"> / </span>
-                      <bdi>{session}</bdi>
-                    </p>
-                    {!item.available ? (
-                      <p className={styles.explanation}>{copy.unavailable}</p>
-                    ) : item.resolved ? (
-                      <p className={styles.explanation}>{copy.resolved}</p>
-                    ) : null}
-                    <div className={styles.itemFooter}>
-                      <time dateTime={item.occurredAt}>
-                        {formatter.format(new Date(item.occurredAt))}
-                      </time>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={opening !== null}
-                        aria-label={`${copy.open}: ${agent}, ${session}`}
-                        onClick={async () => {
-                          setOpening(item.id)
-                          try {
-                            if (await activity?.openActivity(item.id))
-                              onOpened()
-                          } finally {
-                            setOpening(null)
-                          }
-                        }}
-                      >
-                        {copy.open}
-                      </Button>
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : (
-            <p className={styles.explanation}>{section.empty}</p>
-          )}
-        </section>
-      ))}
-      <details className={styles.settings}>
-        <summary>{copy.settings}</summary>
-        <ActivitySettings dictionary={dictionary} settings={settings} />
-      </details>
+                    ))}
+                  </ul>
+                </section>
+              ))
+            ) : (
+              <div className={styles.empty}>
+                <p>{copy.emptyTitle}</p>
+                <p className={styles.explanation}>{copy.emptyDetail}</p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }

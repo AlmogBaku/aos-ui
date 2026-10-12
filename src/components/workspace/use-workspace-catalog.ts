@@ -10,7 +10,7 @@ const noIds: readonly string[] = []
 /**
  * Catalog observation is independent of streaming message subscriptions. A
  * runtime that stores avatars also reports which Agents it can store them for,
- * since that decides how their icons resolve.
+ * since that decides how their icons resolve, and likewise for mutes.
  */
 export function useWorkspaceCatalog(
   workspace: WorkspaceAdapter,
@@ -18,6 +18,7 @@ export function useWorkspaceCatalog(
 ) {
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [avatarEditableIds, setAvatarEditableIds] = useState(noIds)
+  const [muteEditableIds, setMuteEditableIds] = useState(noIds)
   const [agentsLoading, setAgentsLoading] = useState(true)
   const [agentError, setAgentError] = useState<Error | null>(null)
   const reload = useRef(() => {})
@@ -32,16 +33,19 @@ export function useWorkspaceCatalog(
       // Outside `try`: React Compiler cannot compile a logical expression there.
       const isLatest = () => active && requestGeneration === generation
       try {
-        const { agents: next, avatarEditableIds: editable } = await readCatalog(
-          workspace,
-          refresh
-        )
+        const read = await readCatalog(workspace, refresh)
+        const { agents: next, avatarEditableIds: editable } = read
         if (isLatest()) {
           // Every catalog invalidation re-reads the roster, and most leave it
           // as it was: keeping the value spares the workspace a re-render.
           setAgents((previous) => (sameData(previous, next) ? previous : next))
           setAvatarEditableIds((previous) =>
             sameData(previous, editable) ? previous : editable
+          )
+          setMuteEditableIds((previous) =>
+            sameData(previous, read.muteEditableIds)
+              ? previous
+              : read.muteEditableIds
           )
           setAgentError(null)
           setAgentsLoading(false)
@@ -111,6 +115,7 @@ export function useWorkspaceCatalog(
     agents,
     setAgents,
     avatarEditableIds,
+    muteEditableIds,
     reloadCatalog,
     agentsLoading,
     setAgentsLoading,
@@ -126,13 +131,18 @@ export function useWorkspaceCatalog(
 async function readCatalog(
   workspace: WorkspaceAdapter,
   refresh: boolean
-): Promise<{ agents: AgentSummary[]; avatarEditableIds: readonly string[] }> {
+): Promise<{
+  agents: AgentSummary[]
+  avatarEditableIds: readonly string[]
+  muteEditableIds: readonly string[]
+}> {
   if (!workspace.listAgentCatalog)
     return {
       agents: await (refresh
         ? workspace.refreshAgents()
         : workspace.listAgents()),
       avatarEditableIds: noIds,
+      muteEditableIds: noIds,
     }
   const entries = await workspace.listAgentCatalog()
   return {
@@ -142,6 +152,9 @@ async function readCatalog(
     })),
     avatarEditableIds: entries.flatMap(({ summary, avatarEditable }) =>
       avatarEditable ? [summary.id] : []
+    ),
+    muteEditableIds: entries.flatMap(({ summary, muteEditable }) =>
+      muteEditable ? [summary.id] : []
     ),
   }
 }

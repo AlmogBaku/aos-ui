@@ -394,6 +394,7 @@ const script = {
         selectable: true,
         editable: false,
         avatarEditable: false,
+        muteEditable: false,
         revision: "research-1",
       },
     ],

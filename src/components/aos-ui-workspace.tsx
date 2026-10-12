@@ -547,6 +547,7 @@ function WorkspaceContent({
     openAgentBuilder,
     discardDraft,
     hideAgent,
+    setAgentMuted,
     refreshAfterVisibilityChange,
     retryWorkspace,
   } = useWorkspaceNavigation({ bundle, locale, dictionary, now, readNow })
@@ -621,15 +622,7 @@ function WorkspaceContent({
 
   const activity = useActivityCoordinator({
     workspace,
-    browser: {
-      port: browserNotificationPort,
-      push: bundle.push,
-      copy: {
-        completion: dictionary.activity.runFinished,
-        failure: dictionary.activity.runFailed,
-        input: dictionary.activity.inputRequested,
-      },
-    },
+    browser: { port: browserNotificationPort, push: bundle.push },
     locale,
     agents: displayAgents,
     sessions,
@@ -644,6 +637,8 @@ function WorkspaceContent({
       setPreferredAgentId(agentId)
       await openSession(sessionId, agentId)
     },
+    // A created Agent opens the way its rail row does, with no Session yet.
+    onOpenAgent: selectAgent,
   })
 
   // A subagent's child Session opens in place when the catalog knows its Agent.
@@ -701,6 +696,7 @@ function WorkspaceContent({
         selectedAgentIsDraft={selectedAgentIsDraft}
         onSelectAgent={selectAgent}
         onHideAgent={capabilities.agentUpdates ? hideAgent : undefined}
+        onSetAgentMuted={capabilities.agentUpdates ? setAgentMuted : undefined}
         onDiscardDraft={discardDraft}
         onOpenSession={openSession}
         onCloseSession={closeSession}

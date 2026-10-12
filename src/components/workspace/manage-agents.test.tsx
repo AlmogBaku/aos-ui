@@ -25,7 +25,11 @@ it.each([
     // The provider lists its creator in the same catalog as every Agent.
     const catalog = await workspace.listAgentCatalog()
     vi.spyOn(workspace, "listAgentCatalog").mockResolvedValue(
-      catalog.map((entry) => ({ ...entry, editable: false }))
+      catalog.map((entry) => ({
+        ...entry,
+        editable: false,
+        muteEditable: false,
+      }))
     )
     renderCatalog(workspace, locale, { creatorAvailable: false })
     await screen.findByText("Aster")
@@ -263,6 +267,34 @@ it("waits for provider confirmation and retains the switch state on failure", as
   )
   expect(toggle).toHaveAttribute("aria-checked", "true")
   expect(onVisibilityChanged).not.toHaveBeenCalled()
+})
+
+it("offers a notifications switch only where the runtime stores a mute, and mutes through it", async () => {
+  const user = userEvent.setup()
+  const workspace = new FixtureWorkspace()
+  const read = workspace.listAgentCatalog.bind(workspace)
+  vi.spyOn(workspace, "listAgentCatalog").mockImplementation(async () =>
+    (await read()).map((entry) =>
+      entry.summary.id === "agent-mica"
+        ? { ...entry, muteEditable: false }
+        : entry
+    )
+  )
+  const updateAgent = vi.spyOn(workspace, "updateAgent")
+  renderCatalog(workspace)
+
+  const aster = await screen.findByRole("switch", {
+    name: "Notifications: Aster",
+  })
+  expect(aster).toHaveAttribute("aria-checked", "true")
+  expect(
+    screen.queryByRole("switch", { name: "Notifications: Mica" })
+  ).toBeNull()
+  await user.click(aster)
+  expect(updateAgent).toHaveBeenCalledExactlyOnceWith("agent-aster", {
+    muted: true,
+  })
+  await waitFor(() => expect(aster).toHaveAttribute("aria-checked", "false"))
 })
 
 it("recovers catalog loading errors", async () => {

@@ -65,7 +65,17 @@ test("expanded reasoning remains independently scrollable", async ({
       return found.map((node) => node.scrollTop)
     }, scroll)
 
-  const [, threadScrollTop] = await scrollers(false)
+  // Opening the reasoning grows the thread, which follows its end for a
+  // moment; measure the thread once it holds still.
+  let threadScrollTop = Number.NaN
+  await expect
+    .poll(async () => {
+      const [, now] = await scrollers(false)
+      const settled = now === threadScrollTop
+      threadScrollTop = now
+      return settled
+    })
+    .toBe(true)
   await scrollers(true)
   await expect.poll(async () => (await scrollers(false))[0]).toBeGreaterThan(0)
   await expect

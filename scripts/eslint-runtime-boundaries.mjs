@@ -28,6 +28,10 @@ const fixtureTestImports = new Map([
     new Set(["fixture-workspace"]),
   ],
   [
+    "src/components/workspace/activity.test.tsx",
+    new Set(["fixture-workspace"]),
+  ],
+  [
     "e2e/notifications.desktop.workspace.spec.ts",
     new Set(["fixture-activity"]),
   ],

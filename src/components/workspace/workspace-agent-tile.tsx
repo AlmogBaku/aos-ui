@@ -10,6 +10,8 @@ type TileAgent = {
   /** The token `resolveAgentIcons` chose; absent for an Agent not shown. */
   avatar?: string
   status?: string
+  /** A muted Agent never hops: the hop is a motion alert. */
+  muted?: true
 }
 
 /**
@@ -30,7 +32,7 @@ export function WorkspaceAgentTile({
 }) {
   const shared = {
     size,
-    state: tileState(agent.status),
+    state: tileState(agent.status, agent.muted),
     lookToward,
     className: className ?? "shrink-0 text-muted-foreground",
   }
@@ -39,8 +41,8 @@ export function WorkspaceAgentTile({
   return <AgentTile avatar={agent.avatar} {...shared} />
 }
 
-function tileState(status?: string): AgentTileState | undefined {
-  if (status === "attention") return "attention"
+function tileState(status?: string, muted?: true): AgentTileState | undefined {
+  if (status === "attention") return muted ? undefined : "attention"
   if (status === "running" || status === "active") return "running"
   return undefined
 }

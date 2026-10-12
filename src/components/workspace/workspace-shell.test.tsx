@@ -23,6 +23,7 @@ import {
 } from "./workspace-shell"
 import type { BrowserSettingsView } from "./activity"
 import { defaultBrowserPreferences } from "@/lib/notifications/policy"
+import { attentionLevel } from "@/lib/attention-level"
 
 /** A device that has not answered the one-time notification ask yet. */
 const askSettings: BrowserSettingsView = {
@@ -484,29 +485,51 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("tab", { name: "Launch review" })).toHaveFocus()
   })
 
-  it("shows provider unread state beside run status in Agent and Session navigation", async () => {
+  it("counts on each Agent's tile, in place of a row dot, and names unread Sessions", async () => {
     const user = userEvent.setup()
     renderShell({
-      agents: [{ ...agents[0]!, unread: true }, agents[1]!],
+      agents: [
+        {
+          ...agents[0]!,
+          attention: { count: 12, waiting: 0, failed: 0, top: "unread" },
+        },
+        { ...agents[1]!, attention: attentionLevel([{ status: "running" }]) },
+      ],
       openSessions: [
         { ...openSessions[0]!, unread: true },
         ...openSessions.slice(1),
       ],
     })
 
+    const aster = agentRow(/^Aster, .*12 unread/)
+    expect(within(aster).getByText("9+")).toHaveAttribute("aria-hidden", "true")
+    // With nothing counted, a running Agent's tile shows the running dot.
     expect(
-      screen.getByRole("button", {
-        name: "Aster, Status: Running, Selected Agent, Unread",
-      })
+      within(agentRow(/^Mica, .*Running/)).getByTitle("Running")
     ).toBeVisible()
+    expect(within(aster).queryByTitle("Unread")).toBeNull()
 
     await collapseInspector(user)
     expect(
       screen.getByRole("tab", { name: "Market brief, Unread" })
     ).toBeVisible()
     expect(screen.getByRole("tab", { name: "Launch review" })).toBeVisible()
-    // Navigation rows no longer carry Activity-derived counts.
-    expect(screen.queryByText(/unread/i)).toBeNull()
+  })
+
+  it("keeps a muted Agent's count on its tile and says it is muted", () => {
+    renderShell({
+      agents: [
+        agents[0]!,
+        {
+          ...agents[1]!,
+          muted: true,
+          attention: { count: 3, waiting: 1, failed: 0, top: "waiting" },
+        },
+      ],
+    })
+
+    const mica = agentRow(/^Mica, .*3 unread.*Notifications muted/)
+    expect(within(mica).getByText("3")).toHaveAttribute("aria-hidden", "true")
   })
 
   it("names a pinned tab, and names both states when it is unread too", async () => {
@@ -535,7 +558,12 @@ describe("WorkspaceShell", () => {
     const sessions = [...openSessions.slice(0, 2), scan]
     renderShell({
       agents: [
-        { ...agents[0]!, status: "attention", unread: true },
+        {
+          ...agents[0]!,
+          status: "attention",
+          unread: true,
+          attention: { count: 1, waiting: 1, failed: 0, top: "waiting" },
+        },
         agents[1]!,
       ],
       openSessions: sessions,
@@ -555,7 +583,7 @@ describe("WorkspaceShell", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Aster, Status: Needs attention, Selected Agent, Unread",
+        name: "Aster, General analysis and synthesis, 1 unread, 1 waiting for you, Selected Agent",
       })
     ).toBeVisible()
 
@@ -581,12 +609,10 @@ describe("WorkspaceShell", () => {
     )
     const drawer = screen.getByRole("dialog", { name: "פעילות" })
     expect(drawer.closest('[dir="rtl"]')).not.toBeNull()
-    expect(
-      within(drawer).getByRole("heading", { name: "קודם לכן" })
-    ).toBeVisible()
+    expect(within(drawer).getByText(he.activity.emptyTitle)).toBeVisible()
   })
 
-  it("opens Activity from either header, hides the background from assistive technology, and restores keyboard focus", async () => {
+  it("opens Activity from either header, steps into its settings and back, and restores keyboard focus", async () => {
     const user = userEvent.setup()
     renderShell()
     const triggers = screen.getAllByRole("button", {
@@ -600,14 +626,25 @@ describe("WorkspaceShell", () => {
     expect(
       screen.getByText("Assistant UI conversation").closest("[inert]")
     ).toHaveAttribute("aria-hidden", "true")
-    expect(
-      within(drawer).getByRole("heading", { name: "Needs attention" })
-    ).toBeVisible()
-    expect(
-      within(drawer).getByRole("heading", { name: "Earlier" })
-    ).toBeVisible()
+    expect(within(drawer).getByText(en.activity.emptyTitle)).toBeVisible()
+    // Focus stays trapped: back from Close wraps to the header's last control.
     await user.tab({ shift: true })
-    expect(within(drawer).getByText("Notification settings")).toHaveFocus()
+    const settings = () =>
+      within(drawer).getByRole("button", { name: en.activity.settings })
+    expect(settings()).toHaveFocus()
+    await user.keyboard("{Enter}")
+    expect(
+      within(drawer).getByRole("heading", { name: en.activity.settings })
+    ).toHaveFocus()
+    expect(
+      within(drawer).getByRole("checkbox", {
+        name: en.activity.browserNotifications,
+      })
+    ).toBeVisible()
+    await user.click(
+      within(drawer).getByRole("button", { name: en.activity.backToActivity })
+    )
+    expect(settings()).toHaveFocus()
     await user.tab()
     expect(close).toHaveFocus()
     await user.keyboard("{Escape}")
@@ -950,17 +987,50 @@ describe("WorkspaceShell", () => {
     const onHideAgent = vi.fn()
     renderShell({ onHideAgent })
 
-    fireEvent.contextMenu(agentRow("Mica"), { clientX: 16, clientY: 24 })
+    fireEvent.contextMenu(agentRow(/^Mica,/), { clientX: 16, clientY: 24 })
     await user.click(
       await screen.findByRole("menuitem", { name: en.actions.hideAgent })
     )
     expect(onHideAgent).toHaveBeenCalledExactlyOnceWith("agent-mica")
   })
 
+  it.each([
+    [false, en.actions.muteNotifications, true],
+    [true, en.actions.unmuteNotifications, false],
+  ] as const)(
+    "offers a rail row muted=%s the switch to its opposite",
+    async (muted, label, next) => {
+      const user = userEvent.setup()
+      const onSetAgentMuted = vi.fn()
+      renderShell({
+        onSetAgentMuted,
+        agents: [
+          { ...agents[0]!, muteEditable: false },
+          { ...agents[1]!, muteEditable: true, ...(muted ? { muted } : {}) },
+        ],
+      })
+
+      fireEvent.contextMenu(agentRow(/^Mica,/), { clientX: 16, clientY: 24 })
+      await user.click(await screen.findByRole("menuitem", { name: label }))
+      expect(onSetAgentMuted).toHaveBeenCalledExactlyOnceWith(
+        "agent-mica",
+        next
+      )
+
+      // A runtime that cannot store Aster's mute offers it no menu at all.
+      fireEvent.contextMenu(agentRow(/^Aster,/), { clientX: 16, clientY: 24 })
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("menuitem", { name: en.actions.muteNotifications })
+        ).toBeNull()
+      )
+    }
+  )
+
   it("offers no Agent row menu when the runtime cannot hide an Agent", async () => {
     renderShell()
 
-    fireEvent.contextMenu(agentRow("Mica"), { clientX: 16, clientY: 24 })
+    fireEvent.contextMenu(agentRow(/^Mica,/), { clientX: 16, clientY: 24 })
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
     expect(
       screen.queryByRole("menuitem", { name: en.actions.hideAgent })
@@ -1151,7 +1221,7 @@ describe("WorkspaceShell", () => {
     ).toBeVisible()
   })
 
-  it("includes meaningful status in Agent and history button names", () => {
+  it("includes meaningful status in history button names", () => {
     const statusHistory: WorkspaceSession[] = [
       olderSessions[0],
       {
@@ -1190,16 +1260,6 @@ describe("WorkspaceShell", () => {
     })
 
     const agentsNavigation = screen.getByRole("navigation", { name: "Agents" })
-    expect(
-      within(agentsNavigation).getByRole("button", {
-        name: "Aster, Status: Running, Selected Agent",
-      })
-    ).toBeInTheDocument()
-    expect(
-      within(agentsNavigation).getByRole("button", {
-        name: "Mica",
-      })
-    ).toBeInTheDocument()
     expect(within(agentsNavigation).queryByRole("img")).not.toBeInTheDocument()
 
     const inspector = screen.getByRole("complementary", {
@@ -1256,7 +1316,7 @@ describe("WorkspaceShell", () => {
       within(drawer).getByRole("button", { name: "Back to Agents" })
     )
     drawer = screen.getByRole("dialog", { name: "Agents" })
-    await user.click(within(drawer).getByRole("button", { name: "Mica" }))
+    await user.click(within(drawer).getByRole("button", { name: /^Mica,/ }))
 
     expect(onSelectAgent).not.toHaveBeenCalled()
     drawer = screen.getByRole("dialog", { name: "Sessions" })
@@ -1299,11 +1359,16 @@ describe("WorkspaceShell", () => {
       browserSettings: askSettings,
       activity: {
         items: [],
-        unreadCount: 2,
+        attention: { count: 2, waiting: 0, failed: 0, top: "unread" },
+        ring: 0,
+        inbox: { waiting: [], unread: [], muted: [] },
+        readNow: () => new Date(),
         notice: { count: 2, urgent: true },
         error: false,
         supported: true,
         openActivity: async () => false,
+        openRow: async () => false,
+        markRowRead: () => {},
         markAllRead: () => {},
         dismissNotice: () => {},
       },

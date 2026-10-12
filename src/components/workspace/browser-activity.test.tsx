@@ -83,6 +83,7 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
     locale: "en" as const,
     readNow: () => new Date(session.updatedAt),
     onOpenTarget: open,
+    onOpenAgent: async () => {},
     browser: {
       port,
       platform: {
@@ -97,11 +98,6 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
           return () => {}
         },
         focus,
-      },
-      copy: {
-        completion: en.activity.runFinished,
-        failure: en.activity.runFailed,
-        input: en.activity.inputRequested,
       },
     },
   }
@@ -141,7 +137,9 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
     emit({
       id: "ready",
       ...session,
-      type: "agent-ready",
+      type: "attention-requested",
+      attentionKind: "question",
+      requestId: "ready",
       occurredAt: session.updatedAt,
     })
   )
@@ -156,7 +154,9 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
     emit({
       id: "stale",
       ...session,
-      type: "agent-ready",
+      type: "attention-requested",
+      attentionKind: "question",
+      requestId: "stale",
       occurredAt: session.updatedAt,
     })
   )
@@ -216,6 +216,7 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
       locale: "en" as const,
       readNow: () => new Date(watched.updatedAt),
       onOpenTarget: async () => {},
+      onOpenAgent: async () => {},
       browser: {
         port,
         sound,
@@ -231,11 +232,6 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
             return () => {}
           },
           focus() {},
-        },
-        copy: {
-          completion: en.activity.runFinished,
-          failure: en.activity.runFailed,
-          input: en.activity.inputRequested,
         },
       },
     },
@@ -323,6 +319,7 @@ it("hands this device's push subscription to the policy and the settings", async
     locale: "he" as const,
     readNow: () => new Date(session.updatedAt),
     onOpenTarget: async () => {},
+    onOpenAgent: async () => {},
     browser: {
       port: {
         getPermission: () => "granted" as const,
@@ -347,11 +344,6 @@ it("hands this device's push subscription to the policy and the settings", async
         },
         focus() {},
       },
-      copy: {
-        completion: en.activity.runFinished,
-        failure: en.activity.runFailed,
-        input: en.activity.inputRequested,
-      },
     },
   }
   const { result } = renderHook(useActivityCoordinator, { initialProps: props })
@@ -369,7 +361,9 @@ it("hands this device's push subscription to the policy and the settings", async
     emit({
       id: "ready",
       ...session,
-      type: "agent-ready",
+      type: "attention-requested",
+      attentionKind: "question",
+      requestId: "ready",
       occurredAt: session.updatedAt,
     })
   )
@@ -380,7 +374,9 @@ it("hands this device's push subscription to the policy and the settings", async
     emit({
       id: "next",
       ...session,
-      type: "agent-ready",
+      type: "attention-requested",
+      attentionKind: "question",
+      requestId: "next",
       occurredAt: session.updatedAt,
     })
   )
@@ -468,6 +464,7 @@ function subscribedDevice() {
       locale: "en" as const,
       readNow: () => new Date(session.updatedAt),
       onOpenTarget: async () => {},
+      onOpenAgent: async () => {},
       browser: {
         port,
         push,
@@ -489,11 +486,6 @@ function subscribedDevice() {
             return () => {}
           },
           focus() {},
-        },
-        copy: {
-          completion: en.activity.runFinished,
-          failure: en.activity.runFailed,
-          input: en.activity.inputRequested,
         },
       },
     },

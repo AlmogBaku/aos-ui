@@ -83,7 +83,7 @@ WebSocket) to the gateway, which checks the browser's `Origin` against
 
 ## Run with Compose
 
-The Hermes overlay adds the gateway (`${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.4.1@sha256:9388fbd3bd4529e7605a6ebc6368eebae4039f54d7ce8dc211dc7fe3c9855038}`)
+The Hermes overlay adds the gateway (`${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.5.0@sha256:1f5a4bde452617dc6f3d2d11312349398d38097c45e490e730934cfd74d65d6c}`)
 and the guest lane to the base stack. Hermes itself stays outside the stack:
 
 ```bash
