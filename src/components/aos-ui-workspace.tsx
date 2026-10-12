@@ -755,7 +755,6 @@ function WorkspaceContent({
                       Thread on every switch and lose its composer state. */}
                   <LazyVisualBoundary
                     resetKey={conversationThreadId}
-                    fallbackLabel={workspaceCopy[locale].sessionUnavailable}
                     fallback={
                       <p
                         className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"

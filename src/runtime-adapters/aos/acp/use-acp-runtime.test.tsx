@@ -367,20 +367,28 @@ describe("useAcpRuntime", () => {
     ])
   })
 
-  it("keeps a turn Assistant UI cannot convert as its text alone", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  it("keeps a turn Assistant UI cannot convert as the parts its role accepts", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     const fake = createFakeConnection()
     const { result } = await mount(fake)
+    // A thought naming the user turn lands on it, and a user turn cannot
+    // carry reasoning.
+    const thought = (text: string): Built<SessionUpdate> => ({
+      sessionUpdate: "agent_thought_chunk",
+      messageId: "u2",
+      content: { type: "text", text },
+    })
     act(() => {
       fake.emit(textUpdate("user_message", "u1", "Ship it"))
-      fake.emit(textUpdate("user_message", "u2", "And the docs"))
-      // A thought naming the user turn lands on it, and a user turn cannot
-      // carry reasoning.
       fake.emit({
-        sessionUpdate: "agent_thought_chunk",
+        sessionUpdate: "user_message",
         messageId: "u2",
-        content: { type: "text", text: "Planning" },
+        content: [
+          { type: "text", text: "And the docs" },
+          { type: "image", data: "AAA", mimeType: "image/png" },
+        ],
       })
+      fake.emit(thought("Planning"))
       fake.emit(textUpdate("agent_message", "a2", "On it"))
     })
     // In order, so the reply still answers the turn it followed.
@@ -389,6 +397,13 @@ describe("useAcpRuntime", () => {
       { id: "u2", role: "user", text: "And the docs" },
       { id: "a2", role: "assistant", text: "On it" },
     ])
+    const [, refused] = result.current.thread.getState().messages
+    expect(refused?.content.map(({ type }) => type)).toEqual(["text", "image"])
+
+    act(() => {
+      fake.emit(thought(" further"))
+    })
+    expect(warn).toHaveBeenCalledOnce()
   })
 
   it("tells its listeners once for a replay, however many updates it carries", async () => {
