@@ -593,6 +593,8 @@ export function MermaidDiagram({ code }: SyntaxHighlighterProps) {
         securityLevel: "strict",
         suppressErrorRendering: true,
         htmlLabels: false,
+        // Mermaid 12 defaults to ELK; dagre keeps the layout diagrams had.
+        layout: "dagre",
         maxTextSize: MERMAID_MAX_SOURCE_CHARS,
         maxEdges: MERMAID_MAX_EDGES,
         secure: [
