@@ -59,7 +59,10 @@ import { artifactMediaKind, type ArtifactMediaKind } from "./artifact-renderers"
 const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 
 type ArtifactPreviewFailure =
-  "load" | "unavailable" | "missing" | "file-too-large"
+  | "load"
+  | "unavailable"
+  | "missing"
+  | "file-too-large"
 
 type ArtifactPreviewState =
   | { status: "loading" }

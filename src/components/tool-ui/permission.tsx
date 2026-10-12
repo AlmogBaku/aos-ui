@@ -14,7 +14,8 @@ import { useToolUiLocale } from "./locale"
 import type { RichToolPart, RichToolPhase } from "./types"
 
 type ApprovalOption = NonNullable<RichToolPart["approval"]>["options"] extends
-  readonly (infer T)[] | undefined
+  | readonly (infer T)[]
+  | undefined
   ? T
   : never
 

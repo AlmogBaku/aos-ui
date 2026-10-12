@@ -40,7 +40,10 @@ export type KeyboardDispatchResult = {
   readonly ownerId?: string
   readonly binding?: NormalizedKeyboardBinding
   readonly reason?:
-    KeyboardEventSafetyReason | "editable" | "unbound" | "unowned"
+    | KeyboardEventSafetyReason
+    | "editable"
+    | "unbound"
+    | "unowned"
 }
 
 export type KeyboardDispatcherOptions = {

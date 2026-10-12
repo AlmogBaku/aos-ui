@@ -56,7 +56,7 @@ export const Source = ({ labels: labelOverrides, ...part }: SourceProps) => {
   if (url) {
     return (
       <a
-        className={`${className} hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+        className={`${className} hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none`}
         href={url.href}
         target="_blank"
         rel="noreferrer noopener"

@@ -39,9 +39,9 @@ describe("provider-neutral AOS runtime configuration", () => {
   it.each(["opencode", "hermes", "ag-ui", "openclaw"])(
     "rejects retired direct browser runtime mode %s",
     (mode) => {
-      expect(resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: mode })).toEqual(
-        { status: "unavailable", reason: "invalid-runtime-mode" }
-      )
+      expect(
+        resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: mode })
+      ).toEqual({ status: "unavailable", reason: "invalid-runtime-mode" })
       expect(parsePublicRuntimeConfiguration({ mode })).toEqual({
         status: "unavailable",
         reason: "invalid-public-config",

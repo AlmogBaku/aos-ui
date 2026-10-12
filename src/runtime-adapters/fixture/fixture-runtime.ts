@@ -258,7 +258,9 @@ class FixtureHistoryAdapter implements ThreadHistoryAdapter {
   constructor(
     private readonly store: FixtureHistoryStore,
     private readonly resolveThreadId: () =>
-      string | undefined | Promise<string | undefined>
+      | string
+      | undefined
+      | Promise<string | undefined>
   ) {}
 
   async #sessionId() {

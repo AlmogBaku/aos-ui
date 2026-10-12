@@ -19,9 +19,7 @@ const unreadSessions: SessionMetadata[] = [
   },
 ]
 
-it.each([
-  [true, true, ["hidden"]],
-])(
+it.each([[true, true, ["hidden"]]])(
   "delivers one OS alert only while the provider reports the Session unread (hidden leader first=%s, unread=%s)",
   async (leaderFirst, unread, expected) => {
     const now = Date.parse("2026-09-05T12:00:00Z")

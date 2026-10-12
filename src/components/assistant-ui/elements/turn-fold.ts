@@ -217,7 +217,11 @@ export function createTurnGroupBy(
 }
 
 export type TurnOutcome =
-  "worked" | "stopped" | "failed" | "truncated" | "refused"
+  | "worked"
+  | "stopped"
+  | "failed"
+  | "truncated"
+  | "refused"
 
 /**
  * Which headline a settled turn earns: it finished, you stopped it, the model

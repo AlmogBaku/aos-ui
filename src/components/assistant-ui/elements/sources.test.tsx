@@ -59,8 +59,8 @@ describe("Source", () => {
     expect(
       screen.queryByRole("link", { name: "פתיחת מקור: Unsafe provider value" })
     ).toBeNull()
-    expect(screen.getByLabelText("מסמך מקור: Unsafe provider value")).toHaveTextContent(
-      "Unsafe provider value"
-    )
+    expect(
+      screen.getByLabelText("מסמך מקור: Unsafe provider value")
+    ).toHaveTextContent("Unsafe provider value")
   })
 })

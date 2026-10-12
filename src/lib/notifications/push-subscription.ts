@@ -17,7 +17,10 @@ import type { BrowserPermission, BrowserPreferences } from "./policy"
  */
 
 export type PushStatus =
-  "unsupported" | "insecure-context" | "not-configured" | "available"
+  | "unsupported"
+  | "insecure-context"
+  | "not-configured"
+  | "available"
 
 /** The proxy REST surface push needs; the provider adapter implements it. */
 export type PushClient = {

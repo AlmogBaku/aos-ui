@@ -491,13 +491,10 @@ function ExpandedDiagram({
   // dialog is open do not override a zoom the user set manually.
   const [hasAutoZoomed, setHasAutoZoomed] = useState(false)
 
-  const handleZoomChange = useCallback(
-    (next: number) => {
-      setZoom(next)
-      setHasAutoZoomed(true)
-    },
-    []
-  )
+  const handleZoomChange = useCallback((next: number) => {
+    setZoom(next)
+    setHasAutoZoomed(true)
+  }, [])
 
   return (
     <Dialog

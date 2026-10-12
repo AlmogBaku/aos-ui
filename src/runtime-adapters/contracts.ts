@@ -15,7 +15,11 @@ import type { PushSubscriptionManager } from "@/lib/notifications/push-subscript
 export type { RuntimeMode } from "@shared/runtime-modes"
 
 export type AgentStatus =
-  "idle" | "active" | "running" | "attention" | "unknown"
+  | "idle"
+  | "active"
+  | "running"
+  | "attention"
+  | "unknown"
 
 type AgentSummaryBase = {
   id: string
@@ -61,7 +65,11 @@ export type AgentUpdate = {
 export { AgentUpdateError } from "@harness-gw/sdk"
 
 export type SessionStatus =
-  "idle" | "running" | "waiting-for-input" | "failed" | "unknown"
+  | "idle"
+  | "running"
+  | "waiting-for-input"
+  | "failed"
+  | "unknown"
 
 export type ActivityBase = {
   id: string

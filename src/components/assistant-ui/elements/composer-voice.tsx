@@ -42,11 +42,7 @@ export function ComposerVoice({
           className="size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none"
         />
       )}
-      <div
-        dir="ltr"
-        className="flex h-6 items-center gap-[3px]"
-        aria-hidden
-      >
+      <div dir="ltr" className="flex h-6 items-center gap-[3px]" aria-hidden>
         {BARS.map((bar) => (
           <span
             key={bar}

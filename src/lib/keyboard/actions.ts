@@ -11,7 +11,12 @@ export type LocalizedKeyboardText = Readonly<Record<KeyboardLocale, string>>
 export type KeyboardActionId = string & {}
 
 export type KeyboardScope =
-  "global" | "workspace" | "composer" | "commands" | "settings" | "question"
+  | "global"
+  | "workspace"
+  | "composer"
+  | "commands"
+  | "settings"
+  | "question"
 
 export type KeyboardBindingInput =
   | string

@@ -261,7 +261,10 @@ export type KeyboardEventLike = {
 }
 
 export type KeyboardEventSafetyReason =
-  "default-prevented" | "composing" | "dead-key" | "alt-graph"
+  | "default-prevented"
+  | "composing"
+  | "dead-key"
+  | "alt-graph"
 
 /**
  * Returns why a browser key event must remain native, or undefined when a

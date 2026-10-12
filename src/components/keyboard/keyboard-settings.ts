@@ -159,7 +159,10 @@ export function formatKeyboardBindings(
 
 export function bindingInputsFromOverride(
   value:
-    KeyboardBindingInput | readonly KeyboardBindingInput[] | null | undefined
+    | KeyboardBindingInput
+    | readonly KeyboardBindingInput[]
+    | null
+    | undefined
 ): readonly KeyboardBindingInput[] {
   if (value === null || value === undefined) return []
   return Array.isArray(value) ? value : [value as KeyboardBindingInput]

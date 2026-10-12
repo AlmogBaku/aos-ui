@@ -103,7 +103,8 @@ const artifactLink = (
   messageId: string,
   extra: { uri?: string; size?: number } = {},
   sessionUpdate:
-    "agent_message_chunk" | "user_message_chunk" = "agent_message_chunk"
+    | "agent_message_chunk"
+    | "user_message_chunk" = "agent_message_chunk"
 ): Entry => [
   {
     sessionUpdate,

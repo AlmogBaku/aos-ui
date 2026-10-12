@@ -3,7 +3,8 @@ import { z } from "zod"
 import { DEFAULT_RUNTIME_MODE } from "./runtime-modes"
 
 export type RuntimeUnavailableReason =
-  "invalid-public-config" | "invalid-runtime-mode"
+  | "invalid-public-config"
+  | "invalid-runtime-mode"
 
 export type ComposerFeatureConfig = {
   readonly modelSelectorEnabled: boolean
@@ -39,7 +40,8 @@ export type GuestSurfaceConfiguration = {
 }
 
 export type ApplicationConfiguration =
-  RuntimeConfiguration | GuestSurfaceConfiguration
+  | RuntimeConfiguration
+  | GuestSurfaceConfiguration
 
 type RuntimeEnvironment = Partial<
   Record<

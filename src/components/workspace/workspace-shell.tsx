@@ -83,9 +83,17 @@ import { WorkspaceAgentTile } from "./workspace-agent-tile"
 import { draftSessionId, isDraftAgentId } from "@/runtime-adapters/draft-agents"
 
 export type WorkspaceAgentStatus =
-  "idle" | "active" | "running" | "attention" | "unknown"
+  | "idle"
+  | "active"
+  | "running"
+  | "attention"
+  | "unknown"
 export type WorkspaceSessionStatus =
-  "idle" | "running" | "waiting-for-input" | "failed" | "unknown"
+  | "idle"
+  | "running"
+  | "waiting-for-input"
+  | "failed"
+  | "unknown"
 
 type WorkspaceAgentBase = {
   visibility?: "visible" | "hidden"

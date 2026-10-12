@@ -28,7 +28,11 @@ export type ComposerEnterEvent = {
 }
 
 export type ComposerEnterAction =
-  "send" | "queue" | "steer" | "newline" | "noop"
+  | "send"
+  | "queue"
+  | "steer"
+  | "newline"
+  | "noop"
 
 export type VisualLineBoundary = "first" | "last"
 

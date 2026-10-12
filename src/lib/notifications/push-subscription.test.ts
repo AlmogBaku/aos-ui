@@ -39,7 +39,8 @@ function setup(
 ) {
   let current = options.subscription ?? null
   let message:
-    ((data: unknown, reply?: (answer: unknown) => void) => void) | undefined
+    | ((data: unknown, reply?: (answer: unknown) => void) => void)
+    | undefined
   const pushInfo = vi.fn(async () => {
     if (options.info === "failure") throw new Error("offline")
     return (

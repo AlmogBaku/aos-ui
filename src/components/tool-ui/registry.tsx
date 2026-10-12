@@ -77,7 +77,8 @@ function OptionalToolDisplay({
 }
 
 export type RichToolValidation =
-  { valid: true; payload: unknown } | { valid: false }
+  | { valid: true; payload: unknown }
+  | { valid: false }
 
 export type RichToolRegistration = {
   displayNameKey: ToolUiToolName

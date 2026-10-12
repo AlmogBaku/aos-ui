@@ -15,7 +15,10 @@ export type ToolUiToolName =
   | "toolActivity"
 export type ToolUiActivityKind = "subagent" | "skill" | "tool"
 export type ToolUiActivityStatus =
-  "running" | "waiting" | "completed" | "failed"
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
 export type ToolUiActionKind =
   | "skill"
   | "read"
@@ -32,7 +35,12 @@ export type ToolUiActionKind =
   | "generic"
 /** How a settled turn's collapsed work is headlined. */
 export type TurnFoldKind =
-  "worked" | "working" | "stopped" | "failed" | "truncated" | "refused"
+  | "worked"
+  | "working"
+  | "stopped"
+  | "failed"
+  | "truncated"
+  | "refused"
 /** What a run of tool calls did, counted per kind. */
 export type ToolRunKind =
   | "readFiles"

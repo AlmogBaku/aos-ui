@@ -149,7 +149,8 @@ export type ComposerFeatureViewModel = {
     | {
         readonly usage: ComposerUsage
         readonly segments?:
-          readonly ("system" | "tools" | "messages")[] | undefined
+          | readonly ("system" | "tools" | "messages")[]
+          | undefined
         readonly lastTurn?: ComposerTurnUsage | undefined
         readonly cost?: ComposerSessionCost | undefined
       }

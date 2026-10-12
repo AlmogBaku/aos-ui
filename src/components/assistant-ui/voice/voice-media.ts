@@ -22,7 +22,11 @@ import {
 
 export type VoiceMode = "transcription" | "voice-turn"
 export type VoiceAvailability =
-  "loading" | "ready" | "unverified" | "unconfigured" | "unavailable"
+  | "loading"
+  | "ready"
+  | "unverified"
+  | "unconfigured"
+  | "unavailable"
 export function canAttemptSpeech(availability: VoiceAvailability | undefined) {
   return availability === "ready" || availability === "unverified"
 }
