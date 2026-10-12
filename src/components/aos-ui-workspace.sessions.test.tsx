@@ -589,6 +589,37 @@ describe("paged Session History", () => {
     expect(loadMoreButton()).toBeNull()
   })
 
+  // Full mount: a query that hides every loaded row keeps the end of History
+  // in view, and reading on scroll would then walk the whole catalog.
+  it("reads no further page on scroll while a query filters History, only from the button", async () => {
+    const user = userEvent.setup()
+    renderWorkspace(usePagedWorkspace)
+    await waitFor(() => expect(loadMoreButton()).not.toBeNull())
+    await user.type(
+      screen.getByRole("searchbox", {
+        name: en.mobileNavigation.searchSessions,
+      }),
+      "thread-aster-9"
+    )
+
+    await act(async () => {
+      for (const callback of observed)
+        callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          {} as IntersectionObserver
+        )
+    })
+
+    expect(loadMoreButton()).not.toBeNull()
+    expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(0)
+
+    await user.click(loadMoreButton()!)
+
+    await waitFor(() =>
+      expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(1)
+    )
+  })
+
   // Full mount: on a runtime that scopes the catalog, the thread list's cursor
   // belongs to the selected Agent, so a browsed Agent's History must not read
   // it: each page would list none of that Agent's Sessions and its sentinel
