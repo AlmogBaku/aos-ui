@@ -406,3 +406,21 @@ it("scopes a deep link's own Agent first, never the default one", async () => {
   expect(scopeSessionCatalog.mock.calls).toEqual([["agent-b"]])
   expect(threadList.log.filter((entry) => entry === "reload")).toHaveLength(1)
 })
+
+it("names no creator and raises no workspace error when two are configured", async () => {
+  const creator = (id: string): AgentSummary => ({
+    kind: "ready",
+    id,
+    name: id,
+    role: "creator",
+    visibility: "hidden",
+  })
+  const agents = [agent, creator("builder-a"), creator("builder-b")]
+  const { result } = await mountNavigation(["s-recent"], [recent], {
+    listAgents: async () => agents,
+    refreshAgents: async () => agents,
+  })
+
+  expect(result.current.agentError).toBeNull()
+  expect(result.current.agentCreator).toBeUndefined()
+})

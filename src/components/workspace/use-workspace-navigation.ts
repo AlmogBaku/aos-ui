@@ -247,7 +247,7 @@ export function useWorkspaceNavigation({
     reloadCatalog,
     agentsLoading,
     setAgentsLoading,
-    agentError: catalogError,
+    agentError,
     setAgentError,
   } = useWorkspaceCatalog(workspace, refreshKey)
   const initialNowMs = now.getTime()
@@ -275,17 +275,7 @@ export function useWorkspaceNavigation({
   const pendingSelection = useRef<symbol | null>(null)
   const appliedPathname = useRef<string | null>(null)
   const routeTransitionPathname = useRef<string | null>(null)
-  const creators = agents.filter((agent) => agent.role === "creator")
-  const agentCreator = creators.length === 1 ? creators[0] : undefined
-  const agentError =
-    catalogError ??
-    (creators.length > 1
-      ? new Error(
-          locale === "he"
-            ? "מוגדר יותר מסוכן יוצר אחד"
-            : "Multiple creator Agents are configured"
-        )
-      : null)
+  const agentCreator = getAgentCreator(agents)
   /**
    * The pending draft is the creator's own local thread while the operator is
    * on its row. An explicit creator route stays the creator's own Session.
@@ -360,7 +350,7 @@ export function useWorkspaceNavigation({
   useAvatarAllocation({
     workspace,
     agents: avatarInputs,
-    ready: !agentsLoading && !catalogError,
+    ready: !agentsLoading && !agentError,
     onConflict: reloadCatalog,
   })
   const navigableAgents = draftProjection.agents
@@ -1492,7 +1482,7 @@ export function useWorkspaceNavigation({
   }
 
   async function openAgentBuilder() {
-    const creator = getAgentCreator(agents)
+    const creator = agentCreator
     if (!creator)
       throw new Error("Agent creation is unavailable from this provider")
     // A provider that owns Session creation only lists the interview once its
