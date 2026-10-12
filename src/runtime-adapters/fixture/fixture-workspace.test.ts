@@ -450,7 +450,8 @@ describe("FixtureWorkspace", () => {
       exposed: "idle read",
       finished: "idle unread",
       waiting: "waiting-for-input unread",
-      answered: "idle unread",
+      // An answer resumes the turn it stopped.
+      answered: "running unread",
     })
   })
 

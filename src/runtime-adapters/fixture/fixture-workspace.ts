@@ -197,7 +197,7 @@ const activityStatuses: Record<
   "turn-finished": "idle",
   "turn-failed": "failed",
   "attention-requested": "waiting-for-input",
-  "attention-resolved": "idle",
+  "attention-resolved": "running",
   "agent-ready": null,
   "agent-activation-failed": null,
 }
