@@ -25,7 +25,7 @@ const record = (
   id: string,
   sessionId: string,
   agentId: string,
-  type: "turn-finished" | "turn-failed" | "agent-ready",
+  type: "turn-finished" | "turn-failed",
   occurredAt: string
 ): ActivityRecord =>
   ({
@@ -34,7 +34,7 @@ const record = (
     agentId,
     type,
     occurredAt,
-    ...(type === "agent-ready" ? {} : { turnId: id }),
+    turnId: id,
     resolved: false,
     browserDeliveredAt: null,
     read: false,
@@ -102,22 +102,8 @@ describe("buildInbox", () => {
         ],
       },
     ],
-    [
-      "a new Agent's ready record names an unread row",
-      [session("hotels", "travel", "idle", "2026-09-05T08:00:00Z")],
-      [
-        record(
-          "ready",
-          "hotels",
-          "travel",
-          "agent-ready",
-          "2026-09-05T09:00:00Z"
-        ),
-      ],
-      { waiting: [], unread: ["hotels ready 2026-09-05T09:00:00Z"] },
-    ],
   ])("%s", (_rule, sessions, records, expected) => {
-    const inbox = buildInbox({ sessions, records, agents, titles })
+    const inbox = buildInbox({ sessions, records, ready: [], agents, titles })
     expect({
       waiting: summary(inbox.waiting),
       unread: summary(inbox.unread),
@@ -161,6 +147,7 @@ describe("buildInbox", () => {
           requestText: "How many rooms?",
         }),
       ],
+      ready: [],
       agents,
       titles,
     })
@@ -182,11 +169,13 @@ describe("buildInbox", () => {
         session("lisbon", "travel", "idle", "2026-09-05T10:00:00Z"),
       ],
       records: [],
+      ready: [],
       agents,
       titles,
     })
     expect([...inbox.waiting, ...inbox.unread]).toEqual([
       {
+        key: "interview",
         agentId: "draft:interview",
         sessionId: "interview",
         agent: { id: "draft:interview", name: "New Agent" },
@@ -195,6 +184,7 @@ describe("buildInbox", () => {
         time: "2026-09-05T11:00:00Z",
       },
       {
+        key: "lisbon",
         agentId: "travel",
         sessionId: "lisbon",
         agent: { id: "travel", name: "Travel Planner", avatar: "ring/blue" },

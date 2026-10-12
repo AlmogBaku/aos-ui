@@ -15,7 +15,9 @@ export function rowCopy(row: InboxRow, dictionary: Dictionary) {
   const copy = dictionary.activity
   const [before = "", after = ""] =
     row.state === "ready" ? copy.agentIsReady.split("{name}") : []
-  const title = row.title ?? copy.sessionFallback
+  // A ready Agent has no Session yet; its description stands in, if any.
+  const title =
+    row.title ?? (row.state === "ready" ? undefined : copy.sessionFallback)
   const more = row.request?.more
     ? copy.requestMore.replace("{count}", () => String(row.request?.more))
     : undefined
@@ -62,7 +64,7 @@ export function ActivityRow({
       <button
         className={styles.open}
         type="button"
-        data-activity-row={row.sessionId}
+        data-activity-row={row.key}
         aria-label={`${summary}, ${relativeTime(row.time, now, locale, "long")}`}
         onClick={onOpen}
       >
@@ -93,9 +95,11 @@ export function ActivityRow({
               <UnreadDot label={dictionary.status.unread} />
             )}
           </span>
-          <span className={styles.rowTitle}>
-            <bdi>{title}</bdi>
-          </span>
+          {title ? (
+            <span className={styles.rowTitle}>
+              <bdi>{title}</bdi>
+            </span>
+          ) : null}
           {row.request ? (
             <span className={styles.rowRequest}>
               <bdi>{row.request.text}</bdi>
@@ -113,7 +117,7 @@ export function ActivityRow({
           className={styles.markRead}
           variant="ghost"
           size="icon-sm"
-          aria-label={`${copy.markRead}: ${row.agent.name}, ${title}`}
+          aria-label={`${copy.markRead}: ${[row.agent.name, title].filter(Boolean).join(", ")}`}
           onClick={(event) => onMarkRead(event.currentTarget)}
         >
           <Check />

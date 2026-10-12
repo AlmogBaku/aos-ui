@@ -8,9 +8,27 @@ export type InboxState = "waiting" | "failed" | "unread" | "ready"
  * The Agent as the rail draws it, so a draft keeps its dashed tile and name.
  * It carries no status: a row's tile stays still, however many rows it leads.
  */
-export type InboxAgent = { id: string; name: string; avatar?: string }
+export type InboxAgent = {
+  id: string
+  name: string
+  avatar?: string
+  description?: string
+}
+
+/**
+ * An Agent the creator just made: it owns no Session yet, so its row comes
+ * from the creator's own report and names the Agent, not a Session.
+ */
+export type ReadyAgent = {
+  agentId: string
+  /** The creator Session that reported it. */
+  sessionId: string
+  occurredAt: string
+}
 
 export type InboxRow = {
+  /** Unique across rows: a Session, or a ready Agent. */
+  key: string
   agentId: string
   sessionId: string
   agent: InboxAgent
@@ -28,7 +46,7 @@ const recordStates: Record<ActivityRecord["type"], InboxState> = {
   "turn-finished": "unread",
   "turn-failed": "failed",
   "attention-requested": "unread",
-  "agent-ready": "ready",
+  "agent-ready": "unread",
   "agent-activation-failed": "failed",
 }
 
@@ -41,18 +59,21 @@ const scope = ({
 }) => JSON.stringify([agentId, sessionId])
 
 /**
- * One row per counted Session, newest first within its group. A Session's
- * newest record from this tab gives its state and time; without one, which is
- * every Session after a reload, its own status and update time do.
+ * One row per counted Session and per ready Agent, newest first within its
+ * group. A Session's newest record from this tab gives its state and time;
+ * without one, which is every Session after a reload, its own status and
+ * update time do. Only an Agent in `agents` gets a row.
  */
 export function buildInbox({
   sessions,
   records,
+  ready,
   agents,
   titles,
 }: {
   sessions: readonly SessionMetadata[]
   records: readonly ActivityRecord[]
+  ready: readonly ReadyAgent[]
   agents: readonly InboxAgent[]
   titles: ReadonlyMap<string, string>
 }): Inbox {
@@ -81,6 +102,7 @@ export function buildInbox({
         : undefined
     return [
       {
+        key: session.sessionId,
         agentId: session.agentId,
         sessionId: session.sessionId,
         agent: { id, name, avatar },
@@ -93,6 +115,20 @@ export function buildInbox({
       },
     ]
   })
+  for (const { agentId, sessionId, occurredAt } of ready) {
+    const agent = agents.find(({ id }) => id === agentId)
+    if (!agent) continue
+    const { id, name, avatar, description } = agent
+    rows.push({
+      key: `ready:${agentId}`,
+      agentId,
+      sessionId,
+      agent: { id, name, avatar },
+      title: description,
+      state: "ready",
+      time: occurredAt,
+    })
+  }
   rows.sort((left, right) => Date.parse(right.time) - Date.parse(left.time))
   return {
     waiting: rows.filter(({ state }) => state === "waiting"),

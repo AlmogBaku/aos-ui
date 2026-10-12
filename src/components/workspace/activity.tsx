@@ -134,7 +134,7 @@ export function ActivityPanel({
   const open = (row: InboxRow) => {
     if (opening) return
     setOpening(true)
-    void Promise.resolve(activity?.openSession(row.agentId, row.sessionId))
+    void Promise.resolve(activity?.openRow(row))
       .then((opened) => {
         if (opened) onOpened()
       })
@@ -147,10 +147,10 @@ export function ActivityPanel({
       ...(panel?.querySelectorAll<HTMLElement>("[data-activity-row]") ?? []),
     ]
     const index = rows.findIndex(
-      (element) => element.dataset.activityRow === row.sessionId
+      (element) => element.dataset.activityRow === row.key
     )
     ;(rows[index + 1] ?? panel?.querySelector<HTMLElement>("h2"))?.focus()
-    activity?.markSessionRead(row.sessionId)
+    activity?.markRowRead(row)
   }
 
   return (
@@ -228,7 +228,7 @@ export function ActivityPanel({
                   <ul className={styles.rows}>
                     {group.rows.map((row) => (
                       <ActivityRow
-                        key={row.sessionId}
+                        key={row.key}
                         row={row}
                         dictionary={dictionary}
                         locale={locale}

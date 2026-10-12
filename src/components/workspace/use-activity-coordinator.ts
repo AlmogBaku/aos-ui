@@ -16,7 +16,13 @@ import {
   type AttentionLevel,
 } from "@/lib/attention-level"
 import { ActivityStore } from "@/lib/notifications/store"
-import { buildInbox, type Inbox } from "@/lib/notifications/inbox"
+import {
+  buildInbox,
+  type Inbox,
+  type InboxRow,
+  type ReadyAgent,
+} from "@/lib/notifications/inbox"
+import { isRosterAgent } from "@/runtime-adapters/agent-identity"
 import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
 import { activityEventSchema } from "@/lib/notifications/activity"
 import {
@@ -77,9 +83,12 @@ export type ActivityView = {
   error: boolean
   supported: boolean
   openActivity: (id: string) => Promise<boolean>
-  /** Opens a Session once the provider confirms the Agent still owns it. */
-  openSession: (agentId: string, sessionId: string) => Promise<boolean>
-  markSessionRead: (sessionId: string) => void
+  /**
+   * Opens a row's Session once the provider confirms the Agent still owns it,
+   * or a ready row's new Agent.
+   */
+  openRow: (row: InboxRow) => Promise<boolean>
+  markRowRead: (row: InboxRow) => void
   markAllRead: () => void
   dismissNotice: () => void
 }
@@ -87,6 +96,7 @@ export type ActivityView = {
 export type ActivityAgent = {
   id: string
   name: string
+  description?: string
   avatar?: string
   role?: "creator"
   visibility?: "visible" | "hidden"
@@ -102,6 +112,8 @@ type Options = {
   locale: Locale
   readNow: () => Date
   onOpenTarget: (agentId: string, sessionId: string) => Promise<void>
+  /** Opens an Agent the creator just made, which owns no Session yet. */
+  onOpenAgent: (agentId: string) => Promise<void>
   browser?: {
     port?: BrowserNotificationPort
     platform?: ActivityBrowserPlatform
@@ -170,6 +182,8 @@ export function useActivityCoordinator(
     (sessionId: string, revalidate?: boolean) => Promise<string | undefined>
   >(async () => undefined)
   const [records, setRecords] = useDataState<ActivityRecord[]>([])
+  /** Agents the creator made since this tab loaded, until the operator acts. */
+  const [ready, setReady] = useState<readonly ReadyAgent[]>([])
   const [notice, setNotice] = useState<{ urgent: boolean } | null>(null)
   const [ring, setRing] = useState(0)
   const reported = useRef<
@@ -369,6 +383,13 @@ export function useActivityCoordinator(
     })
     let queue = Promise.resolve()
     let unsubscribe: (() => void) | undefined
+    /** Only the creator's own Session, or a draft of it, reports creations. */
+    const createdBy = (owner: string | undefined) =>
+      owner !== undefined &&
+      (isDraftAgentId(owner) ||
+        current.current.agents.some(
+          ({ id, role }) => id === owner && role === "creator"
+        ))
     let rangAt = -Infinity
     /** A burst of new waits rings the bell once. */
     function ringBell() {
@@ -386,6 +407,19 @@ export function useActivityCoordinator(
           if (!active) return
           const validatedOwner = await validateOwner(event.sessionId)
           if (!active) return
+          // A new Agent owns no Session yet, so its creator's Session reports
+          // it; a report from any other Session is forged and ignored.
+          if (event.type === "agent-ready") {
+            if (createdBy(validatedOwner)) {
+              const { agentId, sessionId, occurredAt } = event
+              setReady((previous) =>
+                previous.some((entry) => entry.agentId === agentId)
+                  ? previous
+                  : [...previous, { agentId, sessionId, occurredAt }]
+              )
+            }
+            return
+          }
           if (validatedOwner !== event.agentId) return
           const state = context()
           // A start is bookkeeping the store drops, but it is the proof the
@@ -495,6 +529,10 @@ export function useActivityCoordinator(
   }, [options.locale])
 
   const rail = railSessions(options.agents, options.sessions)
+  const forgetReady = (agentId: string) =>
+    setReady((previous) =>
+      previous.filter((entry) => entry.agentId !== agentId)
+    )
   const attention = attentionLevel(rail)
   /** Reading a Session is a provider write; the browser never stores it. */
   const markSessionsRead = (sessionIds: readonly string[]) => {
@@ -545,7 +583,23 @@ export function useActivityCoordinator(
         return false
       })
     },
-    async openSession(agentId: string, sessionId: string) {
+    async openRow(row: InboxRow) {
+      const { agentId, sessionId } = row
+      if (row.state === "ready") {
+        const agent = current.current.agents.find(({ id }) => id === agentId)
+        if (!agent || !isRosterAgent(agent)) return false
+        return current.current.onOpenAgent(agentId).then(
+          () => {
+            forgetReady(agentId)
+            setNotice(null)
+            return true
+          },
+          () => {
+            setError(true)
+            return false
+          }
+        )
+      }
       const store = storeRef.current
       if (!store) return false
       // A promise `catch`, not `try`: React Compiler cannot compile the
@@ -574,8 +628,9 @@ export function useActivityCoordinator(
         return false
       })
     },
-    markSessionRead(sessionId: string) {
-      markSessionsRead([sessionId])
+    markRowRead(row: InboxRow) {
+      if (row.state === "ready") forgetReady(row.agentId)
+      else markSessionsRead([row.sessionId])
     },
     markAllRead() {
       markSessionsRead(
@@ -583,6 +638,7 @@ export function useActivityCoordinator(
           .filter(isSessionUnread)
           .map(({ sessionId }) => sessionId)
       )
+      setReady([])
       setNotice(null)
     },
     dismissNotice() {
@@ -626,7 +682,9 @@ export function useActivityCoordinator(
     inbox: buildInbox({
       sessions: rail.filter(isSessionUnread),
       records,
-      agents: options.agents,
+      ready,
+      // Only an Agent the rail lists can be opened, so only it gets a row.
+      agents: options.agents.filter(isRosterAgent),
       titles: options.titles,
     }),
     readNow: options.readNow,
@@ -634,8 +692,8 @@ export function useActivityCoordinator(
     error,
     supported: !!workspace.subscribeActivity,
     openActivity: actions.openActivity,
-    openSession: actions.openSession,
-    markSessionRead: actions.markSessionRead,
+    openRow: actions.openRow,
+    markRowRead: actions.markRowRead,
     markAllRead: actions.markAllRead,
     dismissNotice: actions.dismissNotice,
   }

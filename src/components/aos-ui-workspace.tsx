@@ -635,6 +635,8 @@ function WorkspaceContent({
       setPreferredAgentId(agentId)
       await openSession(sessionId, agentId)
     },
+    // A created Agent opens the way its rail row does, with no Session yet.
+    onOpenAgent: selectAgent,
   })
 
   // A subagent's child Session opens in place when the catalog knows its Agent.

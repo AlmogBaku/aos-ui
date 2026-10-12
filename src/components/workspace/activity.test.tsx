@@ -10,6 +10,7 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type {
+  AgentSummary,
   WorkspaceActivityEvent,
   WorkspaceAdapter,
   SessionMetadata,
@@ -17,6 +18,7 @@ import type {
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import { useActivityCoordinator } from "./use-activity-coordinator"
+import { createFixtureWorkspace } from "@/runtime-adapters/fixture/fixture-workspace"
 import {
   ActivityAsk,
   ActivityPanel,
@@ -99,10 +101,10 @@ function source() {
     markSessionRead,
     reportFocus,
   }
+  /** An attention request from the Agent that owns `sessionId`. */
   const emit = (
     id: string,
     sessionId = "two",
-    type: "attention-requested" | "agent-ready" = "agent-ready",
     extra: { requestText?: string; requestMore?: number } = {}
   ) =>
     receive({
@@ -110,11 +112,11 @@ function source() {
       sessionId,
       agentId: sessionId === "one" ? "a" : "b",
       occurredAt: now.toISOString(),
+      type: "attention-requested",
+      requestId: id,
+      attentionKind: "question",
       ...extra,
-      ...(type === "attention-requested"
-        ? { type, requestId: id, attentionKind: "question" }
-        : { type }),
-    } as WorkspaceActivityEvent)
+    })
   return {
     workspace,
     emit,
@@ -139,6 +141,7 @@ function options(
     locale: "en",
     readNow: () => now,
     onOpenTarget: vi.fn(async () => {}),
+    onOpenAgent: vi.fn(async () => {}),
   }
 }
 beforeEach(() => {
@@ -291,8 +294,8 @@ describe("Activity coordinator", () => {
     const focused = document.activeElement
     act(() => {
       provider.emit("first")
-      provider.emit("second", "two", "attention-requested")
-      provider.emit("second", "two", "attention-requested")
+      provider.emit("second", "two")
+      provider.emit("second", "two")
     })
     await waitFor(() => expect(result.current.items).toHaveLength(2))
     expect(result.current.items.every((item) => !item.read)).toBe(true)
@@ -428,7 +431,7 @@ describe("Activity coordinator", () => {
     const { result, rerender } = renderHook(useActivityCoordinator, {
       initialProps: props,
     })
-    act(() => provider.emit("event", "two", "attention-requested"))
+    act(() => provider.emit("event", "two"))
     await waitFor(() => expect(result.current.items).toHaveLength(1))
     rerender({
       ...props,
@@ -462,16 +465,14 @@ describe("Activity coordinator", () => {
     const { result } = renderHook(useActivityCoordinator, {
       initialProps: { ...options(provider.workspace), sessions: waiting },
     })
-    await act(async () =>
-      provider.emit("on-screen", "one", "attention-requested")
-    )
+    await act(async () => provider.emit("on-screen", "one"))
     expect(result.current.ring).toBe(0)
-    await act(async () => provider.emit("first", "two", "attention-requested"))
+    await act(async () => provider.emit("first", "two"))
     expect(result.current.ring).toBe(1)
-    await act(async () => provider.emit("burst", "two", "attention-requested"))
+    await act(async () => provider.emit("burst", "two"))
     expect(result.current.ring).toBe(1)
     await clock.advance(3000)
-    await act(async () => provider.emit("later", "two", "attention-requested"))
+    await act(async () => provider.emit("later", "two"))
     expect(result.current.ring).toBe(2)
   })
   it("validates and opens the owning Agent and Session then acknowledges it", async () => {
@@ -703,7 +704,7 @@ describe("the Activity inbox", () => {
   it("shows what a waiting row is asked, in its own direction, with how many follow", async () => {
     const { provider } = renderInbox()
     await act(async () =>
-      provider.emit("asked", "two", "attention-requested", {
+      provider.emit("asked", "two", {
         requestText: "Which dates work for you?",
         requestMore: 2,
       })
@@ -806,6 +807,99 @@ describe("the Activity inbox", () => {
     expect(screen.getByText(en.activity.emptyTitle)).toBeVisible()
     expect(screen.queryByRole("heading", { level: 3 })).toBeNull()
     expect(screen.getByRole("button", { name: "Mark all read" })).toBeDisabled()
+  })
+})
+
+describe("an Agent the creator made", () => {
+  const sora = {
+    kind: "ready",
+    id: "agent-sora",
+    name: "Sora",
+    description: "Trip planning",
+  } as const
+  /** The panel over a fixture whose creator has just made Sora. */
+  async function renderCreation() {
+    const workspace = createFixtureWorkspace({
+      clock: () => now,
+      // One read Session the creator does not own, and nothing unread.
+      sessions: [
+        {
+          sessionId: "thread-mica-quarterly",
+          agentId: "agent-mica",
+          status: "idle",
+          updatedAt: now.toISOString(),
+          unread: false,
+        },
+      ],
+    })
+    const interview = await workspace.createSession("agent-builder")
+    const sessions = workspace.listAllSessionMetadata()
+    const onOpenAgent = vi.fn<(agentId: string) => Promise<void>>(
+      async () => {}
+    )
+    function Harness({ agents }: { agents: AgentSummary[] }) {
+      const activity = useActivityCoordinator({
+        workspace,
+        agents,
+        sessions,
+        titles: new Map(),
+        selection: null,
+        locale: "en",
+        readNow: () => now,
+        onOpenTarget: async () => {},
+        onOpenAgent,
+      })
+      return (
+        <ActivityPanel
+          activity={activity}
+          locale="en"
+          dictionary={en}
+          onOpened={() => {}}
+        />
+      )
+    }
+    const view = render(<Harness agents={await workspace.listAgents()} />)
+    await act(async () =>
+      workspace.completeAgentCreation(interview.sessionId, sora)
+    )
+    // The catalog now lists Sora, as the navigation's refresh reads it.
+    view.rerender(<Harness agents={await workspace.listAgents()} />)
+    return { workspace, onOpenAgent }
+  }
+  const readyRow = () =>
+    screen.queryByRole("button", { name: "Sora is ready, Trip planning, now" })
+
+  it("lists it as ready, and opens it as an Agent with no Session yet", async () => {
+    const user = userEvent.setup()
+    const { onOpenAgent } = await renderCreation()
+
+    await user.click(readyRow()!)
+
+    expect(onOpenAgent).toHaveBeenCalledExactlyOnceWith("agent-sora")
+    await waitFor(() => expect(readyRow()).toBeNull())
+  })
+
+  it("clears its row when marked read, and Mark all read covers it", async () => {
+    const user = userEvent.setup()
+    await renderCreation()
+    await user.click(
+      screen.getByRole("button", { name: "Mark read: Sora, Trip planning" })
+    )
+    expect(readyRow()).toBeNull()
+
+    cleanup()
+    await renderCreation()
+    const markAll = screen.getByRole("button", { name: "Mark all read" })
+    await user.click(markAll)
+    expect(readyRow()).toBeNull()
+    expect(markAll).toBeDisabled()
+  })
+
+  it("lists nothing a Session the creator does not own reports", async () => {
+    const { workspace } = await renderCreation()
+    await act(async () => workspace.publishActivityScenario("agent-ready"))
+    expect(screen.queryByRole("button", { name: /^Mica is ready/ })).toBeNull()
+    expect(readyRow()).not.toBeNull()
   })
 })
 
