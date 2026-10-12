@@ -826,6 +826,12 @@
     padding-inline-end: 3.25rem;
   }
 
+  /* The conversation search bar floats where the strip used to hold it,
+     below the toggle's row, instead of over the toggle. */
+  .shell[data-tabs-replaced="true"] .conversation [role="search"] {
+    top: 2.75rem;
+  }
+
   .tabBar {
     display: flex;
     flex: none;
