@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 import {
   ThreadPrimitive,
   unstable_useThreadMessageIds as useThreadMessageIds,
+  useThreadViewport,
 } from "@assistant-ui/react"
 import {
   defaultRangeExtractor,
@@ -20,7 +21,6 @@ import {
   type ComponentProps,
   type FocusEvent,
   type Ref,
-  type RefObject,
 } from "react"
 
 import {
@@ -159,13 +159,11 @@ function setScrollTopImmediately(viewport: HTMLElement, scrollTop: number) {
  * here would double every adjustment while a message streams.
  */
 export function ThreadMessageList({
-  viewportRef,
   readingBookmark,
   components,
   className,
   ref,
 }: {
-  viewportRef: RefObject<HTMLElement | null>
   /** The reader's current place, which a page of older messages keeps. */
   readingBookmark?: () => ThreadReadingBookmark | undefined
   components: MessageComponents
@@ -173,6 +171,11 @@ export function ThreadMessageList({
   ref?: Ref<ThreadMessageListHandle>
 }) {
   const messageIds = useThreadMessageIds()
+  // The viewport as Assistant UI registers it, not a ref to it: the Viewport
+  // attaches its ref only after this list's layout effects run, and detaches
+  // and re-attaches it whenever it re-renders, so a ref read here can be null
+  // in exactly the commit that needs it.
+  const viewport = useThreadViewport((state) => state.element.viewport)
   const listRef = useRef<HTMLDivElement>(null)
   // What sits above the list in the viewport (padding, the search bar) offsets
   // every message, so the window and `getOffsetForIndex` count it in.
@@ -190,7 +193,6 @@ export function ThreadMessageList({
   const [prependAnchor, setPrependAnchor] = useState<PrependAnchor | null>(null)
   if (firstMessageId !== shownFirstMessageId) {
     setShownFirstMessageId(firstMessageId)
-    const viewport = viewportRef.current
     if (
       viewport &&
       shownFirstMessageId !== undefined &&
@@ -219,10 +221,10 @@ export function ThreadMessageList({
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count,
-    getScrollElement: () => viewportRef.current,
+    getScrollElement: () => viewport,
     estimateSize: () => ESTIMATED_MESSAGE_HEIGHT_PX,
     getItemKey: (index) => messageIds[index] ?? index,
-    initialOffset: () => viewportRef.current?.scrollTop ?? 0,
+    initialOffset: () => viewport?.scrollTop ?? 0,
     overscan: OVERSCAN,
     rangeExtractor,
     scrollMargin,
@@ -239,7 +241,6 @@ export function ThreadMessageList({
   // never measured above it, so the correction repeats on the next commit
   // until one moves nothing.
   useLayoutEffect(() => {
-    const viewport = viewportRef.current
     if (!prependAnchor || !viewport) return
     const message = messageElement(viewport, prependAnchor.messageId)
     const shift = message ? topWithin(viewport, message) - prependAnchor.top : 0
@@ -256,13 +257,12 @@ export function ThreadMessageList({
         ? null
         : { ...prependAnchor, passes }
     )
-  }, [prependAnchor, viewportRef, virtualizer])
+  }, [prependAnchor, viewport, virtualizer])
 
   // The list re-renders on every scroll, so the margin follows what moves above
   // it; an unchanged value bails out of the update, so it cannot loop.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
-    const viewport = viewportRef.current
     const list = listRef.current
     if (viewport && list) setScrollMargin(offsetWithin(viewport, list))
   })
@@ -271,7 +271,6 @@ export function ThreadMessageList({
     ref,
     () => ({
       revealMessage(messageId) {
-        const viewport = viewportRef.current
         if (!viewport || messageElement(viewport, messageId)) return true
         const index = messageIds.indexOf(messageId)
         if (index < 0) return true
@@ -280,7 +279,7 @@ export function ThreadMessageList({
         return false
       },
     }),
-    [messageIds, viewportRef, virtualizer]
+    [messageIds, viewport, virtualizer]
   )
 
   const onFocus = (event: FocusEvent<HTMLDivElement>) => {
@@ -301,7 +300,6 @@ export function ThreadMessageList({
   // scroll position itself when the window has yet to reach the viewport.
   // Where the browser anchored it, nothing moves; a page landing above keeps
   // its own anchor.
-  const viewport = viewportRef.current
   const beforeCommit =
     viewport && !whole && !prependAnchor
       ? {
@@ -310,7 +308,6 @@ export function ThreadMessageList({
         }
       : null
   useLayoutEffect(() => {
-    const viewport = viewportRef.current
     if (!viewport || !beforeCommit) return
     const { scrollTop, inView } = beforeCommit
     const message = inView && messageElement(viewport, inView.messageId)

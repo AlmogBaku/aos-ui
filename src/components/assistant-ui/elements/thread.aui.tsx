@@ -625,7 +625,6 @@ const ThreadRoot: FC<{
           <DisclosureMemoryProvider scope={sessionId}>
             <ThreadMessageList
               ref={messageListRef}
-              viewportRef={viewportRef}
               readingBookmark={readingBookmark}
               components={THREAD_MESSAGE_COMPONENTS}
               className="mx-auto mb-8 w-full max-w-(--thread-content-max-width) empty:hidden @md:mb-10"

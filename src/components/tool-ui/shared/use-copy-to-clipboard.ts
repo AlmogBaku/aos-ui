@@ -30,7 +30,7 @@ export function useCopyToClipboard(options?: { resetAfterMs?: number }): {
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const copy = useCallback(async (text: string, id: string = "default") => {
-    let ok = false
+    let ok: boolean
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text)

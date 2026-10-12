@@ -1570,8 +1570,7 @@ describe("Thread accessibility", () => {
     const user = userEvent.setup()
     let runtime: AssistantRuntime | undefined
     render(
-      <LocalThread
-        initialMessages={[]}
+      <MultiSessionThread
         exposeRuntime={(value) => {
           runtime = value
         }}
@@ -1584,11 +1583,12 @@ describe("Thread accessibility", () => {
     await waitFor(() => expect(input).toHaveValue(""))
 
     await act(async () => {
-      await runtime!.threads.switchToNewThread()
+      await runtime!.threads.switchToThread("session-two")
     })
     await waitFor(() => expect(input).toHaveValue(""))
+    // Up recalls this Session's own last prompt, not the other's cleared draft.
     await user.keyboard("{ArrowUp}")
-    expect(input).toHaveValue("")
+    await waitFor(() => expect(input).toHaveValue("Session two history"))
   })
 
   it("isolates history search state when switching sessions", async () => {
