@@ -32,7 +32,7 @@ function appView(page: Page, toolName: string) {
     .contentFrame()
 }
 
-test("charts and maps expose complete textual alternatives", async ({
+test("charts and maps expose complete textual alternatives, and the map draws", async ({
   page,
 }) => {
   await openWorkspace(page)
@@ -51,6 +51,10 @@ test("charts and maps expose complete textual alternatives", async ({
   await sendPrompt(page, "Show a map")
 
   const map = appView(page, "render_map")
+  // Busy until MapLibre has started its worker in the sandbox and loaded the map.
+  await expect(
+    map.getByRole("region", { name: "Interview coverage", exact: true })
+  ).toHaveAttribute("aria-busy", "false", { timeout: 30_000 })
   await map.getByRole("button", { name: "View map locations" }).click()
   const locations = map.getByRole("list", {
     name: "Interview coverage locations",
