@@ -1,9 +1,9 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import type {
-  ReadResourceResult,
-  Tool,
-} from "@modelcontextprotocol/sdk/types.js"
+import {
+  Client,
+  InMemoryTransport,
+  type ReadResourceResult,
+  type Tool,
+} from "@modelcontextprotocol/client"
 
 import {
   GRAMMAR_RESOURCE_URI,

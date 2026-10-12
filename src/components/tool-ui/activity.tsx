@@ -50,10 +50,10 @@ export const activityPayloadSchema = z
         summary: z.string().optional(),
         transcript: z.string().min(1).optional(),
       })
-      .passthrough()
+      .loose()
       .optional(),
   })
-  .passthrough()
+  .loose()
 
 export type ActivityPayload = z.infer<typeof activityPayloadSchema>
 export type ActivityChildStatus = z.infer<typeof activityStatusSchema>

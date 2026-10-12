@@ -1,5 +1,5 @@
 import type { ThreadAssistantMessagePart } from "@assistant-ui/react"
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import type { CallToolResult } from "@modelcontextprotocol/client"
 
 import { viewerFileResult } from "@harness-gw/sdk/protocol"
 import type { AosUiToolName } from "@shared/presentation/tools"

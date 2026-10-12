@@ -55,7 +55,7 @@ export const ToolUIReceiptSchema = z.object({
   outcome: ToolUIReceiptOutcomeSchema,
   summary: z.string().min(1),
   identifiers: z.record(z.string(), z.string()).optional(),
-  at: z.string().datetime(),
+  at: z.iso.datetime(),
 })
 
 export type ToolUIReceipt = z.infer<typeof ToolUIReceiptSchema>
@@ -100,7 +100,7 @@ export const DecisionResultSchema = z.object({
   decisionId: z.string().min(1),
   actionId: z.string().min(1),
   actionLabel: z.string().min(1),
-  at: z.string().datetime(),
+  at: z.iso.datetime(),
   payload: z.record(z.string(), z.unknown()).optional(),
 })
 

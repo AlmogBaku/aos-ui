@@ -11,7 +11,7 @@ import {
 import type {
   CallToolResult,
   ReadResourceResult,
-} from "@modelcontextprotocol/sdk/types.js"
+} from "@modelcontextprotocol/client"
 import { useTheme } from "next-themes"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 

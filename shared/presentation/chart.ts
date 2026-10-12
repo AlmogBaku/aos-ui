@@ -1,9 +1,6 @@
 import { z } from "zod"
 
-const chartRowSchema = z.record(
-  z.string(),
-  z.union([z.string(), z.number().finite()])
-)
+const chartRowSchema = z.record(z.string(), z.union([z.string(), z.number()]))
 
 export const chartResultSchema = z
   .object({

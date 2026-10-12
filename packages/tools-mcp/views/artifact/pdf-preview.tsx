@@ -1,4 +1,4 @@
-import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js"
+import type { ReadResourceResult } from "@modelcontextprotocol/client"
 import { ChevronLeft, ChevronRight, PanelLeft } from "lucide-react"
 import {
   PDFWorker,

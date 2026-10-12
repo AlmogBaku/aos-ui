@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { parseArgs } from "node:util"
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server"
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
 
 import {
   MAPLIBRE_WORKER_FILE,

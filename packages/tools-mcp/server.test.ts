@@ -1,7 +1,6 @@
 // @vitest-environment node
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { createToolsServer } from "./server"
@@ -374,16 +373,24 @@ describe("present_artifact", () => {
   })
 
   it.each([
-    ["a relative path", { path: "out/report.pdf" }, /absolute at path/u],
+    [
+      "a relative path",
+      { path: "out/report.pdf" },
+      /path: Path must be absolute/u,
+    ],
     ["the root directory", { path: "/" }, /name a file/u],
-    ["an empty path", { path: "" }, /at path/u],
+    ["an empty path", { path: "" }, /path: Too small/u],
     [
       "a path with a control character",
       { path: "/workspace/a\u0000b" },
-      /control characters at path/u,
+      /path: Path must not contain control characters/u,
     ],
-    ["an overlong title", { path: "/a", title: "t".repeat(161) }, /at title/u],
-    ["a malformed mimeType", { path: "/a", mimeType: "text" }, /at mimeType/u],
+    [
+      "an overlong title",
+      { path: "/a", title: "t".repeat(161) },
+      /title: Too big/u,
+    ],
+    ["a malformed mimeType", { path: "/a", mimeType: "text" }, /mimeType: /u],
     [
       "an extra key",
       { path: "/a", url: "https://example.com" },

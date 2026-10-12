@@ -6,13 +6,11 @@ import {
 } from "@modelcontextprotocol/ext-apps/server"
 import {
   McpServer,
+  ProtocolError,
+  ProtocolErrorCode,
   ResourceTemplate,
-} from "@modelcontextprotocol/sdk/server/mcp.js"
-import {
-  ErrorCode,
-  McpError,
   type CallToolResult,
-} from "@modelcontextprotocol/sdk/types.js"
+} from "@modelcontextprotocol/server"
 import { z } from "zod"
 
 import {
@@ -172,8 +170,8 @@ function registerFiles(
       const path = String(variables.path)
       const bytes = files.get(path)
       if (!bytes)
-        throw new McpError(
-          ErrorCode.InvalidParams,
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
           `No ${name} at ${address.href}`
         )
       const mimeType = textType(path)

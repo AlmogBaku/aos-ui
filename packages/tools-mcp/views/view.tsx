@@ -7,7 +7,7 @@ import {
   type McpUiDisplayMode,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps"
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import type { CallToolResult } from "@modelcontextprotocol/client"
 import { useSyncExternalStore, type ComponentType } from "react"
 import { createRoot } from "react-dom/client"
 import type { z } from "zod"
