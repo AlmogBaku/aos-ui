@@ -21,7 +21,7 @@ import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { McpAppPipPanel } from "./mcp-app-card"
-import { McpAppHostProvider } from "./mcp-app-host"
+import { McpAppHostProvider, useMcpAppHost } from "./mcp-app-host"
 import type { McpAppFrameProps } from "./mcp-app-frame"
 import { MCP_APP_TOOL_ARTIFACT, mcpAppToolArtifact } from "./tool-part"
 
@@ -396,6 +396,60 @@ describe("MCP App side panel", () => {
     const focused = document.activeElement
     expect(focused).not.toBe(document.body)
     expect(focused?.contains(screen.getByLabelText(...FRAME))).toBe(true)
+  })
+
+  it("keeps the open view when the same Artifact is shown again from another card", async () => {
+    // Two publications of one file share an Artifact id; each card asks for
+    // the panel with its own target object.
+    const user = userEvent.setup()
+    const apps = adapter()
+    function OpenArtifact({ label }: { label: string }) {
+      const host = useMcpAppHost()
+      return (
+        <button
+          type="button"
+          onClick={() =>
+            host?.showInPip({
+              target: {
+                agentId: "researcher",
+                sessionId: "session-1",
+                artifactId: "memo",
+              },
+              file: { filename: "episode-memo.md" },
+            })
+          }
+        >
+          {label}
+        </button>
+      )
+    }
+    render(
+      <Session
+        apps={apps}
+        message={false}
+        beside={
+          <>
+            <OpenArtifact label="First card" />
+            <OpenArtifact label="Second card" />
+          </>
+        }
+      />
+    )
+    const panelFrame = () =>
+      within(
+        screen.getByRole("region", { name: "episode-memo.md" })
+      ).getByLabelText("episode-memo.md", { selector: "iframe" })
+
+    await user.click(screen.getByRole("button", { name: "First card" }))
+    const frame = await waitFor(panelFrame)
+    await user.click(screen.getByRole("button", { name: "Second card" }))
+
+    expect(panelFrame()).toBe(frame)
+    expect(apps.open).toHaveBeenCalledTimes(1)
+    const targets = new Set(
+      frames.filter((f) => f.placement === "pip").map((f) => f.target)
+    )
+    expect(targets.size).toBe(1)
   })
 
   it("keeps the view while newer messages push its message out of the rendered window", async () => {

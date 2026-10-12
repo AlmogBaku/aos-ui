@@ -154,9 +154,16 @@ export function McpAppHostProvider({
     return () => window.clearTimeout(timer)
   }, [pip, shown])
 
+  // Showing the target already there keeps its view: two publications of one
+  // file share an Artifact, and a new target object would rebuild the view's
+  // connection on a frame whose sandbox never reports ready again.
   const showInPip = useCallback((next: McpAppPip) => {
     opener.current = next.opener
-    setPip(next)
+    setPip((current) =>
+      current && sameMcpAppTarget(current.target, next.target)
+        ? { ...current, opener: next.opener }
+        : next
+    )
   }, [])
   // The control that opened the panel may render only once the panel is
   // gone, as an inspector row does on a desktop.
