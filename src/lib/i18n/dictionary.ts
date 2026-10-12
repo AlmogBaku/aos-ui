@@ -18,26 +18,34 @@ export type Dictionary = {
   }
   activity: {
     title: string
-    unread: string
-    needsAttention: string
-    earlier: string
-    emptyAttention: string
-    emptyEarlier: string
-    open: string
+    /** The counts a bell or an Agent row names; `{count}` is substituted. */
+    unreadCount: string
+    waitingCount: string
+    failedCount: string
+    /** The inbox's two groups, and its one message while both are empty. */
+    waitingGroup: string
+    unreadGroup: string
+    mutedGroup: string
+    emptyTitle: string
+    emptyDetail: string
     markAllRead: string
-    unavailable: string
-    resolved: string
-    agentFallback: string
+    markRead: string
     sessionFallback: string
-    runFinished: string
-    runFailed: string
-    inputRequested: string
-    agentReady: string
-    activationFailed: string
+    /** A waiting row's state, as its accessible name reads it. */
+    waitingForInput: string
+    /** Questions after the one shown; `{count}` is substituted. */
+    requestMore: string
+    turnFailed: string
+    /** A row for an Agent the creator just made; `{name}` is substituted. */
+    agentIsReady: string
+    /** An OS notification's lead, by category; failure reads `turnFailed`. */
+    needsInput: string
+    turnFinished: string
     routineNotice: string
     urgentNotice: string
     dismiss: string
     settings: string
+    backToActivity: string
     browserNotifications: string
     notConfigured: string
     permissionGranted: string
@@ -65,10 +73,6 @@ export type Dictionary = {
     completion: string
     failure: string
     input: string
-    /** OS notification bodies for coalesced pushes; `{count}` is substituted. */
-    inputRequestedMany: string
-    runFailedMany: string
-    runFinishedMany: string
     /** Body when a push payload cannot be read; carries nothing else. */
     pushGeneric: string
   }
@@ -135,6 +139,9 @@ export type Dictionary = {
     hideAgent: string
     /** Retires an unfinished creator interview, which owns nothing else. */
     discardDraft: string
+    /** Silences an Agent's notifications everywhere, or brings them back. */
+    muteNotifications: string
+    unmuteNotifications: string
     switchToEnglish: string
     switchToHebrew: string
   }
@@ -155,6 +162,7 @@ export type Dictionary = {
     failed: string
     unread: string
     pinned: string
+    muted: string
     archived: string
   }
   /** "From {platform}" labels for Session row accessible names. */
@@ -230,12 +238,14 @@ export type Dictionary = {
   agentManagement: {
     description: string
     showInWorkspace: string
+    notifications: string
     managedByProvider: string
     shownInWorkspace: string
     hiddenFromWorkspace: string
     loading: string
     loadFailed: string
     updateFailed: string
+    muteFailed: string
     retry: string
   }
   creator: {

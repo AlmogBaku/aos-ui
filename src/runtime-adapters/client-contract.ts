@@ -14,9 +14,19 @@ type Same<A, B> =
 
 type Assert<T extends true> = T
 
+/** The client infers these from its reads rather than naming them. */
+type ClientAgentSummary = Awaited<
+  ReturnType<Client.AcpWorkspaceClient["listAgents"]>
+>[number]
+type ClientAgentCatalogEntry = Awaited<
+  ReturnType<Client.AcpWorkspaceClient["listAgentCatalog"]>
+>[number]
+
 export type ClientMatchesContract = [
   Assert<Same<Client.AgentVisibility, Contract.AgentVisibility>>,
   Assert<Same<Client.AgentUpdate, Contract.AgentUpdate>>,
+  Assert<Same<ClientAgentSummary, Contract.AgentSummary>>,
+  Assert<Same<ClientAgentCatalogEntry, Contract.AgentCatalogEntry>>,
   Assert<Same<Client.SessionStatus, Contract.SessionStatus>>,
   Assert<Same<Client.ActivityBase, Contract.ActivityBase>>,
   Assert<Same<Client.WorkspaceActivityEvent, Contract.WorkspaceActivityEvent>>,

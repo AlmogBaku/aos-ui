@@ -9,11 +9,22 @@ import {
   isSelectionExposed,
   shouldChime,
 } from "@/lib/notifications/policy"
+import { isSessionUnread } from "@/lib/workspace-view-model"
 import {
-  isSessionUnread,
-  workspaceUnreadCount,
-} from "@/lib/workspace-view-model"
+  attentionLevel,
+  bellSessions,
+  railSessions,
+  type AttentionLevel,
+} from "@/lib/attention-level"
 import { ActivityStore } from "@/lib/notifications/store"
+import {
+  buildInbox,
+  type Inbox,
+  type InboxRow,
+  type ReadyAgent,
+} from "@/lib/notifications/inbox"
+import { isRosterAgent } from "@/runtime-adapters/agent-identity"
+import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
 import { activityEventSchema } from "@/lib/notifications/activity"
 import {
   BrowserActivityCoordinator,
@@ -54,20 +65,47 @@ export type ActivityItem = ActivityRecord & {
   available: boolean
 }
 export type ActivityNoticeState = { count: number; urgent: boolean }
+/** The bell rings at most once in this long, however many Sessions start waiting. */
+const BELL_RING_INTERVAL_MS = 3000
 export type ActivityView = {
   items: ActivityItem[]
-  /** Sessions the operator has not read, including open attention requests. */
-  unreadCount: number
+  /**
+   * What the rail's Sessions hold for the operator: unread ones, including
+   * open attention requests, and the most urgent state among them.
+   */
+  attention: AttentionLevel
+  /** Counts the bell's rings, each one a Session that newly waits elsewhere. */
+  ring: number
+  /** The counted Sessions, one row each: the Activity drawer's contents. */
+  inbox: Inbox
+  /** The workspace clock the inbox's times are relative to. */
+  readNow: () => Date
   notice: ActivityNoticeState | null
   error: boolean
   supported: boolean
   openActivity: (id: string) => Promise<boolean>
+  /**
+   * Opens a row's Session once the provider confirms the Agent still owns it,
+   * or a ready row's new Agent.
+   */
+  openRow: (row: InboxRow) => Promise<boolean>
+  markRowRead: (row: InboxRow) => void
   markAllRead: () => void
   dismissNotice: () => void
 }
+/** A navigable Agent: a rail row or a draft, or one the rail hides. */
+export type ActivityAgent = {
+  id: string
+  name: string
+  description?: string
+  avatar?: string
+  role?: "creator"
+  visibility?: "visible" | "hidden"
+  muted?: true
+}
 type Options = {
   workspace: WorkspaceAdapter
-  agents: readonly { id: string; name: string }[]
+  agents: readonly ActivityAgent[]
   sessions: readonly SessionMetadata[]
   titles: ReadonlyMap<string, string>
   selection: ActivityContext["selection"]
@@ -76,13 +114,14 @@ type Options = {
   locale: Locale
   readNow: () => Date
   onOpenTarget: (agentId: string, sessionId: string) => Promise<void>
+  /** Opens an Agent the creator just made, which owns no Session yet. */
+  onOpenAgent: (agentId: string) => Promise<void>
   browser?: {
     port?: BrowserNotificationPort
     platform?: ActivityBrowserPlatform
     sound?: ActivitySoundPort
     /** Present only where a provider can subscribe this device to Web Push. */
     push?: PushSubscriptionManager
-    copy: { completion: string; failure: string; input: string }
   }
 }
 /**
@@ -145,7 +184,10 @@ export function useActivityCoordinator(
     (sessionId: string, revalidate?: boolean) => Promise<string | undefined>
   >(async () => undefined)
   const [records, setRecords] = useDataState<ActivityRecord[]>([])
+  /** Agents the creator made since this tab loaded, until the operator acts. */
+  const [ready, setReady] = useState<readonly ReadyAgent[]>([])
   const [notice, setNotice] = useState<{ urgent: boolean } | null>(null)
+  const [ring, setRing] = useState(0)
   const reported = useRef<
     { sessionId: string | null; foreground: boolean; idle: boolean } | undefined
   >(undefined)
@@ -160,6 +202,9 @@ export function useActivityCoordinator(
     conversationExposed: current.current.conversationExposed,
     pageVisible: document.visibilityState === "visible",
     pageFocused: document.hasFocus(),
+    quietAgentIds: new Set(
+      current.current.agents.filter(({ muted }) => muted).map(({ id }) => id)
+    ),
   })
   /**
    * The proxy owns read state, so the browser only reports what is exposed, and
@@ -261,7 +306,11 @@ export function useActivityCoordinator(
           platform: browserOptions.platform ?? createActivityBrowserPlatform(),
           now: () => current.current.readNow().getTime(),
           context,
-          copy: () => current.current.browser!.copy,
+          locale: () => current.current.locale,
+          names: () => ({
+            agents: current.current.agents,
+            titles: current.current.titles,
+          }),
           open: (id) => openRef.current(id),
           // A subscribed device leaves the OS alerts to push.
           ...(push ? { push } : {}),
@@ -338,6 +387,21 @@ export function useActivityCoordinator(
     })
     let queue = Promise.resolve()
     let unsubscribe: (() => void) | undefined
+    /** Only the creator's own Session, or a draft of it, reports creations. */
+    const createdBy = (owner: string | undefined) =>
+      owner !== undefined &&
+      (isDraftAgentId(owner) ||
+        current.current.agents.some(
+          ({ id, role }) => id === owner && role === "creator"
+        ))
+    let rangAt = -Infinity
+    /** A burst of new waits rings the bell once. */
+    function ringBell() {
+      const at = performance.now()
+      if (at - rangAt < BELL_RING_INTERVAL_MS) return
+      rangAt = at
+      setRing((count) => count + 1)
+    }
     function ingest(input: unknown) {
       const parsed = activityEventSchema.safeParse(input)
       if (!parsed.success) return
@@ -347,6 +411,19 @@ export function useActivityCoordinator(
           if (!active) return
           const validatedOwner = await validateOwner(event.sessionId)
           if (!active) return
+          // A new Agent owns no Session yet, so its creator's Session reports
+          // it; a report from any other Session is forged and ignored.
+          if (event.type === "agent-ready") {
+            if (createdBy(validatedOwner)) {
+              const { agentId, sessionId, occurredAt } = event
+              setReady((previous) =>
+                previous.some((entry) => entry.agentId === agentId)
+                  ? previous
+                  : [...previous, { agentId, sessionId, occurredAt }]
+              )
+            }
+            return
+          }
           if (validatedOwner !== event.agentId) return
           const state = context()
           // A start is bookkeeping the store drops, but it is the proof the
@@ -359,15 +436,19 @@ export function useActivityCoordinator(
           if (arrival) {
             const preferences =
               browser?.settings().preferences ?? defaultBrowserPreferences
+            // In-app notice excludes the Session on screen and anything re-sent
+            // on connect, so the bell never rings for a wait already seen.
             if (
               getActivityPolicy(arrival, state, preferences, "unsupported")
                 .inAppNotice
-            )
+            ) {
               setNotice((previous) => ({
                 urgent:
                   categoryOf(arrival.type) !== "completion" ||
                   !!previous?.urgent,
               }))
+              if (arrival.type === "attention-requested") ringBell()
+            }
             if (shouldChime(arrival, state, preferences)) sound?.play()
           }
         })
@@ -451,7 +532,15 @@ export function useActivityCoordinator(
     syncPushRef.current()
   }, [options.locale])
 
-  const unreadCount = workspaceUnreadCount(options.sessions)
+  const rail = railSessions(options.agents, options.sessions)
+  const forgetReady = (agentId: string) =>
+    setReady((previous) =>
+      previous.filter((entry) => entry.agentId !== agentId)
+    )
+  // The inbox lists a muted Agent's Sessions; the bell counts none of them.
+  const attention = attentionLevel(
+    bellSessions(options.agents, options.sessions)
+  )
   /** Reading a Session is a provider write; the browser never stores it. */
   const markSessionsRead = (sessionIds: readonly string[]) => {
     void Promise.all(
@@ -501,12 +590,67 @@ export function useActivityCoordinator(
         return false
       })
     },
+    async openRow(row: InboxRow) {
+      const { agentId, sessionId } = row
+      if (row.state === "ready") {
+        const agent = current.current.agents.find(({ id }) => id === agentId)
+        if (!agent || !isRosterAgent(agent)) return false
+        return current.current.onOpenAgent(agentId).then(
+          () => {
+            forgetReady(agentId)
+            setNotice(null)
+            return true
+          },
+          () => {
+            setError(true)
+            return false
+          }
+        )
+      }
+      const store = storeRef.current
+      if (!store) return false
+      // A promise `catch`, not `try`: React Compiler cannot compile the
+      // conditionals inside a `try` yet.
+      return (async () => {
+        // A draft is this browser's projection of a creator Session, so the
+        // snapshot that projected it is the only owner it has.
+        const owner = isDraftAgentId(agentId)
+          ? current.current.sessions.find(
+              (session) => session.sessionId === sessionId
+            )?.agentId
+          : await validateOwnerRef.current(sessionId, true)
+        if (storeRef.current !== store) return false
+        if (
+          !current.current.agents.some(({ id }) => id === agentId) ||
+          owner !== agentId
+        )
+          return false
+        await current.current.onOpenTarget(agentId, sessionId)
+        if (storeRef.current !== store) return false
+        markSessionsRead([sessionId])
+        setNotice(null)
+        return true
+      })().catch(() => {
+        setError(true)
+        return false
+      })
+    },
+    markRowRead(row: InboxRow) {
+      if (row.state === "ready") forgetReady(row.agentId)
+      else markSessionsRead([row.sessionId])
+    },
     markAllRead() {
+      // Exactly the inbox's unread rows, a muted Agent's among them; a hidden
+      // Agent's Session is never touched, and only answering clears a wait.
       markSessionsRead(
-        current.current.sessions
-          .filter(isSessionUnread)
+        railSessions(current.current.agents, current.current.sessions)
+          .filter(
+            ({ unread, status }) =>
+              unread === true && status !== "waiting-for-input"
+          )
           .map(({ sessionId }) => sessionId)
       )
+      setReady([])
       setNotice(null)
     },
     dismissNotice() {
@@ -545,11 +689,23 @@ export function useActivityCoordinator(
             session.agentId !== record.agentId
         ),
     })),
-    unreadCount,
-    notice: notice ? { count: unreadCount, urgent: notice.urgent } : null,
+    attention,
+    ring,
+    inbox: buildInbox({
+      sessions: rail.filter(isSessionUnread),
+      records,
+      ready,
+      // Only an Agent the rail lists can be opened, so only it gets a row.
+      agents: options.agents.filter(isRosterAgent),
+      titles: options.titles,
+    }),
+    readNow: options.readNow,
+    notice: notice ? { count: attention.count, urgent: notice.urgent } : null,
     error,
     supported: !!workspace.subscribeActivity,
     openActivity: actions.openActivity,
+    openRow: actions.openRow,
+    markRowRead: actions.markRowRead,
     markAllRead: actions.markAllRead,
     dismissNotice: actions.dismissNotice,
   }

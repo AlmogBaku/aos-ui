@@ -1,126 +1,101 @@
 .bell {
   position: relative;
 }
-.count {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-end: -0.15rem;
-  min-inline-size: 1.1rem;
-  padding-inline: 0.2rem;
-  border-radius: 0.25rem;
-  background: var(--foreground);
-  color: var(--background);
-  font-size: 0.6875rem;
-  line-height: 1.1rem;
-  font-variant-numeric: tabular-nums;
+/* One swing from a pivot near the top, as transform only. */
+.ringing {
+  transform-origin: 50% 10%;
+  animation: bell-ring 0.7s ease-out;
 }
+@keyframes bell-ring {
+  15% {
+    transform: rotate(16deg);
+  }
+  30% {
+    transform: rotate(-13deg);
+  }
+  45% {
+    transform: rotate(9deg);
+  }
+  60% {
+    transform: rotate(-5deg);
+  }
+  75% {
+    transform: rotate(2deg);
+  }
+}
+/* The header stays put and the body scrolls beneath it: nothing is capped. */
 .panel {
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 0 0 1.5rem;
-  scrollbar-color: var(--muted) transparent;
-  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
 }
 /* Header band shared with the drawer's close control at the inline end. */
 .heading {
   display: flex;
+  flex: none;
   min-block-size: 3.5rem;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.25rem;
   border-block-end: 1px solid var(--border);
   padding-inline: 1rem 3.25rem;
 }
 .heading h2 {
+  flex: 1;
+  min-inline-size: 0;
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.015em;
+  outline: none;
 }
-.panel > .explanation {
+.body {
+  flex: 1;
+  min-block-size: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-block-end: 1.5rem;
+  scrollbar-color: var(--muted) transparent;
+  scrollbar-width: thin;
+}
+.body > .explanation {
   padding: 0.75rem 1rem 0;
 }
-.section {
-  margin-block-start: 1.25rem;
+.group {
+  margin-block-start: 1rem;
+}
+.group h3 {
   padding-inline: 1rem;
-}
-.section h3 {
-  font-size: 0.875rem;
-  font-weight: 600;
-  margin-block-end: 0.625rem;
-}
-.list {
-  list-style: none;
-  padding: 0;
-}
-.item {
-  padding-block: 1rem;
-  border-block-end: 1px solid var(--border);
-}
-.item:first-child {
-  padding-block-start: 0.25rem;
-}
-.itemHeading,
-.itemFooter {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.75rem;
-}
-.itemHeading p {
-  font-size: 0.875rem;
-  font-weight: 550;
-}
-.target {
-  margin-block-start: 0.375rem;
+  margin-block-end: 0.25rem;
   color: var(--muted-foreground);
   font-size: 0.8125rem;
-  overflow-wrap: anywhere;
+  font-weight: 600;
 }
-.itemFooter {
-  margin-block-start: 0.75rem;
-}
-.itemFooter time {
-  color: var(--muted-foreground);
-  font-size: 0.75rem;
+.groupCount {
   font-variant-numeric: tabular-nums;
+}
+.rows {
+  list-style: none;
+  padding-inline: 0.5rem;
+}
+.empty {
+  display: grid;
+  gap: 0.25rem;
+  padding: 2rem 1rem;
+  text-align: center;
+  font-size: 0.875rem;
 }
 .explanation {
   color: var(--muted-foreground);
   font-size: 0.8125rem;
   line-height: 1.55;
 }
-.marker {
-  display: inline-flex;
-  align-items: center;
-  align-self: center;
-  flex: none;
-  color: var(--foreground);
-  margin-inline-start: 0;
-  margin-inline-end: 0.375rem;
-  vertical-align: middle;
+.back {
+  margin-inline-start: -0.5rem;
 }
-.marker svg {
-  inline-size: 0.875rem;
-  block-size: 0.875rem;
-}
-.attentionDot {
-  display: block;
-  inline-size: 0.75rem;
-  block-size: 0.75rem;
-  flex: none;
-  border-radius: 999px;
-  background: var(--workspace-status-attention, var(--warning));
+[dir="rtl"] .back svg {
+  transform: scaleX(-1);
 }
 .settings {
-  margin: 1.25rem 1rem 0;
-  border-block-start: 1px solid var(--border);
-  padding-block-start: 0.75rem;
-}
-.settings summary {
-  cursor: pointer;
-  font-size: 0.875rem;
-  font-weight: 550;
-  padding-block: 0.5rem;
+  padding-inline: 1rem;
 }
 .settingsBody {
   display: grid;
@@ -142,7 +117,6 @@
 .setting:has(input:disabled) {
   color: var(--muted-foreground);
 }
-.settings summary:focus-visible,
 .setting input:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 3px;
@@ -221,7 +195,8 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .notice,
-  .ask {
+  .ask,
+  .ringing {
     animation: none;
   }
 }

@@ -116,15 +116,20 @@ it("keeps the roster it has when an invalidation re-reads the same one", async (
   expect(result.current.agents).toBe(roster)
 })
 
-it("reads a management catalog once per load for the roster and its avatars, and reloads through it", async () => {
-  const entry = (id: string, avatarEditable: boolean) => ({
+it("reads a management catalog once per load for the roster, its avatars, and its mutes, and reloads through it", async () => {
+  const entry = (
+    id: string,
+    avatarEditable: boolean,
+    muteEditable = false
+  ) => ({
     summary: { kind: "ready" as const, id, name: id },
     visibility: "visible" as const,
     selectable: true,
     editable: true,
     avatarEditable,
+    muteEditable,
   })
-  let entries = [entry("agent-a", true), entry("agent-b", false)]
+  let entries = [entry("agent-a", true), entry("agent-b", false, true)]
   const workspace: WorkspaceAdapter = {
     listAgents: vi.fn(async () => []),
     refreshAgents: vi.fn(async () => []),
@@ -139,6 +144,7 @@ it("reads a management catalog once per load for the roster and its avatars, and
     "agent-b",
   ])
   expect(result.current.avatarEditableIds).toEqual(["agent-a"])
+  expect(result.current.muteEditableIds).toEqual(["agent-b"])
   expect(workspace.listAgentCatalog).toHaveBeenCalledTimes(1)
 
   entries = [entry("agent-a", true), entry("agent-b", true)]

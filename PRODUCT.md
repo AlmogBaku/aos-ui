@@ -53,9 +53,19 @@ presents the resulting history alongside inline conversation state, coalesced
 in-app notices, and default-on live browser notifications. Completion in the
 exact visible, focused Session is already read and suppresses alerts. Other
 Sessions in a focused workspace produce unread markers and one coalesced notice.
-Hidden tabs and visible but unfocused windows/apps deliver eligible generic OS
+Hidden tabs and visible but unfocused windows/apps deliver eligible OS
 notifications; when the gateway is configured for Web Push, notifications reach
 the operator's devices even with no AOS tab open.
+
+**Notification content.** Each notification is about one Session. Its title is
+the Agent name, falling back to the Session title, then "AOS". The body carries
+the state ("Needs your input", "Turn failed", or "Finished") and the Session
+title; on input requests a second body line shows the question or permission
+text — a preview of at most 200 characters, credential-masked, flattened to one
+line, with "+N more" when further questions remain. Pieces are isolated for
+bidirectional text. A newer state of the same Session replaces its older
+notification. Lock-screen privacy is the OS Show Previews setting; AOS adds no
+toggle. Tapping a notification opens the owning Session.
 
 Notification preferences are on by default. The browser asks for permission
 once, from a click on an inline card that appears after the operator's first
@@ -64,26 +74,61 @@ categories: input requests, failures, completions. A short in-tab audio cue
 plays for input requests and failures (not completions) only in the focused tab
 for events in another Session. OS notifications use the OS default sound and
 follow OS Do Not Disturb; the in-tab cue is page audio and does not. Bursts
-coalesce per category (3 s / 5 s / 20 s windows) into one notification per
-device carrying a count. Payloads and OS text carry no conversation content and
-no Agent or Session labels — only a category, a count, opaque identifiers,
-timestamp, and locale. Cross-device suppression: push is not sent while the
-operator is present on any device (foreground, active within ~3 minutes; 60-second
-heartbeat). After presence lapses, an away tab holds notifications 60 seconds and
-a closed workspace ~2 seconds, enough for a reload to reconnect; a Session on
-screen never alerts. Guest sessions receive no notifications. Permission denial
-and unsupported browsers preserve Activity. Multiple tabs elect one delivery tab;
-Activity history stays in memory and never replays OS alerts. Clicks focus AOS
-and validate provider ownership before selecting the owning Agent and Session;
-deleted targets remain unavailable.
+coalesce per category (3 s / 5 s / 20 s windows), but each window delivers one
+push per Session; a push older than one already sent for that Session is
+skipped. Cross-device suppression: push is not sent while the operator is
+present on any device (foreground, active within ~3 minutes; 60-second
+heartbeat). After presence lapses, an away tab holds notifications 60 seconds
+and a closed workspace ~2 seconds, enough for a reload to reconnect; a Session
+on screen never alerts. Events the gateway re-sends when a tab connects never
+raise an OS alert, an in-app notice, the in-tab sound, or the bell's ring.
+Guest sessions receive no notifications. Permission denial and unsupported
+browsers preserve Activity. Multiple tabs elect one delivery tab. Clicks focus
+AOS and validate provider ownership before selecting the owning Agent and
+Session; deleted targets remain unavailable.
 
-Stored Activity and OS payloads contain no conversation, tool, question,
-permission, or error content. OS text also omits Agent and Session labels.
-The gateway activity feed covers all Sessions visible to the connection. Fixtures exercise
-deterministic scenarios, and the other native adapters expose Activity only
-when the ACP `initialize` response includes `_meta.hgw.extensions.activity: true`. Browser and OS policies can delay
-or suppress delivery. The Activity bell is in the desktop Agents heading and
-mobile header, with an accessible unread count, keyboard-managed drawer,
+Content goes only to devices whose registration was refreshed within 30 days.
+Every app open refreshes it, and an open page re-sends after a day; older
+devices receive the notification without content. Registrations idle for 90 days
+are removed.
+
+**Activity pane.** The bell opens an inbox of Sessions, not an event history.
+It has two groups, "Waiting for you" then "Unread". Each row shows the Agent
+tile and name, a relative time, the Session title, a status dot, the question on
+waiting rows, and "Turn failed" on failed rows. The whole row opens the Session.
+Mark read clears one Session; waiting rows have none, because only answering
+clears waiting. Mark all read is enabled only when some counted Session is
+unread and not waiting. An empty pane shows "Nothing needs you right now."
+Notification settings sit behind a header button, in a view inside the same
+drawer with Back. The bell, the inbox, and the Agent tile badges count only
+Sessions whose Agent has a rail row. Read Sessions leave the pane; the Session
+list is the history. Browsing the drawer marks nothing read.
+
+**Muting an Agent.** The operator can mute an Agent's notifications from its
+row's menu (right click on the rail, long press on the phone) or with the
+Notifications switch in Manage Agents, wherever the runtime can store the mute.
+The mute is the runtime's, so it holds on every device. A muted Agent's events
+raise no OS notification, push or in-tab, no in-app notice, chime, or ring.
+Its Sessions still appear in the inbox, in a "Muted" group listed last, and Mark
+all read covers them; the bell does not count them. Its tile keeps its own count
+in neutral gray with a bell-off mark beside the name, and does not hop. A mute
+set on a hidden Agent is kept and takes effect once the Agent is shown again.
+
+**Bell.** The badge count uses the status color of the highest state among
+counted Sessions: orange (warning) for waiting, else red (destructive) for
+failed, else green (success) for unread. Running never colors it. The accessible
+name lists the states, e.g. "Activity, 4 unread, 1 waiting for you, 1 failed".
+When a Session newly starts waiting, the bell swings once (about 0.7 s) at the
+in-tab chime moment, even with sound off. It does not ring for the Session on
+screen, for re-sent events, twice within 3 s, or under reduced motion.
+
+The browser's stored Activity snapshot holds preferences only and stays
+content-free. The gateway activity feed covers all Sessions visible to the
+connection. Fixtures exercise deterministic scenarios, and the other native
+adapters expose Activity only when the ACP `initialize` response includes
+`_meta.hgw.extensions.activity: true`. Browser and OS policies can delay or
+suppress delivery. The Activity bell is in the desktop Agents heading and mobile
+header, with an accessible unread count, keyboard-managed drawer,
 English/Hebrew support, and reduced motion.
 
 ## Brand Commitments

@@ -71,7 +71,7 @@ Each runtime guide explains how to register the server with that harness.
 ## Lanes and Caddy
 
 A harness overlay adds the `gateway` service (image
-`${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.4.1@sha256:9388fbd3bd4529e7605a6ebc6368eebae4039f54d7ce8dc211dc7fe3c9855038}`) and the guest lane.
+`${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.5.0@sha256:1f5a4bde452617dc6f3d2d11312349398d38097c45e490e730934cfd74d65d6c}`) and the guest lane.
 Caddy is then the only published lane listener:
 
 | Lane     | Host port (default) | Caddy   | Gateway listener | Web server listener |
@@ -354,11 +354,20 @@ mutating routes require a listed origin; endpoints are validated (HTTPS,
 default port, no credentials or query string) and every resolved address must
 be publicly routable — private, loopback, link-local, and carrier-grade-NAT
 ranges such as a tailnet's 100.64/10 block are refused before any outbound
-request; payloads are end-to-end encrypted and content-free; push topics are
-opaque. Accepted residual: anyone who can reach the listener may register,
-delete, or fill the 32 device slots; an invited guest whose prompts cause the
-Agent to ask questions can raise input notifications for the operator at the
-coalescing rate (nothing is dropped; revoke the invitation to stop); a small
+request; payloads are end-to-end encrypted and carry the Agent name, Session
+title, and a masked preview of the request text; the push service sees a stable
+per-Session pseudonym as the topic (a keyed hash), plus TTL and urgency; content
+goes only to devices refreshed within 30 days, and registrations idle for 90 days
+are removed; request text is credential-masked for every runtime; input
+notifications stay in the OS Notification Center until dismissed. Accepted
+residual: anyone who can reach the listener may register, delete, or fill the 32
+device slots; anyone who can reach the operator listener can mute or hide an
+editable Agent, silencing its pushes on every device (the guest lane cannot:
+its Agent update is not a method it offers); masking is pattern-based, so a
+credential with no telling name, header, URL position, or known provider shape
+reaches the preview as written; an invited guest whose prompts cause the Agent to ask questions can
+raise one input notification per invited Session per coalescing window, and its
+text can be shaped by the guest (plain text only; it opens only AOS); a small
 DNS check-to-connect window remains.
 
 ## Voice provider key files

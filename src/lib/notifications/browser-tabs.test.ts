@@ -85,11 +85,8 @@ it.each([[true, true, ["hidden"]]])(
         platform,
         context: () => context,
         now: () => now,
-        copy: () => ({
-          completion: "A turn finished",
-          failure: "A turn failed",
-          input: "Your Agent needs input",
-        }),
+        locale: () => "en",
+        names: () => ({ agents: [], titles: new Map() }),
         port: {
           getPermission: () => "granted",
           requestPermission: async () => "granted",
@@ -163,11 +160,8 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
     store,
     now: () => now,
     context: () => context,
-    copy: () => ({
-      completion: "A turn finished",
-      failure: "A turn failed",
-      input: "Your Agent needs input",
-    }),
+    locale: () => "en",
+    names: () => ({ agents: [], titles: new Map() }),
     platform: {
       read: () => saved,
       write: (value) => {
@@ -211,7 +205,7 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
   // the next heartbeat. It must revalidate/reacquire the unchanged self lease.
   now += 20000
   while (delayedDelivery.length) delayedDelivery.shift()!()
-  expect(shown).toEqual(["A turn finished"])
+  expect(shown).toEqual(["Finished"])
   now += 20000
   coordinator.publish(
     store.ingest({
@@ -223,7 +217,7 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
   now += 20000
   tick()
   while (delayedDelivery.length) delayedDelivery.shift()!()
-  expect(shown).toEqual(["A turn finished", "A turn finished"])
+  expect(shown).toEqual(["Finished", "Finished"])
   tick()
   expect(shown).toHaveLength(2)
   coordinator.stop()
@@ -304,11 +298,8 @@ it("synchronizes live arrivals, delivery announcements, and preferences with one
       },
       now: () => now,
       context: () => context,
-      copy: () => ({
-        completion: "A turn finished",
-        failure: "A turn failed",
-        input: "Your Agent needs input",
-      }),
+      locale: () => "en",
+      names: () => ({ agents: [], titles: new Map() }),
       onChange() {},
       open: async () => true,
     })

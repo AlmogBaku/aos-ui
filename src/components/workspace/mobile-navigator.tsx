@@ -12,6 +12,7 @@ import {
 } from "react"
 import {
   ArrowLeft,
+  BellOff,
   Bot,
   ChevronRight,
   Plus,
@@ -33,8 +34,15 @@ import {
   type AgentSessionHistoryProps,
 } from "./agent-session-history"
 import type { SessionRowMenuHandlers } from "./session-row-menu"
-import { RowIndicators, UnreadDot } from "./status-dots"
+import { UnreadDot } from "./status-dots"
 import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
+import { AttentionBadge } from "./attention-badge"
+import { agentRowLabel, type AgentRowCopy } from "./agent-row-label"
+import {
+  AgentRowContextMenu,
+  type AgentRowMenuCopy,
+  type AgentRowMenuHandlers,
+} from "./agent-row-menu"
 
 export type MobileNavigatorState =
   | { view: "closed" }
@@ -86,20 +94,12 @@ export type MobileNavigatorCopy = AgentSessionHistoryCopy & {
   close: string
   searchAgents: string
   newAgent: string
-  draftLabel: string
   manageAgents: string
   preferences: string
   agentDetails: string
   noAgents: string
-  status: {
-    active: string
-    idle: string
-    running: string
-    attention: string
-    unknown: string
-    waitingForInput: string
-    failed: string
-  }
+  agentRow: AgentRowCopy
+  agentMenu: AgentRowMenuCopy
 }
 
 export type MobileNavigatorProps = {
@@ -127,6 +127,8 @@ export type MobileNavigatorProps = {
   preferences?: ReactNode
   onAgentDetails?: (agentId: string) => void
   renderAgentIcon?: (agent: WorkspaceAgent) => ReactNode
+  /** What each Agent row's long press offers, the same as the rail's. */
+  agentMenu?: (agent: WorkspaceAgent) => AgentRowMenuHandlers
   className?: string
   onActionError?: (error: unknown) => void
   onSearchSessions?: AgentSessionHistoryProps["onSearch"]
@@ -251,19 +253,6 @@ function normalizeSearch(value: string, locale: "en" | "he") {
   return value.trim().toLocaleLowerCase(locale)
 }
 
-function statusLabel(
-  status: WorkspaceAgent["status"] | WorkspaceSession["status"],
-  copy: MobileNavigatorCopy
-) {
-  if (status === "active") return copy.status.active
-  if (status === "waiting-for-input") return copy.status.waitingForInput
-  if (status === "failed") return copy.status.failed
-  if (status === "running") return copy.status.running
-  if (status === "attention") return copy.status.attention
-  if (status === "unknown") return copy.status.unknown
-  return copy.status.idle
-}
-
 export function MobileNavigator({
   state,
   agents,
@@ -287,6 +276,7 @@ export function MobileNavigator({
   preferences,
   onAgentDetails,
   renderAgentIcon,
+  agentMenu,
   className,
   onActionError,
   onSearchSessions,
@@ -387,67 +377,69 @@ export function MobileNavigator({
           <nav className={styles.list} aria-label={copy.agents}>
             {visibleAgents.length ? (
               visibleAgents.map((agent) => {
-                const label = [
-                  agent.name,
-                  isDraftAgentId(agent.id) ? copy.draftLabel : null,
-                  agent.status && agent.status !== "idle"
-                    ? statusLabel(agent.status, copy)
-                    : null,
-                  agent.id === selectedAgentId ? copy.selected : null,
-                  agent.unread ? copy.unread : null,
-                ]
-                  .filter(Boolean)
-                  .join(", ")
+                const selected = agent.id === selectedAgentId
                 return (
-                  <button
+                  <AgentRowContextMenu
                     key={agent.id}
-                    type="button"
-                    className={styles.navigationRow}
-                    aria-label={label}
-                    aria-current={
-                      agent.id === selectedAgentId ? "true" : undefined
-                    }
-                    onClick={() => {
-                      // A draft owns one interview and no Session list, so its
-                      // row opens that interview, or closes onto the row it
-                      // already selected while the interview has no Session yet.
-                      if (isDraftAgentId(agent.id)) {
-                        const draftThreadId = draftThreadOf(agent.id)
-                        onStateChange({ type: "DISMISS" })
-                        if (draftThreadId)
-                          onOpenSession(agent.id, draftThreadId)
-                        return
-                      }
-                      onStateChange({
-                        type: "BROWSE_AGENT",
-                        agentId: agent.id,
-                      })
-                    }}
+                    agentId={agent.id}
+                    locale={locale}
+                    copy={copy.agentMenu}
+                    {...agentMenu?.(agent)}
                   >
-                    <span className={styles.agentIcon}>
-                      {renderAgentIcon?.(agent) ?? (
-                        <Bot aria-hidden="true" size={20} />
-                      )}
-                    </span>
-                    <span className={styles.rowText}>
-                      <bdi className={styles.rowTitle}>{agent.name}</bdi>
-                      {agent.description ? (
-                        <bdi className={styles.rowDescription}>
-                          {agent.description}
-                        </bdi>
-                      ) : null}
-                    </span>
-                    <RowIndicators
-                      status={agent.status}
-                      statusLabel={statusLabel(agent.status, copy)}
-                      unread={agent.unread}
-                      unreadLabel={copy.unread}
-                    />
-                    <ChevronRight
-                      className={styles.chevron}
-                      aria-hidden="true"
-                    />
-                  </button>
+                    <button
+                      type="button"
+                      className={styles.navigationRow}
+                      aria-label={agentRowLabel(agent, selected, copy.agentRow)}
+                      aria-current={selected ? "true" : undefined}
+                      onClick={() => {
+                        // A draft owns one interview and no Session list, so its
+                        // row opens that interview, or closes onto the row it
+                        // already selected while the interview has no Session yet.
+                        if (isDraftAgentId(agent.id)) {
+                          const draftThreadId = draftThreadOf(agent.id)
+                          onStateChange({ type: "DISMISS" })
+                          if (draftThreadId)
+                            onOpenSession(agent.id, draftThreadId)
+                          return
+                        }
+                        onStateChange({
+                          type: "BROWSE_AGENT",
+                          agentId: agent.id,
+                        })
+                      }}
+                    >
+                      <span className={styles.agentIcon}>
+                        {renderAgentIcon?.(agent) ?? (
+                          <Bot aria-hidden="true" size={20} />
+                        )}
+                        <AttentionBadge
+                          level={agent.attention}
+                          runningLabel={copy.agentRow.running}
+                          muted={agent.muted}
+                        />
+                      </span>
+                      <span className={styles.rowText}>
+                        <span className={styles.rowTitleLine}>
+                          <bdi className={styles.rowTitle}>{agent.name}</bdi>
+                          {agent.muted ? (
+                            <BellOff
+                              className={styles.mutedMark}
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                        </span>
+                        {agent.description ? (
+                          <bdi className={styles.rowDescription}>
+                            {agent.description}
+                          </bdi>
+                        ) : null}
+                      </span>
+                      <ChevronRight
+                        className={styles.chevron}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </AgentRowContextMenu>
                 )
               })
             ) : (

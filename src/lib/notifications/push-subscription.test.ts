@@ -248,6 +248,23 @@ describe("keeping the proxy's copy of this device correct", () => {
     expect(h.manager.active()).toBe(true)
   })
 
+  it("re-sends a registration held for more than a day, and not sooner", async () => {
+    const h = setup({
+      subscription: fakeSubscription("https://push.example/a"),
+    })
+    await h.manager.prepare("granted")
+    await h.manager.sync(sync())
+
+    h.advance(24 * 60 * 60 * 1000)
+    await h.manager.sync(sync())
+    expect(h.putPushSubscription).toHaveBeenCalledOnce()
+
+    h.advance(1)
+    await h.manager.sync(sync())
+    expect(h.putPushSubscription).toHaveBeenCalledTimes(2)
+    expect(h.subscribe).not.toHaveBeenCalled()
+  })
+
   it("retires this device when the operator turns alerts off", async () => {
     const subscription = fakeSubscription("https://push.example/a")
     const h = setup({ subscription })

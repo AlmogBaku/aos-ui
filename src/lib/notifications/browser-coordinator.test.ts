@@ -8,6 +8,7 @@ import { defaultBrowserPreferences, type BrowserPermission } from "./policy"
 import type { BrowserNotificationPayload } from "./browser-port"
 import type { SessionMetadata } from "@/runtime-adapters/contracts"
 import { deserializeActivity, serializeActivity } from "./serialization"
+import { sessionTag } from "./tag"
 
 const now = Date.parse("2026-09-05T12:00:00Z")
 const context = { selection: null, pageVisible: false, pageFocused: false }
@@ -60,16 +61,18 @@ function setup(
     selection: null as null | { agentId: string; sessionId: string },
   }
   let permissionChanged: (() => void) | undefined
-  const copy = {
-    completion: "A turn finished",
-    failure: "A turn failed",
-    input: "Your Agent needs input",
-  }
+  /** What this tab shows of its Agents and Sessions, and its language. */
+  const labels: {
+    locale: "en" | "he"
+    agents: ReturnType<BrowserActivityOptions["names"]>["agents"]
+    titles: Map<string, string>
+  } = { locale: "en", agents: [], titles: new Map() }
   const coordinator = new BrowserActivityCoordinator({
     store,
     now: () => now,
     context: () => localContext,
-    copy: () => copy,
+    locale: () => labels.locale,
+    names: () => labels,
     push,
     installFirst,
     port: {
@@ -111,7 +114,7 @@ function setup(
     coordinator,
     sessions,
     localContext,
-    copy,
+    labels,
     show,
     store,
     shown,
@@ -235,11 +238,9 @@ describe("live browser Activity", () => {
     h.coordinator.stop()
     expect(h.close).toHaveBeenCalled()
   })
-  it("maps activation failure and input to localized generic bodies and honors category switches", async () => {
+  it("writes each category in the operator's language with what is asked, and honors category switches", async () => {
     const h = setup()
-    h.copy.completion = "תור הסתיים"
-    h.copy.failure = "תור נכשל"
-    h.copy.input = "הסוכן ממתין לתשובה שלכם"
+    h.labels.locale = "he"
     h.coordinator.start()
     await h.coordinator.setEnabled(true)
     h.coordinator.publish(h.store.ingest(event))
@@ -257,12 +258,14 @@ describe("live browser Activity", () => {
         type: "attention-requested",
         attentionKind: "permission",
         requestId: "private-id",
+        requestText: "Allow reading the invoices folder?",
+        requestMore: 2,
       })
     )
     expect(h.shown.map((payload) => payload.body)).toEqual([
-      "תור הסתיים",
-      "תור נכשל",
-      "הסוכן ממתין לתשובה שלכם",
+      "התור הסתיים",
+      "התור נכשל",
+      "נדרשת תשובה שלכם\n\u2068Allow reading the invoices folder?\u2069 ועוד 2",
     ])
     expect(JSON.stringify(h.shown)).not.toContain("private-id")
     h.coordinator.setCategory("completion", false)
@@ -323,17 +326,19 @@ describe("live browser Activity", () => {
   })
   it("delivers only new eligible leader arrivals and clicks focus then open the owning activity", async () => {
     const h = setup()
+    h.labels.agents = [{ id: "a", name: "Travel Planner" }]
+    h.labels.titles.set("t", "Lisbon trip in May")
     h.coordinator.start()
     await h.coordinator.setEnabled(true)
     const arrival = h.store.ingest({ ...event, message: "private secret" })!
     h.coordinator.publish(arrival)
     expect(h.shown).toEqual([
       {
-        title: "AOS",
-        body: "A turn finished",
+        title: "Travel Planner",
+        body: "Finished · \u2068Lisbon trip in May\u2069",
         icon: "/logo-adaptive.svg",
         timestamp: now,
-        tag: expect.stringMatching(/^aos-ui-/),
+        tag: sessionTag("a", "t"),
         renotify: false,
       },
     ])
@@ -349,6 +354,20 @@ describe("live browser Activity", () => {
     expect(h.focus.mock.invocationCallOrder[0]).toBeLessThan(
       h.open.mock.invocationCallOrder[0]!
     )
+  })
+  it.each([
+    ["a hidden Agent", { visibility: "hidden" as const }],
+    ["the creator", { role: "creator" as const }],
+  ])("names no Session of %s on the OS surface", async (_owner, withheld) => {
+    const h = setup()
+    h.labels.agents = [{ id: "a", name: "Secret Agent", ...withheld }]
+    h.labels.titles.set("t", "Secret Session")
+    h.coordinator.start()
+    await h.coordinator.setEnabled(true)
+    h.coordinator.publish(h.store.ingest(event)!)
+    expect(h.shown.map(({ title, body }) => ({ title, body }))).toEqual([
+      { title: "AOS", body: "Finished" },
+    ])
   })
   it("never delivers from a follower or from an ordinary peer message", async () => {
     const h = setup()

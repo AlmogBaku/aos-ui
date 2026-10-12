@@ -65,6 +65,8 @@ const activityScenarios: Record<
       type: "attention-requested",
       attentionKind: "question",
       requestId: "fixture-question-roadmap",
+      requestText: "Which quarter should the roadmap review start from?",
+      requestMore: 1,
     },
   ],
   permission: [
@@ -76,6 +78,7 @@ const activityScenarios: Record<
       type: "attention-requested",
       attentionKind: "permission",
       requestId: "fixture-permission-launch",
+      requestText: "Allow reading the launch checklist folder?",
     },
   ],
   resolution: [

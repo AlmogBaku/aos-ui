@@ -37,17 +37,21 @@ export function UnreadDot({ label }: { label: string }) {
   return <span className={styles.unreadDot} title={label} aria-hidden="true" />
 }
 
-function needsOperator(status: RowStatus | undefined) {
-  return (
-    status === "waiting-for-input" ||
-    status === "attention" ||
-    status === "failed"
-  )
+/** A muted Agent's dot: present, but in no status color. */
+export function QuietDot({ label }: { label: string }) {
+  return <span className={styles.statusDot} title={label} aria-hidden="true" />
+}
+
+/** The states a Session row shows; an Agent row carries a tile badge instead. */
+export type SessionRowStatus = Exclude<RowStatus, "active" | "attention">
+
+function needsOperator(status: SessionRowStatus | undefined) {
+  return status === "waiting-for-input" || status === "failed"
 }
 
 /**
- * A row shows one dot. A state that needs the operator (waiting for input,
- * attention, failed) outranks unread; unread outranks a run that is merely in
+ * A Session row shows one dot. A state that needs the operator (waiting for
+ * input, failed) outranks unread; unread outranks a run that is merely in
  * progress. The row's accessible name still states every state in full.
  */
 export function RowIndicators({
@@ -56,7 +60,7 @@ export function RowIndicators({
   unread,
   unreadLabel,
 }: {
-  status: RowStatus | undefined
+  status: SessionRowStatus | undefined
   statusLabel: string
   unread: boolean | undefined
   unreadLabel: string

@@ -5,7 +5,7 @@ import {
   RowIndicators,
   StatusDot,
   UnreadDot,
-  type RowStatus,
+  type SessionRowStatus,
 } from "./status-dots"
 
 afterEach(cleanup)
@@ -35,9 +35,8 @@ describe("UnreadDot", () => {
 })
 
 describe("RowIndicators", () => {
-  it.each<[RowStatus, string]>([
+  it.each<[SessionRowStatus, string]>([
     ["waiting-for-input", "Waiting for input"],
-    ["attention", "Needs attention"],
     ["failed", "Failed"],
   ])("lets a %s Session outrank its unread dot", (status, label) => {
     render(
@@ -52,7 +51,7 @@ describe("RowIndicators", () => {
     expect(screen.queryByTitle("Unread")).toBeNull()
   })
 
-  it.each<[RowStatus, string]>([
+  it.each<[SessionRowStatus, string]>([
     ["running", "Running"],
     ["idle", "Idle"],
   ])("shows the unread dot alone for a %s Session", (status, label) => {

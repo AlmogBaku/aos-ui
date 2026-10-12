@@ -1,7 +1,7 @@
 import type { BrowserPermission } from "./policy"
 
 export type BrowserNotificationPayload = {
-  title: "AOS"
+  title: string
   body: string
   icon: string
   timestamp: number

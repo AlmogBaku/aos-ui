@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { categoryOf } from "@harness-gw/sdk/protocol"
+import { categoryOf, type PushLocale } from "@harness-gw/sdk/protocol"
 import type { ActivityRecord } from "./activity"
 import type { ActivityStore } from "./store"
 import type { BrowserNotificationPort } from "./browser-port"
@@ -13,7 +13,10 @@ import {
   type BrowserPreferences,
 } from "./policy"
 import { deserializeActivity, serializeActivity } from "./serialization"
-import { notificationTag } from "./tag"
+import { isRosterAgent } from "@/runtime-adapters/agent-identity"
+import type { AgentSummary } from "@/runtime-adapters/contracts"
+import { formatNotification } from "./format"
+import { sessionTag } from "./tag"
 
 export interface ActivityBrowserPlatform {
   read(): string | null
@@ -30,7 +33,16 @@ export type BrowserActivityOptions = {
   port: BrowserNotificationPort
   platform: ActivityBrowserPlatform
   context(): ActivityContext
-  copy(): { completion: string; failure: string; input: string }
+  /** The operator's language, which the notification is written in. */
+  locale(): PushLocale
+  /**
+   * The Agents and Session titles this tab already shows. Only a rail Agent's
+   * names reach the OS surface, as the gateway's own notifications do.
+   */
+  names(): {
+    agents: readonly Pick<AgentSummary, "id" | "name" | "role" | "visibility">[]
+    titles: ReadonlyMap<string, string>
+  }
   now(): number
   open(id: string): Promise<boolean>
   onChange(): void
@@ -225,6 +237,14 @@ export class BrowserActivityCoordinator {
     this.#preferences.sound = enabled
     this.publish(undefined, true)
   }
+  /** A hidden or creator Agent's Session is never named; a draft keeps its rail name. */
+  #names({ agentId, sessionId }: { agentId: string; sessionId: string }) {
+    const { agents, titles } = this.#options.names()
+    const agent = agents.find(({ id }) => id === agentId)
+    return agent && isRosterAgent(agent)
+      ? { agentName: agent.name, sessionTitle: titles.get(sessionId) }
+      : {}
+  }
   #pushActive() {
     try {
       return this.#options.push?.active() ?? false
@@ -379,13 +399,21 @@ export class BrowserActivityCoordinator {
         return false
       const category = categoryOf(record.type)
       if (!category) return false
+      const { title, body } = formatNotification({
+        category,
+        ...this.#names(record),
+        ...(record.type === "attention-requested"
+          ? { requestText: record.requestText, requestMore: record.requestMore }
+          : {}),
+        locale: this.#options.locale(),
+      })
       const notification = port.show(
         {
-          title: "AOS",
-          body: this.#options.copy()[category],
+          title,
+          body,
           icon: "/logo-adaptive.svg",
           timestamp: Date.parse(record.occurredAt),
-          tag: notificationTag(record.agentId, record.sessionId, record.id),
+          tag: sessionTag(record.agentId, record.sessionId),
           renotify: false,
         },
         () => {

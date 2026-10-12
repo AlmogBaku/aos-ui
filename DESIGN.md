@@ -333,8 +333,22 @@ A navigation row shows at most one dot. Priority, highest first:
 
 The row's accessible name still lists every state; only the visual dot collapses.
 
-Row count pills (violet) were removed; the bell count replaces them as the sole
-derived unread count. Browsing the Activity drawer marks nothing read.
+**Agent tile badges.** On Agent rows (desktop rail and phone list), a count
+badge sits on the tile's top inline-end corner. It shows that Agent's counted
+Sessions, capped at 9+, in the same priority color as the bell (orange, red, or
+green). A running Agent with nothing counted shows a small breathing blue dot.
+The badge replaces the row-end dot on Agent rows; Session rows keep their single
+dot. The bell and tile badges share the same priority color rule. Row count pills
+(violet) were removed; counts now live on the tile corner, not on the row end.
+The row's accessible name lists the states, e.g. "Travel Planner, Trip planning,
+2 unread, 1 waiting for you". The badge number is centered by layout with
+tabular figures. Browsing the Activity drawer marks nothing read.
+
+**Muted Agent.** A muted Agent's badge keeps its own count in neutral gray
+(`--muted-foreground`), never a status color, and its running dot stays. A
+bell-off glyph sits beside the name, the tile does not hop (the hop is a motion
+alert), and the row's accessible name adds "Notifications muted". The row menu
+offers Mute or Unmute notifications only where the runtime can store the mute.
 
 ### Rich Output
 
@@ -421,6 +435,33 @@ derived unread count. Browsing the Activity drawer marks nothing read.
 - **Sound:** the in-tab audio cue is a brand asset — the elementary OS sound
   theme, released under the Unlicense, at `public/sounds/urgent.wav`. Sound is
   never the only notification channel; all states are legible without it.
+
+### Activity drawer
+
+**Character:** an inbox of Sessions, not a flat event history.
+
+- **Groups:** "Waiting for you" (Sessions expecting input), then "Unread".
+- **Rows:** each shows the Agent tile and name, a relative time, the Session
+  title, a status dot, the question on waiting rows, and "Turn failed" on failed
+  rows. The whole row opens the Session.
+- **Mark read:** clears one unread Session from the pane. Waiting rows have no
+  mark-read control; only answering the question clears waiting. Mark all read
+  is enabled only when some counted Session is unread and not waiting.
+- **Empty state:** "Nothing needs you right now."
+- **Notification settings:** a header button opens a settings view inside the
+  same drawer; Back returns to the inbox.
+- **Scope:** the bell, the inbox, and the Agent tile badges count only Sessions
+  whose Agent has a rail row (visible or draft). Read Sessions leave the pane.
+  Browsing marks nothing read.
+- **Muted group:** a muted Agent's Sessions are listed last under "Muted", with
+  rows like the others and a neutral dot. The bell does not count them; Mark all
+  read covers their unread rows, and only answering clears a waiting one.
+
+**Bell badge color.** The badge uses the status color of the highest state among
+counted Sessions: orange (warning) when any is waiting, else red (destructive)
+for a failure, else green (success) for unread. Running never colors it. The
+accessible name lists the states, e.g. "Activity, 4 unread, 1 waiting for you,
+1 failed".
 
 ### Conversation and Execution
 
@@ -549,6 +590,10 @@ assistant's answer.
   the waiting pair keeps its aside pose, and the status indicator still states
   either state. While the composer has focus, the tile and the running status
   dot rest the same way (pointer tracking continues), so typing stays fast.
+- **Bell ring:** when a Session newly starts waiting, the bell swings once
+  (about 0.7 s) at the in-tab chime moment, even with sound off. It does not
+  ring for the Session on screen, for re-sent gateway events, twice within 3 s,
+  or under reduced motion.
 
 **The Motion-Is-Optional Rule.** Motion may confirm a change, but the changed
 state must be legible without it. Do not make progress, errors, or focus depend

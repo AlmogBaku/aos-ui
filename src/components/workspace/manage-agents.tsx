@@ -22,7 +22,7 @@ import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import type {
   AgentCatalogEntry,
-  AgentVisibility,
+  AgentUpdate,
   WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
 import { WorkspaceAgentTile } from "./workspace-agent-tile"
@@ -50,12 +50,20 @@ export function ManageAgents({
 }) {
   const [entries, setEntries] = useState<AgentCatalogEntry[] | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
-  const [updateFailed, setUpdateFailed] = useState(false)
+  /** Which write last failed, so its message names what was not saved. */
+  const [updateFailed, setUpdateFailed] = useState<
+    "visibility" | "mute" | null
+  >(null)
   const [pending, setPending] = useState<string | null>(null)
   const lifetime = useRef<{ active: boolean; mutating: boolean } | null>(null)
   const generation = useRef(0)
   const copy = dictionary.agentManagement
-  const updateMessage = updateFailed ? copy.updateFailed : null
+  const updateMessage =
+    updateFailed === "mute"
+      ? copy.muteFailed
+      : updateFailed
+        ? copy.updateFailed
+        : null
 
   useEffect(() => {
     const scope = { active: true, mutating: false }
@@ -82,6 +90,7 @@ export function ManageAgents({
                     selectable: summary.visibility !== "hidden",
                     editable: false,
                     avatarEditable: false,
+                    muteEditable: false,
                   },
                 ]
               : []
@@ -133,7 +142,12 @@ export function ManageAgents({
   )
   const icons = useMemo(() => resolveAgentIcons(shownEntries), [shownEntries])
 
-  async function update(entry: AgentCatalogEntry, visibility: AgentVisibility) {
+  /** One write at a time, then the catalog this dialog and the rail read. */
+  async function update(
+    entry: AgentCatalogEntry,
+    write: AgentUpdate,
+    failure: "visibility" | "mute"
+  ) {
     const agentId = entry.summary.id
     const scope = lifetime.current
     if (
@@ -146,19 +160,13 @@ export function ManageAgents({
     scope.mutating = true
     generation.current += 1
     setPending(agentId)
-    setUpdateFailed(false)
+    setUpdateFailed(null)
     try {
-      // Hiding frees the Agent's icon; showing it again claims one no visible
-      // Agent shows. A runtime that cannot store avatars only moves visibility.
-      const patch = visibilityPatch(visibility, shownEntries)
-      await workspace.updateAgent(
-        agentId,
-        entry.avatarEditable ? patch : { visibility }
-      )
+      await workspace.updateAgent(agentId, write)
       if (!scope.active) return
       await onVisibilityChanged()
     } catch {
-      if (scope.active) setUpdateFailed(true)
+      if (scope.active) setUpdateFailed(failure)
     } finally {
       // Reconcile even rejected mutations: providers may publish on failure.
       // Keep stale values locked if this read fails, until a successful retry.
@@ -175,7 +183,7 @@ export function ManageAgents({
         if (next) {
           setEntries(null)
           setLoadFailed(false)
-          setUpdateFailed(false)
+          setUpdateFailed(null)
         }
         onOpenChange(next)
       }}
@@ -273,22 +281,42 @@ export function ManageAgents({
                       </bdi>
                     ) : null}
                   </div>
-                  {entry.editable && workspace.updateAgent ? (
-                    <div className="mt-2 flex min-h-11 items-center justify-between gap-4 text-sm sm:mt-0 sm:max-w-44 sm:gap-2">
-                      <span>{copy.showInWorkspace}</span>
-                      <Switch.Root
-                        checked={entry.visibility === "visible"}
-                        disabled={pending !== null || loadFailed}
-                        aria-label={`${copy.showInWorkspace}: ${entry.summary.name}`}
-                        onCheckedChange={(checked) =>
-                          void update(entry, checked ? "visible" : "hidden")
-                        }
-                        className="group inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring data-disabled:cursor-wait data-disabled:opacity-60"
-                      >
-                        <span className="relative h-6 w-10 rounded-full bg-muted ring-1 ring-border transition-colors group-data-checked:bg-primary motion-reduce:transition-none">
-                          <Switch.Thumb className="absolute start-0.5 top-0.5 size-5 rounded-full bg-background shadow-sm transition-transform motion-reduce:transition-none data-checked:translate-x-4 rtl:data-checked:-translate-x-4" />
-                        </span>
-                      </Switch.Root>
+                  {(entry.editable || entry.muteEditable) &&
+                  workspace.updateAgent ? (
+                    <div className="mt-2 grid sm:mt-0 sm:max-w-44">
+                      {entry.editable ? (
+                        <ManageSwitch
+                          label={copy.showInWorkspace}
+                          name={entry.summary.name}
+                          checked={entry.visibility === "visible"}
+                          disabled={pending !== null || loadFailed}
+                          onCheckedChange={(checked) => {
+                            const visibility = checked ? "visible" : "hidden"
+                            // Hiding frees the Agent's icon; showing it again
+                            // claims one no visible Agent shows. A runtime that
+                            // cannot store avatars only moves visibility.
+                            void update(
+                              entry,
+                              entry.avatarEditable
+                                ? visibilityPatch(visibility, shownEntries)
+                                : { visibility },
+                              "visibility"
+                            )
+                          }}
+                        />
+                      ) : null}
+                      {/* A hidden Agent keeps its mute for when it is shown. */}
+                      {entry.muteEditable ? (
+                        <ManageSwitch
+                          label={copy.notifications}
+                          name={entry.summary.name}
+                          checked={entry.summary.muted !== true}
+                          disabled={pending !== null || loadFailed}
+                          onCheckedChange={(checked) =>
+                            void update(entry, { muted: !checked }, "mute")
+                          }
+                        />
+                      ) : null}
                     </div>
                   ) : (
                     <p className="mt-2 text-xs text-muted-foreground sm:mt-0">
@@ -324,5 +352,37 @@ export function ManageAgents({
         ) : null}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** One labelled switch in an Agent's row, named for the Agent it changes. */
+function ManageSwitch({
+  label,
+  name,
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  label: string
+  name: string
+  checked: boolean
+  disabled: boolean
+  onCheckedChange: (checked: boolean) => void
+}) {
+  return (
+    <div className="flex min-h-11 items-center justify-between gap-4 text-sm sm:gap-2">
+      <span>{label}</span>
+      <Switch.Root
+        checked={checked}
+        disabled={disabled}
+        aria-label={`${label}: ${name}`}
+        onCheckedChange={onCheckedChange}
+        className="group inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring data-disabled:cursor-wait data-disabled:opacity-60"
+      >
+        <span className="relative h-6 w-10 rounded-full bg-muted ring-1 ring-border transition-colors group-data-checked:bg-primary motion-reduce:transition-none">
+          <Switch.Thumb className="absolute start-0.5 top-0.5 size-5 rounded-full bg-background shadow-sm transition-transform motion-reduce:transition-none data-checked:translate-x-4 rtl:data-checked:-translate-x-4" />
+        </span>
+      </Switch.Root>
+    </div>
   )
 }

@@ -164,6 +164,7 @@
 }
 
 .agentsPanel {
+  --badge-cutout: var(--sidebar);
   height: 100%;
   padding: 1rem 0.875rem 0.875rem;
 }
@@ -221,11 +222,19 @@
 }
 
 .agentButton:hover {
+  --badge-cutout: var(--muted);
   background: var(--muted);
 }
 
 .agentButton[aria-current="true"] {
+  --badge-cutout: var(--secondary);
   background: var(--secondary);
+}
+
+/* The tile's own box anchors its attention badge. */
+.agentTile {
+  position: relative;
+  display: grid;
 }
 
 .agentText {
@@ -248,6 +257,15 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Beside the name, so a muted Agent reads as muted without its badge. */
+.mutedMark {
+  flex: none;
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
+  margin-inline-start: 0.25rem;
+  color: var(--muted-foreground);
 }
 
 .agentDescription {

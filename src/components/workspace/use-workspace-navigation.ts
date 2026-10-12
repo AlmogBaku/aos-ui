@@ -34,6 +34,7 @@ import {
   agentStatusFromSessions,
   agentUnreadFromSessions,
 } from "@/lib/workspace-view-model"
+import { attentionLevel } from "@/lib/attention-level"
 import {
   buildWorkspacePathname,
   parseWorkspacePathname,
@@ -239,6 +240,7 @@ export function useWorkspaceNavigation({
     agents,
     setAgents,
     avatarEditableIds,
+    muteEditableIds,
     reloadCatalog,
     agentsLoading,
     setAgentsLoading,
@@ -1088,12 +1090,21 @@ export function useWorkspaceNavigation({
   const todos = todoSnapshotIsCurrent ? todoSnapshot.todos : emptyTodos
   const todoError = todoSnapshotIsCurrent ? todoSnapshot.error : null
 
-  const displayAgents = navigableAgents.map((agent) => ({
-    ...agent,
-    avatar: agentIcons.get(agent.id)?.token,
-    status: agentStatusFromSessions(agent, sessions),
-    unread: agentUnreadFromSessions(agent, sessions),
-  }))
+  const displayAgents = navigableAgents.map((agent) => {
+    const status = agentStatusFromSessions(agent, sessions)
+    return {
+      ...agent,
+      avatar: agentIcons.get(agent.id)?.token,
+      status,
+      muteEditable: muteEditableIds.includes(agent.id),
+      unread: agentUnreadFromSessions(agent, sessions),
+      // The Agent's own status knows its native activity too.
+      attention: attentionLevel(
+        sessions.filter(({ agentId }) => agentId === agent.id),
+        status === "running" || status === "active"
+      ),
+    }
+  })
   const selectedAgent =
     displayAgents.find((agent) => agent.id === selectedAgentId) ?? null
   const selectedDismissedTabs = new Set(
@@ -1596,6 +1607,14 @@ export function useWorkspaceNavigation({
     await refreshAfterVisibilityChange()
   }
 
+  /** A mute is the runtime's to store, like visibility; the roster re-reads. */
+  async function setAgentMuted(agentId: string, muted: boolean) {
+    if (!workspace.updateAgent)
+      throw new Error("Agent updates are unavailable from this provider")
+    await workspace.updateAgent(agentId, { muted })
+    await refreshAgentCatalog()
+  }
+
   function retryWorkspace() {
     setAgentError(null)
     setActionError(null)
@@ -1624,6 +1643,7 @@ export function useWorkspaceNavigation({
     openAgentBuilder,
     discardDraft,
     hideAgent,
+    setAgentMuted,
     refreshAfterVisibilityChange,
     retryWorkspace,
   })

@@ -8,6 +8,8 @@ export function getAgentCreator(agents: readonly AgentSummary[]) {
   return creators[0]
 }
 
-export function isRosterAgent(agent: AgentSummary) {
+export function isRosterAgent(
+  agent: Pick<AgentSummary, "role" | "visibility">
+) {
   return agent.role !== "creator" && agent.visibility !== "hidden"
 }
