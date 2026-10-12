@@ -1,4 +1,5 @@
 import { expect, type Page } from "./test"
+import { collapseInspector } from "./support/inspector"
 import { longPress } from "./support/long-press"
 
 const copy = {
@@ -81,6 +82,7 @@ export async function exerciseSessionTabs(page: Page, mobile: boolean) {
     return
   }
 
+  await collapseInspector(page)
   // A read Session's tab is named by its title alone; an unread one appends
   // the unread marker through an explicit label.
   await expect(

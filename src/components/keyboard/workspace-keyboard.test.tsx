@@ -77,6 +77,7 @@ describe("workspace keyboard discovery", () => {
   it("anchors Shift+F10's context menu inside the focused control", async () => {
     const user = userEvent.setup()
     renderShell()
+    await user.click(screen.getByRole("button", { name: "Hide Agent details" }))
     const contextMenu = vi.fn()
     const tab = screen.getByRole("tab", { name: "A" })
     tab.focus()

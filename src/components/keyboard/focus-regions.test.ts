@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   createFocusRegionCoordinator,
+  focusRegion,
   getVisibleFocusRegions,
   observeKeyboardRegions,
 } from "./focus-regions"
@@ -32,6 +33,25 @@ function region(name: string, hidden = false) {
 }
 
 describe("workspace focus regions", () => {
+  it("focuses a named region's first reachable control, and reports when none is", () => {
+    const sessions = region("sessions")
+    const inspector = region("inspector")
+
+    expect(focusRegion(document.body, "inspector")).toBe(true)
+    expect(inspector.first).toHaveFocus()
+
+    // Controls behind an inert ancestor cannot take focus, so the caller can
+    // fall back to the pane that now holds the Sessions.
+    const strip = document.createElement("div")
+    strip.setAttribute("inert", "")
+    strip.append(sessions.first, sessions.second)
+    sessions.element.append(strip)
+    sessions.element.removeAttribute("tabindex")
+    expect(focusRegion(document.body, "sessions")).toBe(false)
+    expect(inspector.first).toHaveFocus()
+    expect(focusRegion(document.body, "missing")).toBe(false)
+  })
+
   it("skips hidden and inert regions while preserving document order", () => {
     const agents = region("agents")
     region("transcript", true)

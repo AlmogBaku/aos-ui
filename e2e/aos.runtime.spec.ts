@@ -1,4 +1,5 @@
 import { expandByKeyboard } from "./disclosure"
+import { collapseInspector } from "./support/inspector"
 import { expect, test, type Page } from "./test"
 
 /**
@@ -1241,6 +1242,7 @@ test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, st
   })
   await page.goto("/")
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  await collapseInspector(page)
   const model = page.getByRole("combobox", { name: "Choose model" })
   await expect(model).toContainText("Default")
 

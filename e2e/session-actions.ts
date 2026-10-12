@@ -1,6 +1,7 @@
 import type { Locator } from "@playwright/test"
 
 import { expect, type Page } from "./test"
+import { collapseInspector, expandInspector } from "./support/inspector"
 import { longPress } from "./support/long-press"
 
 type SessionActionsCopy = {
@@ -102,6 +103,11 @@ async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {
   const tab = (title: string) =>
     page.getByRole("tab", { name: title, exact: true })
 
+  // The open inspector lists the Sessions in place of the tab strip, so the
+  // tab half of each action runs with it collapsed and the row half with it
+  // shown.
+  await collapseInspector(page)
+
   // A right click on a background tab offers the same items as its row.
   await tab("Launch review").click({ button: "right" })
   for (const item of [
@@ -117,11 +123,21 @@ async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {
   await renameThroughDialog(page, copy, "Launch review", "Launch review 2")
   await expect(tab("Launch review")).toHaveCount(0)
   await expect(tab("Launch review 2")).toBeVisible()
+
+  // Archiving an open Session closes its tab and keeps the selection put.
+  await tab("Competitive scan").click({ button: "right" })
+  await menuItem(page, copy.archive).click()
+  await expect(tab("Competitive scan")).toHaveCount(0)
+  await expect(tab("Market brief")).toHaveAttribute("aria-selected", "true")
+
+  await expandInspector(page)
+  // The rename reached the Session's row as well as its tab.
   await expect(
     openSessions.getByRole("button", { name: rowName(copy, "Launch review 2") })
   ).toBeVisible()
 
-  // Pinning a History row opens it: it leads Open sessions and gains a tab.
+  // Pinning a History row opens it: it leads Open sessions, and its tab is
+  // checked once the strip is back.
   await rowMenu(history, copy, "Customer interviews").click()
   await menuItem(page, copy.pin).click()
   await expect(rows(openSessions, copy).first()).toHaveAccessibleName(
@@ -130,13 +146,8 @@ async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {
   await expect(
     history.getByRole("button", { name: rowName(copy, "Customer interviews") })
   ).toHaveCount(0)
-  await expect(tab(`Customer interviews, ${copy.pinned}`)).toBeVisible()
 
-  // Archiving an open Session closes its tab and keeps the selection put.
-  await tab("Competitive scan").click({ button: "right" })
-  await menuItem(page, copy.archive).click()
-  await expect(tab("Competitive scan")).toHaveCount(0)
-  await expect(tab("Market brief")).toHaveAttribute("aria-selected", "true")
+  // The archived Session waits under Archived until it is restored.
   await expect(archived).toBeVisible()
   const archivedRow = archived.getByText("Competitive scan", { exact: true })
   await expect(archivedRow).toBeHidden()
@@ -146,13 +157,11 @@ async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {
   await expect(menuItem(page, copy.unarchive)).toBeVisible()
   await menuItem(page, copy.unarchive).click()
   await expect(archived).toHaveCount(0)
-  // The Session is recent enough to be active again, so it reopens its tab.
   await expect(
     openSessions.getByRole("button", {
       name: rowName(copy, "Competitive scan"),
     })
   ).toBeVisible()
-  await expect(tab("Competitive scan")).toBeVisible()
 
   // Deleting asks first, and only the confirmation removes the Session.
   const pricing = history.getByRole("button", {
@@ -169,6 +178,12 @@ async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {
   await menuItem(page, copy.delete).click()
   await confirm.getByRole("button", { name: copy.deleteConfirm }).click()
   await expect(pricing).toHaveCount(0)
+
+  await collapseInspector(page)
+  // The pinned Session gained a tab, and the restored one is recent enough to
+  // be active again, so it reopened its tab.
+  await expect(tab(`Customer interviews, ${copy.pinned}`)).toBeVisible()
+  await expect(tab("Competitive scan")).toBeVisible()
 
   // Archiving the active Session hands the selection to its neighbor without
   // opening a replacement draft.

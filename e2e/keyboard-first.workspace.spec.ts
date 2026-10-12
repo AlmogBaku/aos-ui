@@ -1,9 +1,10 @@
 import { expect, test, type Page } from "./test"
 import { holdsFocus } from "./support/focus"
+import { collapseInspector, expandInspector } from "./support/inspector"
 
 async function openWorkspace(page: Page) {
   await page.goto("/en")
-  await expect(page.getByRole("tablist", { name: "Sessions" })).toBeVisible()
+  await collapseInspector(page)
   await expect(page.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
     "aria-selected",
     "true"
@@ -62,7 +63,9 @@ test("Commands search and execute, Mod+/ opens the shortcut reference, Escape cl
     page.getByRole("tab", { name: "Launch review" })
   ).toHaveAttribute("aria-selected", "true")
 
-  // Only the real desktop layout shows every region F6 visits.
+  // Only the real desktop layout shows every region F6 visits. The tab strip
+  // and the inspector's Session list take turns, so the hop into the
+  // inspector is taken once it is shown again.
   await page.getByRole("button", { name: /^Aster,/ }).focus()
   await page.keyboard.press("F6")
   await expect
@@ -75,6 +78,8 @@ test("Commands search and execute, Mod+/ opens the shortcut reference, Escape cl
   await expect(input).not.toBeFocused()
   await page.keyboard.press("F6")
   await expect(input).toBeFocused()
+  await expandInspector(page)
+  await input.focus()
   await page.keyboard.press("F6")
   await expect
     .poll(() =>

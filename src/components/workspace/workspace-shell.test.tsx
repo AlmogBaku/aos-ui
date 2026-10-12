@@ -128,6 +128,17 @@ function agentRow(name: string | RegExp, agentsLabel = en.workspace.agents) {
   ).getByRole("button", { name })
 }
 
+/** Collapses the desktop inspector so the Session tab strip becomes reachable. */
+async function collapseInspector(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    screen.getByRole("button", {
+      name: new RegExp(
+        `^(${en.actions.hideAgentDetails}|${he.actions.hideAgentDetails})$`
+      ),
+    })
+  )
+}
+
 const olderSessions: WorkspaceSession[] = [
   {
     sessionId: "thread-pricing",
@@ -300,6 +311,7 @@ describe("WorkspaceShell", () => {
     const { rerender, props } = renderShell({})
     let inspector = screen.getByRole("complementary", { name: "Agent details" })
     expect(inspector).toBeVisible()
+    expect(screen.queryByRole("tablist", { name: "Sessions" })).toBeNull()
 
     rerender(
       <WorkspaceShell
@@ -312,6 +324,23 @@ describe("WorkspaceShell", () => {
     )
     inspector = screen.getByRole("complementary", { name: "Output preview" })
     expect(within(inspector).getByText("Artifact preview body")).toBeVisible()
+    // The pane no longer lists the Sessions, so the tabs return, and the
+    // view's own close control stands in for the inspector toggle.
+    expect(
+      screen.getByRole("tablist", { name: "Sessions" })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Hide Agent details" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Show Agent details" })
+    ).toBeNull()
+
+    rerender(<WorkspaceShell {...props} />)
+    expect(screen.queryByRole("tablist", { name: "Sessions" })).toBeNull()
+    expect(
+      screen.getByRole("complementary", { name: "Agent details" })
+    ).toBeInTheDocument()
   })
 
   it("mounts the side panel once in the drawer on a narrow screen, not in the inspector", () => {
@@ -357,9 +386,14 @@ describe("WorkspaceShell", () => {
     expect(screen.getAllByText("Active").length).toBeGreaterThan(0)
   })
 
-  it.each([true, false])(
-    "returns focused Undo to a safe target at exactly 8 seconds (active tab: %s)",
-    (hasActiveTab) => {
+  it.each([
+    { hasActiveTab: true, inspectorOpen: false },
+    { hasActiveTab: false, inspectorOpen: false },
+    // The inspector lists the Sessions, so the inert tab cannot take focus.
+    { hasActiveTab: true, inspectorOpen: true },
+  ])(
+    "returns focused Undo to a safe target at exactly 8 seconds (active tab: $hasActiveTab, inspector open: $inspectorOpen)",
+    ({ hasActiveTab, inspectorOpen }) => {
       vi.useFakeTimers()
       const { result } = renderHook(() => useSessionTabUndo())
       act(() =>
@@ -375,13 +409,20 @@ describe("WorkspaceShell", () => {
         activeThreadId: hasActiveTab ? "thread-market" : null,
         tabUndo: { title: result.current.pending!.title, onUndo: vi.fn() },
       })
+      // Collapse the inspector with fireEvent so fake timers don't interfere.
+      if (!inspectorOpen)
+        act(() => {
+          fireEvent.click(
+            screen.getByRole("button", { name: en.actions.hideAgentDetails })
+          )
+        })
       screen.getByRole("button", { name: "Undo" }).focus()
       act(() => vi.advanceTimersByTime(7999))
       expect(screen.getByRole("button", { name: "Undo" })).toHaveFocus()
       act(() => vi.advanceTimersByTime(1))
       rerender(<WorkspaceShell {...props} tabUndo={null} />)
       expect(
-        hasActiveTab
+        hasActiveTab && !inspectorOpen
           ? screen.getByRole("tab", { name: "Market brief" })
           : document.getElementById("workspace-conversation-panel")
       ).toHaveFocus()
@@ -393,6 +434,7 @@ describe("WorkspaceShell", () => {
     const { props, rerender } = renderShell({
       openSessions: [{ ...openSessions[0], canClose: true }],
     })
+    await collapseInspector(user)
     await user.click(
       screen.getByRole("button", { name: "Close session: Market brief" })
     )
@@ -418,6 +460,7 @@ describe("WorkspaceShell", () => {
       })),
       onCloseSession: () => switched,
     })
+    await collapseInspector(user)
     await user.click(
       screen.getByRole("button", { name: "Close session: Market brief" })
     )
@@ -441,7 +484,8 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("tab", { name: "Launch review" })).toHaveFocus()
   })
 
-  it("shows provider unread state beside run status in Agent and Session navigation", () => {
+  it("shows provider unread state beside run status in Agent and Session navigation", async () => {
+    const user = userEvent.setup()
     renderShell({
       agents: [{ ...agents[0]!, unread: true }, agents[1]!],
       openSessions: [
@@ -456,6 +500,7 @@ describe("WorkspaceShell", () => {
       })
     ).toBeVisible()
 
+    await collapseInspector(user)
     expect(
       screen.getByRole("tab", { name: "Market brief, Unread" })
     ).toBeVisible()
@@ -464,7 +509,8 @@ describe("WorkspaceShell", () => {
     expect(screen.queryByText(/unread/i)).toBeNull()
   })
 
-  it("names a pinned tab, and names both states when it is unread too", () => {
+  it("names a pinned tab, and names both states when it is unread too", async () => {
+    const user = userEvent.setup()
     renderShell({
       openSessions: [
         { ...openSessions[0]!, pinned: true, unread: true },
@@ -473,6 +519,7 @@ describe("WorkspaceShell", () => {
       ],
     })
 
+    await collapseInspector(user)
     expect(
       screen.getByRole("tab", { name: "Market brief, Unread, Pinned" })
     ).toBeVisible()
@@ -482,7 +529,8 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("tab", { name: "Competitive scan" })).toBeVisible()
   })
 
-  it("names both the operator need and the unread state of a Session and its Agent", () => {
+  it("names both the operator need and the unread state of a Session and its Agent", async () => {
+    const user = userEvent.setup()
     const scan: WorkspaceSession = { ...openSessions[2]!, unread: true }
     const sessions = [...openSessions.slice(0, 2), scan]
     renderShell({
@@ -519,6 +567,7 @@ describe("WorkspaceShell", () => {
         name: "Open session: Competitive scan, Status: Waiting for input, Unread",
       })
     ).toBeVisible()
+    await collapseInspector(user)
     expect(
       screen.getByRole("tab", { name: "Competitive scan, Unread" })
     ).toBeVisible()
@@ -572,9 +621,11 @@ describe("WorkspaceShell", () => {
     expect(screen.getAllByText("Demo workspace")).toHaveLength(2)
   })
 
-  it("marks the active Session tab selected and keyboard-reachable", () => {
+  it("marks the active Session tab selected and keyboard-reachable", async () => {
+    const user = userEvent.setup()
     renderShell()
 
+    await collapseInspector(user)
     const tablist = screen.getByRole("tablist", { name: "Sessions" })
     const activeTab = within(tablist).getByRole("tab", {
       name: "Market brief",
@@ -736,7 +787,8 @@ describe("WorkspaceShell", () => {
     })
   })
 
-  it("keeps new-session actions available with no provider Sessions", () => {
+  it("keeps new-session actions available with no provider Sessions", async () => {
+    const user = userEvent.setup()
     const onCreateSession = vi.fn()
     renderShell({
       openSessions: [],
@@ -759,16 +811,17 @@ describe("WorkspaceShell", () => {
 
     const sessionActions = document.querySelector("[data-session-actions]")
     expect(sessionActions).not.toBeNull()
-    const tabBarAction = within(sessionActions as HTMLElement).getByRole(
-      "button",
-      { name: "New session" }
-    )
     const inspectorAction = within(
       screen.getByRole("complementary", { name: "Agent details" })
     ).getByRole("button", { name: "New session" })
 
-    fireEvent.click(tabBarAction)
     fireEvent.click(inspectorAction)
+    await collapseInspector(user)
+    const tabBarAction = within(sessionActions as HTMLElement).getByRole(
+      "button",
+      { name: "New session" }
+    )
+    fireEvent.click(tabBarAction)
     expect(onCreateSession).toHaveBeenNthCalledWith(1, "agent-aster")
     expect(onCreateSession).toHaveBeenNthCalledWith(2, "agent-aster")
   })
@@ -809,6 +862,7 @@ describe("WorkspaceShell", () => {
       })),
       onCloseSession,
     })
+    await collapseInspector(user)
     await user.click(
       screen.getByRole("button", { name: "Session actions: Market brief" })
     )
@@ -834,6 +888,7 @@ describe("WorkspaceShell", () => {
       onDeleteSession: vi.fn(),
     })
 
+    await collapseInspector(user)
     await user.click(tabSessionMenu("Market brief"))
     const items = await screen.findAllByRole("menuitem")
     expect(items.map((item) => item.textContent)).toEqual([
@@ -850,6 +905,7 @@ describe("WorkspaceShell", () => {
     const onRenameSession = vi.fn()
     renderShell({ sessionActions: allSessionActions, onRenameSession })
 
+    await collapseInspector(user)
     await user.click(tabSessionMenu("Market brief"))
     await user.click(await screen.findByRole("menuitem", { name: "Rename" }))
 
@@ -869,6 +925,7 @@ describe("WorkspaceShell", () => {
     const onDeleteSession = vi.fn()
     renderShell({ sessionActions: allSessionActions, onDeleteSession })
 
+    await collapseInspector(user)
     async function openDelete() {
       await user.click(tabSessionMenu("Market brief"))
       await user.click(await screen.findByRole("menuitem", { name: "Delete" }))
@@ -915,6 +972,7 @@ describe("WorkspaceShell", () => {
     const onSetSessionPinned = vi.fn()
     renderShell({ sessionActions: allSessionActions, onSetSessionPinned })
 
+    await collapseInspector(user)
     fireEvent.contextMenu(screen.getByRole("tab", { name: "Launch review" }), {
       clientX: 24,
       clientY: 12,
@@ -926,7 +984,8 @@ describe("WorkspaceShell", () => {
     )
   })
 
-  it("only exposes close controls for manually closable sessions", () => {
+  it("only exposes close controls for manually closable sessions", async () => {
+    const user = userEvent.setup()
     renderShell({
       openSessions: [
         openSessions[0],
@@ -935,6 +994,7 @@ describe("WorkspaceShell", () => {
       ],
     })
 
+    await collapseInspector(user)
     expect(
       screen.queryByRole("button", {
         name: "Close session: Market brief",
@@ -952,6 +1012,7 @@ describe("WorkspaceShell", () => {
     const onOpenSession = vi.fn()
     renderShell({ onOpenSession })
 
+    await collapseInspector(user)
     const market = screen.getByRole("tab", { name: "Market brief" })
     const launch = screen.getByRole("tab", { name: "Launch review" })
     market.focus()
@@ -963,9 +1024,11 @@ describe("WorkspaceShell", () => {
     expect(onOpenSession).toHaveBeenCalledWith("thread-launch")
   })
 
-  it("keeps the first session keyboard-reachable when no open tab is active", () => {
+  it("keeps the first session keyboard-reachable when no open tab is active", async () => {
+    const user = userEvent.setup()
     renderShell({ activeThreadId: null })
 
+    await collapseInspector(user)
     expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
       "tabindex",
       "0"
@@ -977,6 +1040,7 @@ describe("WorkspaceShell", () => {
     const onOpenSession = vi.fn()
     renderShell({ locale: "he", dictionary: he, onOpenSession })
 
+    await collapseInspector(user)
     const market = screen.getByRole("tab", { name: "Market brief" })
     const scan = screen.getByRole("tab", { name: "Competitive scan" })
     market.focus()
@@ -1000,6 +1064,7 @@ describe("WorkspaceShell", () => {
       onCloseSession,
     })
 
+    await collapseInspector(user)
     await user.click(
       screen.getByRole("button", {
         name: "Close session: Launch review",
@@ -1027,19 +1092,46 @@ describe("WorkspaceShell", () => {
     expect(within(inspector).queryByText(/tools/i)).not.toBeInTheDocument()
   })
 
+  it("exposes the Session tabs only while the inspector is collapsed", async () => {
+    const user = userEvent.setup()
+    renderShell()
+    // The inspector lists the Sessions, so the strip is out of reach and the
+    // conversation is a region named by its Session rather than a tab panel.
+    expect(screen.queryByRole("tablist", { name: "Sessions" })).toBeNull()
+    expect(
+      screen.getByRole("region", { name: "Market brief" })
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Hide Agent details" }))
+    expect(
+      screen.queryByRole("complementary", { name: "Agent details" })
+    ).toBeNull()
+    expect(
+      screen.getByRole("tablist", { name: "Sessions" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("tabpanel", { name: "Market brief" })
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Show Agent details" }))
+    expect(screen.queryByRole("tablist", { name: "Sessions" })).toBeNull()
+    expect(
+      screen.getByRole("complementary", { name: "Agent details" })
+    ).toBeInTheDocument()
+  })
+
   it("keeps the collapsed desktop inspector across a remount, with the mobile identity intact", async () => {
     const user = userEvent.setup()
     const firstRender = renderShell()
-    const inspector = screen.getByRole("complementary", {
-      name: "Agent details",
-    })
     const hideInspector = screen.getByRole("button", {
       name: "Hide Agent details",
     })
     expect(hideInspector).toHaveAttribute("aria-expanded", "true")
 
     await user.click(hideInspector)
-    expect(inspector).toHaveAttribute("hidden")
+    expect(
+      screen.queryByRole("complementary", { name: "Agent details" })
+    ).toBeNull()
 
     firstRender.unmount()
     renderShell()
@@ -1050,8 +1142,8 @@ describe("WorkspaceShell", () => {
       ).toHaveAttribute("aria-expanded", "false")
     )
     expect(
-      document.getElementById("workspace-agent-inspector")
-    ).toHaveAttribute("hidden")
+      screen.queryByRole("complementary", { name: "Agent details" })
+    ).toBeNull()
     expect(
       screen.getByRole("group", {
         name: /Aster, Market brief, Status: Running/,

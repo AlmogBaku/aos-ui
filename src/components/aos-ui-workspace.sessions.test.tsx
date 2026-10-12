@@ -44,6 +44,13 @@ vi.mock("react-router", () => import("./test-utils/window-router"))
 
 resetWorkspaceBetweenTests()
 
+/** Collapses the desktop inspector so the Session tab strip becomes reachable. */
+async function collapseInspector(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    screen.getByRole("button", { name: en.actions.hideAgentDetails })
+  )
+}
+
 const useMarketWorkspace = () =>
   useControlledWorkspace({ initialThreadId: "thread-aster-market" })
 /** The public fixture demo's runtime, which lists no creator. */
@@ -341,6 +348,7 @@ describe("reversible local Session tabs", () => {
   it("returns focus to the restored tab after Undo", async () => {
     const user = userEvent.setup()
     renderWorkspace(useMarketWorkspace)
+    await collapseInspector(user)
     await user.click(
       await screen.findByRole("button", { name: "Close session: Market brief" })
     )
@@ -443,7 +451,7 @@ describe("artifact Session scope", () => {
       artifacts,
     }))
 
-    await screen.findByRole("tab", { name: "Market brief" })
+    await screen.findByRole("complementary", { name: "Agent details" })
     await waitFor(() => expect(reads.length).toBeGreaterThan(0))
 
     // The switch a tab performs, driven through the runtime that owns it.

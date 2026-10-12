@@ -10,15 +10,20 @@ Implementation invariants:
   on desktop. Mobile is an edge-to-edge, viewport-filling workspace with compact
   system-style chrome.
 - Keep the conversation as the dominant surface.
-- Render Sessions as real tabs with an active underline on desktop. On mobile,
-  hide the tab strip and expose multi-Session navigation through the Agent and
-  Session drawer.
+- On desktop, Sessions switch in the inspector's Open sessions list while the
+  inspector is open, and as real tabs with an active underline while it is
+  collapsed. The strip and the inspector trade places in one short motion, and
+  one toggle rides the conversation's top-end edge: in the strip's end slot
+  while tabs show, beside the inspector while they hide. On mobile, hide the
+  tab strip and expose multi-Session navigation through the Agent and Session
+  drawer.
 - Use the temporary AOS placeholder mark at small scale and the violet/teal palette sparingly.
 - Give every primary Agent a persistent, distinctive icon and a separate status indicator.
 - Keep the inspector limited to Agent identity, status, description, and
   Sessions. An MCP App view in the side panel may temporarily take its place;
-  returning the view to its message restores the Agent inspector. Narrow
-  layouts use the established focus-managed drawer.
+  while it does, the tabs return and the view's own close control stands in
+  for the toggle; returning the view to its message restores the Agent
+  inspector. Narrow layouts use the established focus-managed drawer.
 - A selected `New Agent` draft shows neither the Session tab strip nor the
   inspector; a `Discard draft` control takes the tab strip's place.
 - Do not add department navigation, window traffic lights, dashboard cards, or ornamental effects.

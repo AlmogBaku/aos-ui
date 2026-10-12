@@ -1,10 +1,15 @@
 import { expect, test } from "./test"
 
+const ready = (page: import("./test").Page) =>
+  expect(
+    page.getByRole("complementary", { name: "Agent details" })
+  ).toBeVisible()
+
 test("an MCP App renders through the double frame, talks to the host, and enters full screen and returns inline three ways", async ({
   page,
 }) => {
   await page.goto("/en")
-  await expect(page.getByRole("tablist")).toBeVisible()
+  await ready(page)
   await page
     .getByRole("textbox", { name: "Message input" })
     .fill("Show me the mcp app")
@@ -56,7 +61,7 @@ test("the artifact view renders report.pdf, preview.png, test.html, pip, and dow
   page,
 }) => {
   await page.goto("/en")
-  await expect(page.getByRole("tablist")).toBeVisible()
+  await ready(page)
 
   // Helper: send a message and wait for the run to finish.
   const send = async (text: string) => {

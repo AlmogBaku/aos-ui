@@ -591,9 +591,9 @@ type SessionTabsProps = Pick<
   | "threadListRuntime"
   | "sessionActions"
 > & {
-  inspectorOpen: boolean
-  onToggleInspector: () => void
   sessionMenu: SessionRowMenuHandlers
+  /** The inspector lists the Sessions, so the strip is out of reach. */
+  replaced: boolean
 }
 
 function SessionTabs({
@@ -609,8 +609,7 @@ function SessionTabs({
   threadListRuntime,
   sessionActions,
   sessionMenu,
-  inspectorOpen,
-  onToggleInspector,
+  replaced,
 }: SessionTabsProps) {
   const tabRefs = useRef(new Map<string, HTMLButtonElement>())
   const [hoveredThreadId, setHoveredThreadId] = useState<string | null>(null)
@@ -699,7 +698,11 @@ function SessionTabs({
   const menuCopy = sessionRowMenuCopy(dictionary)
 
   return (
-    <div className={styles.tabBar}>
+    <div
+      className={styles.tabBar}
+      aria-hidden={replaced || undefined}
+      inert={replaced ? true : undefined}
+    >
       <div
         className={styles.tabViewport}
         data-tab-viewport
@@ -880,34 +883,6 @@ function SessionTabs({
           />
         ) : null}
       </div>
-      <Button
-        className={styles.desktopInspectorToggle}
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={
-          inspectorOpen
-            ? dictionary.actions.hideAgentDetails
-            : dictionary.actions.showAgentDetails
-        }
-        aria-controls="workspace-agent-inspector"
-        aria-expanded={inspectorOpen}
-        onClick={onToggleInspector}
-      >
-        {inspectorOpen ? (
-          <PanelRightClose
-            style={{
-              transform: locale === "he" ? "scaleX(-1)" : undefined,
-            }}
-          />
-        ) : (
-          <PanelRightOpen
-            style={{
-              transform: locale === "he" ? "scaleX(-1)" : undefined,
-            }}
-          />
-        )}
-      </Button>
     </div>
   )
 }
@@ -1215,6 +1190,7 @@ export function WorkspaceShell({
     name: string
   } | null>(null)
   const [desktopLayout, setDesktopLayout] = useState(false)
+  const [artifactResizing, setArtifactResizing] = useState(false)
   const storedInspectorOpen = useSyncExternalStore(
     subscribeToInspectorPreference,
     getInspectorPreference,
@@ -1232,6 +1208,10 @@ export function WorkspaceShell({
   const agentDrawerTriggerRef = useRef<HTMLButtonElement>(null)
   const mobileNavigatorOpen = mobileNavigator.view !== "closed"
   const artifactDrawerOpen = sidePanelOpen && !desktopLayout
+  // While the inspector lists the Agent's Sessions, it stands in for the tab
+  // strip on desktop; an App view in its place brings the tabs back.
+  const inspectorShowsSessions =
+    inspectorAvailable && desktopInspectorOpen && !sidePanelOpen
   const modalDrawerOpen =
     mobileNavigatorOpen || activityOpen || artifactDrawerOpen
   useEffect(() => {
@@ -1297,10 +1277,15 @@ export function WorkspaceShell({
     return () => {
       if (!node.contains(document.activeElement)) return
       const shell = node.closest("section")
+      const selectedTab = shell?.querySelector<HTMLElement>(
+        '[role="tab"][aria-selected="true"]'
+      )
+      // While the inspector lists the Sessions the strip is inert, and an
+      // inert tab cannot take focus.
       const target =
-        shell?.querySelector<HTMLElement>(
-          '[role="tab"][aria-selected="true"]'
-        ) ?? shell?.querySelector<HTMLElement>("#workspace-conversation-panel")
+        selectedTab && !selectedTab.closest("[inert]")
+          ? selectedTab
+          : shell?.querySelector<HTMLElement>("#workspace-conversation-panel")
       target?.focus()
     }
   }, [])
@@ -1394,6 +1379,7 @@ export function WorkspaceShell({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault()
       event.currentTarget.setPointerCapture(event.pointerId)
+      setArtifactResizing(true)
       resizeArtifactFromPointer(event.clientX)
     },
     [resizeArtifactFromPointer]
@@ -1533,6 +1519,8 @@ export function WorkspaceShell({
         className={styles.shell}
         data-inspector-open={effectiveInspectorOpen ? "true" : "false"}
         data-artifact-viewer-open={sidePanelOpen ? "true" : "false"}
+        data-tabs-replaced={inspectorShowsSessions ? "true" : undefined}
+        data-artifact-resizing={artifactResizing ? "true" : undefined}
         data-navigation-hidden={navigationHidden ? "true" : undefined}
         dir={getLocaleDirection(locale)}
         style={
@@ -1662,24 +1650,54 @@ export function WorkspaceShell({
                 threadListRuntime={threadListRuntime}
                 sessionActions={sessionActions}
                 sessionMenu={sessionMenu}
-                inspectorOpen={effectiveInspectorOpen}
-                onToggleInspector={
-                  sidePanelOpen && onCloseSidePanel
-                    ? onCloseSidePanel
-                    : toggleDesktopInspector
-                }
+                replaced={inspectorShowsSessions}
               />
             </div>
           ) : null}
+          {/* The one Sessions-pane toggle rides the conversation's end edge, so it
+              sits beside the inspector and travels with it. An App view in the
+              pane brings its own close control instead. */}
+          {inspectorAvailable && !sidePanelOpen ? (
+            <Button
+              className={styles.desktopInspectorToggle}
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={
+                effectiveInspectorOpen
+                  ? dictionary.actions.hideAgentDetails
+                  : dictionary.actions.showAgentDetails
+              }
+              aria-controls="workspace-agent-inspector"
+              aria-expanded={effectiveInspectorOpen}
+              onClick={toggleDesktopInspector}
+            >
+              {effectiveInspectorOpen ? (
+                <PanelRightClose
+                  style={{
+                    transform: locale === "he" ? "scaleX(-1)" : undefined,
+                  }}
+                />
+              ) : (
+                <PanelRightOpen
+                  style={{
+                    transform: locale === "he" ? "scaleX(-1)" : undefined,
+                  }}
+                />
+              )}
+            </Button>
+          ) : null}
           {creatorNotice ? (
-            <div className="px-4 pt-3">
+            <div className={cn("px-4 pt-3", styles.conversationNotice)}>
               <SystemNotice tone="info" title={creatorNotice} locale={locale} />
             </div>
           ) : null}
           {/* The ask persists until answered, so it sits above the conversation
               instead of over the composer. */}
           {!navigationHidden && !modalDrawerOpen ? (
-            <ActivityAsk dictionary={dictionary} settings={browserSettings} />
+            <div className={styles.conversationNotice}>
+              <ActivityAsk dictionary={dictionary} settings={browserSettings} />
+            </div>
           ) : null}
           <main
             className={styles.conversation}
@@ -1689,8 +1707,11 @@ export function WorkspaceShell({
             <div
               className={styles.conversationPanel}
               id="workspace-conversation-panel"
-              role="tabpanel"
-              aria-labelledby={activeTabId}
+              role={inspectorShowsSessions ? "region" : "tabpanel"}
+              aria-labelledby={inspectorShowsSessions ? undefined : activeTabId}
+              aria-label={
+                inspectorShowsSessions ? activeSession?.title : undefined
+              }
               tabIndex={-1}
             >
               {children}
@@ -1709,9 +1730,13 @@ export function WorkspaceShell({
                 ? (sidePanelLabel ?? dictionary.workspace.agentDetails)
                 : dictionary.workspace.agentDetails
             }
-            aria-hidden={modalDrawerOpen || undefined}
-            inert={modalDrawerOpen ? true : undefined}
-            hidden={!effectiveInspectorOpen}
+            aria-hidden={
+              modalDrawerOpen || !effectiveInspectorOpen || undefined
+            }
+            inert={
+              modalDrawerOpen || !effectiveInspectorOpen ? true : undefined
+            }
+            data-collapsed={effectiveInspectorOpen ? undefined : "true"}
           >
             {sidePanelOpen ? (
               <div
@@ -1731,6 +1756,7 @@ export function WorkspaceShell({
                 onKeyDown={onArtifactResizeKeyDown}
                 onPointerDown={onArtifactResizePointerDown}
                 onPointerMove={onArtifactResizePointerMove}
+                onLostPointerCapture={() => setArtifactResizing(false)}
               />
             ) : null}
             {sidePanelOpen && desktopLayout && sidePanel ? (
