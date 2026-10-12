@@ -112,7 +112,7 @@ An independently launched OpenCode server registers the same entry in its own
 ```
 
 OpenCode's v2 session engine, which AOS drives, does not expose MCP tools at the
-pinned `1.18.29`. The `aos-ui` tools are therefore registered but not callable
+pinned `1.19.0`. The `aos-ui` tools are therefore registered but not callable
 through AOS on OpenCode until upstream exposes MCP tools to that engine. When
 they are, the gateway canonicalizes their names like any other harness. Charts,
 maps, and stats are [MCP App](#mcp-apps) views the gateway reads from the
@@ -171,7 +171,7 @@ OAuth; any other shows the tool call's textual details. A view receives a
 text-only result, because OpenCode stores only a tool's text output. Header
 and address overrides are in harness-gw's OpenCode guide.
 
-MCP tools are not callable from the v2 session engine at the pinned `1.18.29`
+MCP tools are not callable from the v2 session engine at the pinned `1.19.0`
 (see above), so Apps appear once upstream exposes them.
 
 ## Folder
@@ -180,7 +180,7 @@ Each Agent's folder is the gateway's configured `runtime.directory`.
 
 ## Artifacts
 
-OpenCode 1.18.29 cannot call MCP tools, so `present_artifact` is not callable
+OpenCode 1.19.0 cannot call MCP tools, so `present_artifact` is not callable
 and the App shows "Can't reach this file".
 
 ## Agent icons
