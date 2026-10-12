@@ -48,12 +48,10 @@ export function agentUnreadFromSessions(
  * Activity treats an open attention request as unread too, so the bell count and
  * a drawer item's derived read state always agree.
  */
-export function isSessionUnread(session: SessionMetadata) {
+export function isSessionUnread(
+  session: Pick<SessionMetadata, "status" | "unread">
+) {
   return session.unread === true || session.status === "waiting-for-input"
-}
-
-export function workspaceUnreadCount(sessions: readonly SessionMetadata[]) {
-  return sessions.filter(isSessionUnread).length
 }
 
 type BuildAgentSessionViewOptions = {

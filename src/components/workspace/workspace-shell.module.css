@@ -161,6 +161,7 @@
 }
 
 .agentsPanel {
+  --badge-cutout: var(--sidebar);
   height: 100%;
   padding: 1rem 0.875rem 0.875rem;
 }
@@ -218,11 +219,19 @@
 }
 
 .agentButton:hover {
+  --badge-cutout: var(--muted);
   background: var(--muted);
 }
 
 .agentButton[aria-current="true"] {
+  --badge-cutout: var(--secondary);
   background: var(--secondary);
+}
+
+/* The tile's own box anchors its attention badge. */
+.agentTile {
+  position: relative;
+  display: grid;
 }
 
 .agentText {

@@ -1,18 +1,27 @@
 .bell {
   position: relative;
 }
-.count {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-end: -0.15rem;
-  min-inline-size: 1.1rem;
-  padding-inline: 0.2rem;
-  border-radius: 0.25rem;
-  background: var(--foreground);
-  color: var(--background);
-  font-size: 0.6875rem;
-  line-height: 1.1rem;
-  font-variant-numeric: tabular-nums;
+/* One swing from a pivot near the top, as transform only. */
+.ringing {
+  transform-origin: 50% 10%;
+  animation: bell-ring 0.7s ease-out;
+}
+@keyframes bell-ring {
+  15% {
+    transform: rotate(16deg);
+  }
+  30% {
+    transform: rotate(-13deg);
+  }
+  45% {
+    transform: rotate(9deg);
+  }
+  60% {
+    transform: rotate(-5deg);
+  }
+  75% {
+    transform: rotate(2deg);
+  }
 }
 .panel {
   overflow-y: auto;
@@ -221,7 +230,8 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .notice,
-  .ask {
+  .ask,
+  .ringing {
     animation: none;
   }
 }

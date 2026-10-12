@@ -80,7 +80,10 @@ import {
 } from "./session-thread-list-item"
 import { RowIndicators, StatusDot } from "./status-dots"
 import { WorkspaceAgentTile } from "./workspace-agent-tile"
-import { draftSessionId, isDraftAgentId } from "@/runtime-adapters/draft-agents"
+import { AttentionBadge } from "./attention-badge"
+import { agentRowCopy, agentRowLabel } from "./agent-row-label"
+import { attentionLevel, type AttentionLevel } from "@/lib/attention-level"
+import { draftSessionId } from "@/runtime-adapters/draft-agents"
 
 export type WorkspaceAgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
@@ -98,6 +101,8 @@ type WorkspaceAgentBase = {
   unread?: boolean
   /** The icon token `resolveAgentIcons` chose for this Agent. */
   avatar?: string
+  /** What this Agent's Sessions hold for the operator, for its tile badge. */
+  attention?: AttentionLevel
 }
 
 export type WorkspaceAgent = WorkspaceAgentBase & { kind?: "ready" }
@@ -193,6 +198,7 @@ export type WorkspaceConversationShellProps = Pick<
 }
 
 const noWorkspaceAction = () => undefined
+const noAttention = attentionLevel([])
 
 export function WorkspaceConversationShell({
   header,
@@ -366,7 +372,6 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     openSessions: dictionary.mobileNavigation.openSessions,
     history: dictionary.mobileNavigation.history,
     newAgent: dictionary.actions.newAgent,
-    draftLabel: dictionary.creator.draftLabel,
     newSession: dictionary.actions.newSession,
     manageAgents: dictionary.workspace.manageAgents,
     preferences: dictionary.mobileNavigation.preferences,
@@ -390,15 +395,14 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     sessionMenu: sessionRowMenuCopy(dictionary),
     statusLabel: dictionary.status.label,
     status: {
-      active: dictionary.status.active,
       idle: dictionary.status.idle,
       running: dictionary.status.running,
-      attention: dictionary.status.attention,
       unknown: dictionary.status.unknown,
       waitingForInput: dictionary.status.waitingForInput,
       failed: dictionary.status.failed,
     },
     unread: dictionary.status.unread,
+    agentRow: agentRowCopy(dictionary),
   }
 }
 
@@ -442,6 +446,7 @@ function AgentsPanel({
   activityButton,
   commandsHost = false,
 }: AgentsPanelProps) {
+  const rowCopy = agentRowCopy(dictionary)
   return (
     <div className={styles.agentsPanel}>
       <div className={cn(styles.brand, styles.desktopBrand)}>
@@ -482,19 +487,6 @@ function AgentsPanel({
       >
         {agents.map((agent) => {
           const isSelected = agent.id === selectedAgentId
-          const statusLabel = agentStatusLabel(agent.status, dictionary)
-          const accessibleName = [
-            agent.name,
-            // An unfinished interview is named as the draft it is.
-            isDraftAgentId(agent.id) ? dictionary.creator.draftLabel : null,
-            agent.status && agent.status !== "idle"
-              ? `${dictionary.status.label}: ${statusLabel}`
-              : null,
-            isSelected ? dictionary.accessibility.selectedAgent : null,
-            agent.unread ? dictionary.status.unread : null,
-          ]
-            .filter(Boolean)
-            .join(", ")
 
           return (
             <AgentRowContextMenu
@@ -523,13 +515,19 @@ function AgentsPanel({
                 type="button"
                 data-agent-id={agent.id}
                 aria-current={isSelected ? "true" : undefined}
-                aria-label={accessibleName}
+                aria-label={agentRowLabel(agent, isSelected, rowCopy)}
                 onClick={() => {
                   runAction(() => onSelectAgent(agent.id), onActionError)
                   onAfterSelectAgent?.()
                 }}
               >
-                <WorkspaceAgentTile agent={agent} size={36} />
+                <span className={styles.agentTile}>
+                  <WorkspaceAgentTile agent={agent} size={36} />
+                  <AttentionBadge
+                    level={agent.attention}
+                    runningLabel={rowCopy.running}
+                  />
+                </span>
                 <span className={styles.agentText}>
                   <span className={cn(styles.agentName, "text-sm leading-5")}>
                     <bdi>{agent.name}</bdi>
@@ -545,12 +543,6 @@ function AgentsPanel({
                     </bdi>
                   ) : null}
                 </span>
-                <RowIndicators
-                  status={agent.status}
-                  statusLabel={statusLabel}
-                  unread={agent.unread}
-                  unreadLabel={dictionary.status.unread}
-                />
               </button>
             </AgentRowContextMenu>
           )
@@ -1238,11 +1230,11 @@ export function WorkspaceShell({
     onConversationObscuredChange?.(modalDrawerOpen)
     return () => onConversationObscuredChange?.(false)
   }, [modalDrawerOpen, onConversationObscuredChange])
-  const unread = activity?.unreadCount ?? 0
   const activityButton = (
     <ActivityBell
       dictionary={dictionary}
-      unread={unread}
+      attention={activity?.attention ?? noAttention}
+      ring={activity?.ring ?? 0}
       open={activityOpen}
       onOpen={() => {
         dispatchMobileNavigator({ type: "DISMISS" })

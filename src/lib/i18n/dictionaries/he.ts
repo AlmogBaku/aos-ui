@@ -23,6 +23,9 @@ export const he = {
   activity: {
     title: "פעילות",
     unread: "לא נקראו",
+    unreadCount: "{count} לא נקראו",
+    waitingCount: "{count} ממתינים לתשובה",
+    failedCount: "{count} נכשלו",
     needsAttention: "דורש תשומת לב",
     earlier: "קודם לכן",
     emptyAttention: "אין כרגע פעילות שדורשת תשומת לב.",

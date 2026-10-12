@@ -111,6 +111,7 @@ nav.list {
 
 .navigationRow:hover,
 .navigationRow[aria-current="true"] {
+  --badge-cutout: var(--muted);
   background: var(--muted);
 }
 
@@ -119,6 +120,7 @@ nav.list {
 }
 
 .agentIcon {
+  position: relative;
   display: grid;
   inline-size: 2rem;
   block-size: 2rem;

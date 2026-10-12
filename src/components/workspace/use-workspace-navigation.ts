@@ -34,6 +34,7 @@ import {
   agentStatusFromSessions,
   agentUnreadFromSessions,
 } from "@/lib/workspace-view-model"
+import { attentionLevel } from "@/lib/attention-level"
 import {
   buildWorkspacePathname,
   parseWorkspacePathname,
@@ -1093,6 +1094,9 @@ export function useWorkspaceNavigation({
     avatar: agentIcons.get(agent.id)?.token,
     status: agentStatusFromSessions(agent, sessions),
     unread: agentUnreadFromSessions(agent, sessions),
+    attention: attentionLevel(
+      sessions.filter(({ agentId }) => agentId === agent.id)
+    ),
   }))
   const selectedAgent =
     displayAgents.find((agent) => agent.id === selectedAgentId) ?? null

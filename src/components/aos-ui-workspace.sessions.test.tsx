@@ -615,7 +615,7 @@ describe("paged Session History", () => {
       })
     )
     drawer = screen.getByRole("dialog", { name: en.workspace.agents })
-    await user.click(within(drawer).getByRole("button", { name: "Mica" }))
+    await user.click(within(drawer).getByRole("button", { name: /^Mica,/ }))
     drawer = screen.getByRole("dialog", { name: en.workspace.sessions })
     expect(within(drawer).getByRole("heading", { name: "Mica" })).toBeVisible()
     expect(

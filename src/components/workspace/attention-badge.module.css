@@ -1,0 +1,45 @@
+/* The ring is the surface behind the badge (`--badge-cutout`, set by the row
+   or the bell), so the badge reads as cut out of the tile's corner. */
+.badge,
+.dot {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--badge-cutout, var(--background));
+}
+
+/* Centered by its own layout, never by line height, so 1, 5, and 9+ sit in
+   the middle in both the Latin and Hebrew fonts. */
+.badge {
+  inset-block-start: -0.3125rem;
+  inset-inline-end: -0.375rem;
+  min-inline-size: 1.125rem;
+  block-size: 1.125rem;
+  padding-inline: 0.25rem;
+  color: var(--background);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  font-variant-numeric: lining-nums tabular-nums;
+  line-height: 1;
+}
+
+.badge[data-top="waiting"] {
+  background: var(--workspace-status-attention, var(--warning));
+  /* Orange is light in both themes, so its figures stay dark in both. */
+  color: oklch(0.2 0.03 55);
+}
+
+.badge[data-top="failed"] {
+  background: var(--destructive);
+}
+
+.badge[data-top="unread"] {
+  background: var(--workspace-status-unread, var(--success));
+}
+
+.dot {
+  inset-block-start: -0.125rem;
+  inset-inline-end: -0.125rem;
+}

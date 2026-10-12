@@ -9,10 +9,12 @@ import {
   isSelectionExposed,
   shouldChime,
 } from "@/lib/notifications/policy"
+import { isSessionUnread } from "@/lib/workspace-view-model"
 import {
-  isSessionUnread,
-  workspaceUnreadCount,
-} from "@/lib/workspace-view-model"
+  attentionLevel,
+  railSessions,
+  type AttentionLevel,
+} from "@/lib/attention-level"
 import { ActivityStore } from "@/lib/notifications/store"
 import { activityEventSchema } from "@/lib/notifications/activity"
 import {
@@ -54,10 +56,17 @@ export type ActivityItem = ActivityRecord & {
   available: boolean
 }
 export type ActivityNoticeState = { count: number; urgent: boolean }
+/** The bell rings at most once in this long, however many Sessions start waiting. */
+const BELL_RING_INTERVAL_MS = 3000
 export type ActivityView = {
   items: ActivityItem[]
-  /** Sessions the operator has not read, including open attention requests. */
-  unreadCount: number
+  /**
+   * What the rail's Sessions hold for the operator: unread ones, including
+   * open attention requests, and the most urgent state among them.
+   */
+  attention: AttentionLevel
+  /** Counts the bell's rings, each one a Session that newly waits elsewhere. */
+  ring: number
   notice: ActivityNoticeState | null
   error: boolean
   supported: boolean
@@ -65,9 +74,16 @@ export type ActivityView = {
   markAllRead: () => void
   dismissNotice: () => void
 }
+/** A navigable Agent: a rail row or a draft, or one the rail hides. */
+export type ActivityAgent = {
+  id: string
+  name: string
+  role?: "creator"
+  visibility?: "visible" | "hidden"
+}
 type Options = {
   workspace: WorkspaceAdapter
-  agents: readonly { id: string; name: string }[]
+  agents: readonly ActivityAgent[]
   sessions: readonly SessionMetadata[]
   titles: ReadonlyMap<string, string>
   selection: ActivityContext["selection"]
@@ -146,6 +162,7 @@ export function useActivityCoordinator(
   >(async () => undefined)
   const [records, setRecords] = useDataState<ActivityRecord[]>([])
   const [notice, setNotice] = useState<{ urgent: boolean } | null>(null)
+  const [ring, setRing] = useState(0)
   const reported = useRef<
     { sessionId: string | null; foreground: boolean; idle: boolean } | undefined
   >(undefined)
@@ -338,6 +355,14 @@ export function useActivityCoordinator(
     })
     let queue = Promise.resolve()
     let unsubscribe: (() => void) | undefined
+    let rangAt = -Infinity
+    /** A burst of new waits rings the bell once. */
+    function ringBell() {
+      const at = performance.now()
+      if (at - rangAt < BELL_RING_INTERVAL_MS) return
+      rangAt = at
+      setRing((count) => count + 1)
+    }
     function ingest(input: unknown) {
       const parsed = activityEventSchema.safeParse(input)
       if (!parsed.success) return
@@ -359,15 +384,19 @@ export function useActivityCoordinator(
           if (arrival) {
             const preferences =
               browser?.settings().preferences ?? defaultBrowserPreferences
+            // In-app notice excludes the Session on screen, so the bell never
+            // rings for the wait the operator is already looking at.
             if (
               getActivityPolicy(arrival, state, preferences, "unsupported")
                 .inAppNotice
-            )
+            ) {
               setNotice((previous) => ({
                 urgent:
                   categoryOf(arrival.type) !== "completion" ||
                   !!previous?.urgent,
               }))
+              if (arrival.type === "attention-requested") ringBell()
+            }
             if (shouldChime(arrival, state, preferences)) sound?.play()
           }
         })
@@ -451,7 +480,9 @@ export function useActivityCoordinator(
     syncPushRef.current()
   }, [options.locale])
 
-  const unreadCount = workspaceUnreadCount(options.sessions)
+  const attention = attentionLevel(
+    railSessions(options.agents, options.sessions)
+  )
   /** Reading a Session is a provider write; the browser never stores it. */
   const markSessionsRead = (sessionIds: readonly string[]) => {
     void Promise.all(
@@ -545,8 +576,9 @@ export function useActivityCoordinator(
             session.agentId !== record.agentId
         ),
     })),
-    unreadCount,
-    notice: notice ? { count: unreadCount, urgent: notice.urgent } : null,
+    attention,
+    ring,
+    notice: notice ? { count: attention.count, urgent: notice.urgent } : null,
     error,
     supported: !!workspace.subscribeActivity,
     openActivity: actions.openActivity,

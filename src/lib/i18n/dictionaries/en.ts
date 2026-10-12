@@ -23,6 +23,9 @@ export const en = {
   activity: {
     title: "Activity",
     unread: "unread",
+    unreadCount: "{count} unread",
+    waitingCount: "{count} waiting for you",
+    failedCount: "{count} failed",
     needsAttention: "Needs attention",
     earlier: "Earlier",
     emptyAttention: "Nothing needs your attention.",

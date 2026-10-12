@@ -19,6 +19,10 @@ export type Dictionary = {
   activity: {
     title: string
     unread: string
+    /** The counts a bell or an Agent row names; `{count}` is substituted. */
+    unreadCount: string
+    waitingCount: string
+    failedCount: string
     needsAttention: string
     earlier: string
     emptyAttention: string

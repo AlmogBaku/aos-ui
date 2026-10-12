@@ -31,6 +31,7 @@ import {
   PRESENCE_HEARTBEAT_MS,
   PRESENCE_IDLE_MS,
 } from "@harness-gw/sdk/protocol"
+import { useFakeClock } from "../../../test/support/fake-clock"
 
 /** Everything the operator's notification surfaces read, with nothing on. */
 function browserSettings(
@@ -448,6 +449,28 @@ describe("Activity coordinator", () => {
       available: false,
     })
   })
+  it("rings once per burst of Sessions newly waiting elsewhere, never for the one on screen", async () => {
+    const clock = useFakeClock()
+    const provider = source()
+    const waiting = sessions.map((session) => ({
+      ...session,
+      status: "waiting-for-input" as const,
+    }))
+    const { result } = renderHook(useActivityCoordinator, {
+      initialProps: { ...options(provider.workspace), sessions: waiting },
+    })
+    await act(async () =>
+      provider.emit("on-screen", "one", "attention-requested")
+    )
+    expect(result.current.ring).toBe(0)
+    await act(async () => provider.emit("first", "two", "attention-requested"))
+    expect(result.current.ring).toBe(1)
+    await act(async () => provider.emit("burst", "two", "attention-requested"))
+    expect(result.current.ring).toBe(1)
+    await clock.advance(3000)
+    await act(async () => provider.emit("later", "two", "attention-requested"))
+    expect(result.current.ring).toBe(2)
+  })
   it("validates and opens the owning Agent and Session then acknowledges it", async () => {
     const provider = source()
     const props = options(provider.workspace)
@@ -456,7 +479,7 @@ describe("Activity coordinator", () => {
     })
     act(() => provider.emit("event"))
     await waitFor(() => expect(result.current.items).toHaveLength(1))
-    expect(result.current.unreadCount).toBe(1)
+    expect(result.current.attention.count).toBe(1)
     await act(async () => {
       expect(await result.current.openActivity("event")).toBe(true)
     })
@@ -467,22 +490,21 @@ describe("Activity coordinator", () => {
 
 describe("Activity presentation", () => {
   it.each([
-    ["en", en],
-    ["he", he],
+    ["en", en, "Activity, 12 unread, 1 waiting for you, 2 failed"],
+    ["he", he, "פעילות, 12 לא נקראו, 1 ממתינים לתשובה, 2 נכשלו"],
   ] as const)(
-    "caps visual counts but exposes the actual unread count in %s",
-    (_locale, dictionary) => {
+    "caps the visual count but names every state in full in %s",
+    (_locale, dictionary, name) => {
       render(
         <ActivityBell
           dictionary={dictionary}
-          unread={12}
+          attention={{ count: 12, waiting: 1, failed: 2, top: "waiting" }}
+          ring={0}
           open={false}
           onOpen={() => {}}
         />
       )
-      expect(screen.getByRole("button")).toHaveAccessibleName(
-        expect.stringContaining("12")
-      )
+      expect(screen.getByRole("button")).toHaveAccessibleName(name)
       expect(screen.getByText("9+")).toHaveAttribute("aria-hidden", "true")
     }
   )

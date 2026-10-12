@@ -52,15 +52,16 @@ describe("AosUiApp fixture composition", () => {
       await screen.findByRole("tab", { name: "Market brief" })
       act(() => provider().publishActivityScenario("turn-completed"))
       // The bell counts the two unread fixture Sessions, not arrivals.
+      const everyUnread = "Activity, 2 unread, 1 waiting for you, 1 failed"
       const bell = (
-        await screen.findAllByRole("button", { name: "Activity, 2 unread" })
+        await screen.findAllByRole("button", { name: everyUnread })
       )[0]!
       await user.click(bell)
       expect(await screen.findByText("A turn finished")).toBeVisible()
       await user.keyboard("{Escape}")
       act(() => provider().publishActivityScenario("delayed-non-selected"))
       expect(
-        await screen.findAllByRole("button", { name: "Activity, 2 unread" })
+        await screen.findAllByRole("button", { name: everyUnread })
       ).toHaveLength(2)
       expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
         "aria-selected",
@@ -78,13 +79,13 @@ describe("AosUiApp fixture composition", () => {
 
       // Opening an unread Session's Activity acknowledges it with the provider.
       act(() => provider().publishActivityScenario("turn-failed"))
-      await user.click(
-        screen.getAllByRole("button", { name: "Activity, 2 unread" })[0]!
-      )
+      await user.click(screen.getAllByRole("button", { name: everyUnread })[0]!)
       await user.click(screen.getByRole("button", { name: /Open: Nori,/ }))
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
       expect(
-        await screen.findAllByRole("button", { name: "Activity, 1 unread" })
+        await screen.findAllByRole("button", {
+          name: "Activity, 1 unread, 1 waiting for you",
+        })
       ).toHaveLength(2)
     } finally {
       focus.mockRestore()
@@ -321,7 +322,7 @@ describe("AosUiApp fixture composition", () => {
     renderWorkspace(() => useEmptyAgentRuntime())
 
     await screen.findByText(/Applied AI is accelerating fastest/)
-    await user.click(screen.getByRole("button", { name: "Empty" }))
+    await user.click(screen.getByRole("button", { name: /^Empty,/ }))
 
     await waitFor(() =>
       expect(
@@ -344,9 +345,7 @@ describe("AosUiApp fixture composition", () => {
       ).getByText("Empty")
     ).toBeVisible()
 
-    await user.click(
-      screen.getByRole("button", { name: "Aster, Status: Running" })
-    )
+    await user.click(screen.getByRole("button", { name: /^Aster,/ }))
     await user.click(
       await screen.findByRole("button", {
         name: "Open session: Pricing analysis",
@@ -372,7 +371,7 @@ describe("AosUiApp fixture composition", () => {
     await user.keyboard("{Escape}")
     await user.clear(input)
 
-    await user.click(screen.getByRole("button", { name: "Empty" }))
+    await user.click(screen.getByRole("button", { name: /^Empty,/ }))
     const emptyInput = await screen.findByRole("textbox", {
       name: "Message input",
     })
@@ -390,7 +389,7 @@ describe("AosUiApp fixture composition", () => {
     renderWorkspace(() => useEmptyAgentRuntime(rejectSession))
 
     await screen.findByText(/Applied AI is accelerating fastest/)
-    await user.click(screen.getByRole("button", { name: "Empty" }))
+    await user.click(screen.getByRole("button", { name: /^Empty,/ }))
     await user.click(
       within(
         screen.getByRole("complementary", {

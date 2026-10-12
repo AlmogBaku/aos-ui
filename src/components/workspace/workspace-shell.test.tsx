@@ -23,6 +23,7 @@ import {
 } from "./workspace-shell"
 import type { BrowserSettingsView } from "./activity"
 import { defaultBrowserPreferences } from "@/lib/notifications/policy"
+import { attentionLevel } from "@/lib/attention-level"
 
 /** A device that has not answered the one-time notification ask yet. */
 const askSettings: BrowserSettingsView = {
@@ -441,27 +442,33 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("tab", { name: "Launch review" })).toHaveFocus()
   })
 
-  it("shows provider unread state beside run status in Agent and Session navigation", () => {
+  it("counts on each Agent's tile, in place of a row dot, and names unread Sessions", () => {
     renderShell({
-      agents: [{ ...agents[0]!, unread: true }, agents[1]!],
+      agents: [
+        {
+          ...agents[0]!,
+          attention: { count: 12, waiting: 0, failed: 0, top: "unread" },
+        },
+        { ...agents[1]!, attention: attentionLevel([{ status: "running" }]) },
+      ],
       openSessions: [
         { ...openSessions[0]!, unread: true },
         ...openSessions.slice(1),
       ],
     })
 
+    const aster = agentRow(/^Aster, .*12 unread/)
+    expect(within(aster).getByText("9+")).toHaveAttribute("aria-hidden", "true")
+    // With nothing counted, a running Agent's tile shows the running dot.
     expect(
-      screen.getByRole("button", {
-        name: "Aster, Status: Running, Selected Agent, Unread",
-      })
+      within(agentRow(/^Mica, .*Running/)).getByTitle("Running")
     ).toBeVisible()
+    expect(within(aster).queryByTitle("Unread")).toBeNull()
 
     expect(
       screen.getByRole("tab", { name: "Market brief, Unread" })
     ).toBeVisible()
     expect(screen.getByRole("tab", { name: "Launch review" })).toBeVisible()
-    // Navigation rows no longer carry Activity-derived counts.
-    expect(screen.queryByText(/unread/i)).toBeNull()
   })
 
   it("names a pinned tab, and names both states when it is unread too", () => {
@@ -487,7 +494,12 @@ describe("WorkspaceShell", () => {
     const sessions = [...openSessions.slice(0, 2), scan]
     renderShell({
       agents: [
-        { ...agents[0]!, status: "attention", unread: true },
+        {
+          ...agents[0]!,
+          status: "attention",
+          unread: true,
+          attention: { count: 1, waiting: 1, failed: 0, top: "waiting" },
+        },
         agents[1]!,
       ],
       openSessions: sessions,
@@ -507,7 +519,7 @@ describe("WorkspaceShell", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Aster, Status: Needs attention, Selected Agent, Unread",
+        name: "Aster, General analysis and synthesis, 1 unread, 1 waiting for you, Selected Agent",
       })
     ).toBeVisible()
 
@@ -893,7 +905,7 @@ describe("WorkspaceShell", () => {
     const onHideAgent = vi.fn()
     renderShell({ onHideAgent })
 
-    fireEvent.contextMenu(agentRow("Mica"), { clientX: 16, clientY: 24 })
+    fireEvent.contextMenu(agentRow(/^Mica,/), { clientX: 16, clientY: 24 })
     await user.click(
       await screen.findByRole("menuitem", { name: en.actions.hideAgent })
     )
@@ -903,7 +915,7 @@ describe("WorkspaceShell", () => {
   it("offers no Agent row menu when the runtime cannot hide an Agent", async () => {
     renderShell()
 
-    fireEvent.contextMenu(agentRow("Mica"), { clientX: 16, clientY: 24 })
+    fireEvent.contextMenu(agentRow(/^Mica,/), { clientX: 16, clientY: 24 })
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
     expect(
       screen.queryByRole("menuitem", { name: en.actions.hideAgent })
@@ -1059,7 +1071,7 @@ describe("WorkspaceShell", () => {
     ).toBeVisible()
   })
 
-  it("includes meaningful status in Agent and history button names", () => {
+  it("includes meaningful status in history button names", () => {
     const statusHistory: WorkspaceSession[] = [
       olderSessions[0],
       {
@@ -1098,16 +1110,6 @@ describe("WorkspaceShell", () => {
     })
 
     const agentsNavigation = screen.getByRole("navigation", { name: "Agents" })
-    expect(
-      within(agentsNavigation).getByRole("button", {
-        name: "Aster, Status: Running, Selected Agent",
-      })
-    ).toBeInTheDocument()
-    expect(
-      within(agentsNavigation).getByRole("button", {
-        name: "Mica",
-      })
-    ).toBeInTheDocument()
     expect(within(agentsNavigation).queryByRole("img")).not.toBeInTheDocument()
 
     const inspector = screen.getByRole("complementary", {
@@ -1164,7 +1166,7 @@ describe("WorkspaceShell", () => {
       within(drawer).getByRole("button", { name: "Back to Agents" })
     )
     drawer = screen.getByRole("dialog", { name: "Agents" })
-    await user.click(within(drawer).getByRole("button", { name: "Mica" }))
+    await user.click(within(drawer).getByRole("button", { name: /^Mica,/ }))
 
     expect(onSelectAgent).not.toHaveBeenCalled()
     drawer = screen.getByRole("dialog", { name: "Sessions" })
@@ -1207,7 +1209,8 @@ describe("WorkspaceShell", () => {
       browserSettings: askSettings,
       activity: {
         items: [],
-        unreadCount: 2,
+        attention: { count: 2, waiting: 0, failed: 0, top: "unread" },
+        ring: 0,
         notice: { count: 2, urgent: true },
         error: false,
         supported: true,

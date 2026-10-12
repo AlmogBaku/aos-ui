@@ -13,6 +13,8 @@ import type {
 import { useId, useState } from "react"
 import { Bell, BellDot, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { attentionLabels, type AttentionLevel } from "@/lib/attention-level"
+import { AttentionBadge } from "./attention-badge"
 import {
   needsAttention,
   type ActivityRecord,
@@ -42,31 +44,44 @@ export type BrowserSettingsView = {
 }
 export function ActivityBell({
   dictionary,
-  unread,
+  attention,
+  ring,
   open,
   onOpen,
 }: {
   dictionary: Dictionary
-  unread: number
+  attention: AttentionLevel
+  /** Each new value swings the bell once; the value it mounts with does not. */
+  ring: number
   open: boolean
   onOpen: () => void
 }) {
+  const [mountedRing] = useState(ring)
   return (
     <Button
       className={styles.bell}
       variant="ghost"
       size="icon"
       type="button"
-      aria-label={`${dictionary.activity.title}, ${unread} ${dictionary.activity.unread}`}
+      aria-label={[
+        dictionary.activity.title,
+        ...attentionLabels(attention, dictionary.activity),
+      ].join(", ")}
       aria-haspopup="dialog"
       aria-expanded={open}
       onClick={onOpen}
     >
-      <Bell />
-      {unread > 0 ? (
-        <span className={styles.count} aria-hidden="true">
-          {unread > 9 ? "9+" : unread}
-        </span>
+      {/* A new key restarts the one-shot swing from the start. */}
+      <Bell
+        key={ring}
+        className={ring === mountedRing ? undefined : styles.ringing}
+      />
+      {/* The bell counts and never runs, so it has no running dot. */}
+      {attention.count ? (
+        <AttentionBadge
+          level={attention}
+          runningLabel={dictionary.status.running}
+        />
       ) : null}
     </Button>
   )
