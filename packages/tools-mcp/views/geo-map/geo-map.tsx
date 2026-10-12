@@ -145,12 +145,10 @@ let worker: Promise<void> | undefined
 
 /**
  * Points MapLibre at its worker, once, before the first map starts it. The
- * sandbox loads no script by address, so the view reads the worker's text from
- * the server and hands MapLibre a URL of that text. MapLibre starts a module
- * worker unless the URL's path ends in `.cjs`, and the sandbox's opaque origin
- * runs a worker it authored only as a classic one, so the text travels as a
- * `data:` URL that ends in a `.cjs` comment: the worker ships self-contained
- * and runs the same either way.
+ * sandbox loads no script by address, so the view reads MapLibre's own worker
+ * module from the server and hands it over as a `data:` URL, which MapLibre
+ * starts as the module worker it ships. Not a `blob:` URL: the sandbox's
+ * opaque origin starts no module worker from one.
  */
 function loadWorker(read: Read) {
   worker ??= read({ uri: `${MAPLIBRE_RESOURCE_URI}${MAPLIBRE_WORKER_FILE}` })
@@ -158,7 +156,7 @@ function loadWorker(read: Read) {
       if (!content || !("text" in content))
         throw new Error("No MapLibre worker came back")
       maplibregl.setWorkerUrl(
-        `data:text/javascript,${encodeURIComponent(`${content.text}\n//.cjs`)}`
+        `data:text/javascript,${encodeURIComponent(content.text)}`
       )
     })
     .catch((error: unknown) => {
@@ -302,6 +300,7 @@ export function GeoMap({
       className={`relative h-80 w-full overflow-hidden rounded-lg border bg-muted ${styles.root}`}
       role="region"
       aria-label={title}
+      aria-busy={!ready}
     >
       <div ref={container} className="size-full" />
       <p className="pointer-events-none absolute start-3 top-3 z-10 max-w-3/4 rounded-lg border border-border bg-background/80 px-3 py-2 text-sm leading-tight font-semibold text-foreground shadow-sm backdrop-blur-md">

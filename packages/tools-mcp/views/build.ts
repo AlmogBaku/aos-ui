@@ -191,40 +191,9 @@ export async function buildPdfjs(): Promise<Map<string, Uint8Array>> {
   return files
 }
 
-/**
- * MapLibre's worker, by name. The package ships it as a module; the map view
- * can start a worker it authored only as a classic script, so the same bundler
- * rewrites it as one, as it does pdf.js's.
- */
+/** MapLibre's worker module, by name, exactly as the package ships it. */
 export async function buildMaplibre(): Promise<Map<string, Uint8Array>> {
-  const files = outputFiles(
-    await build({
-      configFile: false,
-      logLevel: "warn",
-      root: VIEWS_DIRECTORY,
-      mode: "production",
-      build: {
-        write: false,
-        emptyOutDir: false,
-        minify: true,
-        reportCompressedSize: false,
-        lib: {
-          entry: MAPLIBRE_WORKER,
-          formats: ["iife"],
-          name: "maplibreWorker",
-        },
-        rolldownOptions: { output: { codeSplitting: false } },
-      },
-    })
-  )
-  const [worker] = files
-  if (files.length !== 1 || worker?.type !== "chunk")
-    throw new Error(
-      `The MapLibre worker did not build into one script: ${files.map((file) => file.fileName).join(", ")}`
-    )
-  return new Map([
-    [MAPLIBRE_WORKER_FILE, new TextEncoder().encode(worker.code)],
-  ])
+  return new Map([[MAPLIBRE_WORKER_FILE, await readFile(MAPLIBRE_WORKER)]])
 }
 
 /**
