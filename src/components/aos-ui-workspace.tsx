@@ -59,6 +59,7 @@ import {
   ArtifactWorkspaceProvider,
   artifactPanelFailure,
   createArtifactMessageStabilizer,
+  useHasSessionOutputs,
 } from "@/components/artifacts"
 import { ManageAgents } from "@/components/workspace/manage-agents"
 import { useWorkspaceNavigation } from "@/components/workspace/use-workspace-navigation"
@@ -236,11 +237,13 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
 }: WorkspaceShellProps) {
   // The side panel holds the pip view when one is active.
   const pip = useMcpAppPip(shell.locale)
+  // The shell frames the list in its own bordered block, which goes with it.
+  const hasOutputs = useHasSessionOutputs()
 
   return (
     <WorkspaceShell
       {...shell}
-      artifactOutputs={<ArtifactOutputs />}
+      artifactOutputs={hasOutputs ? <ArtifactOutputs /> : undefined}
       sidePanel={
         pip ? (
           <McpAppPipPanel

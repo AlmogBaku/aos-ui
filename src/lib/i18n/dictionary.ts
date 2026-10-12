@@ -2,7 +2,6 @@ export type Dictionary = {
   productName: string
   artifacts: {
     outputs: string
-    empty: string
     open: string
     download: string
     loading: string

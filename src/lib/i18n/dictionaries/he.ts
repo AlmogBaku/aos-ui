@@ -4,7 +4,6 @@ export const he = {
   productName: "AOS",
   artifacts: {
     outputs: "ארטיפקטים",
-    empty: "עדיין אין ארטיפקטים",
     open: "פתיחה",
     download: "הורדה",
     loading: "התוצר נטען…",

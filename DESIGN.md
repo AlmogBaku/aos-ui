@@ -364,7 +364,8 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   button; Esc or Close returns focus to the control that opened it, and leaving
   the Session closes it. The inspector's collapsible Artifacts list names every
   file the Session published, newest first — attachments and the files App
-  views show — each opening in the side panel with its own Download. A failure
+  views show — each opening in the side panel with its own Download; a Session
+  that has published none shows no list. A failure
   states what happened in place, and a provider that no longer holds the bytes
   says so and drops the download it cannot honor.
 - **MCP Apps:** the one exception to "never run arbitrary HTML". A tool whose

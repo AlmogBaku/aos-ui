@@ -424,9 +424,9 @@ describe("artifact side panel", () => {
     )
   })
 
-  it("says the Session has no files yet", () => {
+  it("lists nothing while the Session has published no file", () => {
     renderSession({ messages: [], children: <ArtifactOutputs /> })
-    expect(screen.getByText("No artifacts yet")).toBeInTheDocument()
+    expect(screen.queryByRole("region", { name: "Artifacts" })).toBeNull()
   })
 
   it.each([

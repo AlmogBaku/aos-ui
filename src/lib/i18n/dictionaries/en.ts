@@ -4,7 +4,6 @@ export const en = {
   productName: "AOS",
   artifacts: {
     outputs: "Artifacts",
-    empty: "No artifacts yet",
     open: "Open",
     download: "Download",
     loading: "Loading output…",

@@ -724,14 +724,22 @@ function SessionOutputRow({ output }: { output: SessionOutput }) {
   )
 }
 
+/** Whether the Session has published a file; the inspector lists them only then. */
+export function useHasSessionOutputs() {
+  return useArtifactWorkspace().outputs.length > 0
+}
+
 /**
  * The inspector's collapsible list of every file the Session published,
- * newest first: its Artifacts, and the files its App views show.
+ * newest first: its Artifacts, and the files its App views show. A Session
+ * that has published none gets no list.
  */
 export function ArtifactOutputs({ className = "" }: { className?: string }) {
   const { labels, locale, outputs, outputsOpen, setOutputsOpen } =
     useArtifactWorkspace()
   const titleId = useId()
+
+  if (outputs.length === 0) return null
 
   return (
     <details
@@ -751,16 +759,13 @@ export function ArtifactOutputs({ className = "" }: { className?: string }) {
           {labels.outputs}
         </h2>
       </summary>
-      <div aria-labelledby={titleId}>
-        {outputs.length === 0 ? (
-          <p className="mt-1.5 text-xs text-muted-foreground">{labels.empty}</p>
-        ) : (
-          <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
-            {outputs.toReversed().map((output) => (
-              <SessionOutputRow key={output.key} output={output} />
-            ))}
-          </div>
-        )}
+      <div
+        aria-labelledby={titleId}
+        className="mt-2 overflow-hidden rounded-lg border border-border bg-card"
+      >
+        {outputs.toReversed().map((output) => (
+          <SessionOutputRow key={output.key} output={output} />
+        ))}
       </div>
     </details>
   )
