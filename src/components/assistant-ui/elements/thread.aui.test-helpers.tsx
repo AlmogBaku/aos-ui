@@ -351,7 +351,7 @@ export function MultiSessionThread({
 }
 
 /*
- * Keep the runtime hook named so eslint can verify that the hooks it calls
+ * Keep the runtime hook named so Oxlint can verify that the hooks it calls
  * follow the Rules of Hooks. The remote runtime invokes it inside a thread
  * scope, where threadListItem.remoteId is available.
  */

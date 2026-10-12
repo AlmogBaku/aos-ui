@@ -220,8 +220,8 @@ the guest lane. An external TLS reverse proxy is optional.
   validates Artifact paths. Agent worktrees,
   profiles, secrets, and state remain external. Never import native
   implementations into browser code.
-- Architecture boundary tests live in `test/architecture/`; the ESLint rule is
-  `scripts/eslint-runtime-boundaries.mjs`.
+- Architecture boundary tests live in `test/architecture/`; the custom lint
+  rules are in `scripts/lint-rules.mjs`, which `.oxlintrc.json` loads.
 
 Treat generated and user-owned material carefully. Do not blindly regenerate
 customized shadcn/Assistant UI components. Only `aos-deploy` under
@@ -241,7 +241,7 @@ database or provider registry, and aos-ui adds none either.
 
 ## Conventions
 
-- Follow the existing strict TypeScript, ESM, Prettier, and ESLint configuration.
+- Follow the existing strict TypeScript, ESM, oxfmt, and Oxlint configuration.
 - Prefer standard Tailwind spacing, typography, and size utilities. Use an
   arbitrary value only when a documented visual, responsive, or accessibility
   constraint cannot be expressed by the standard scale.
@@ -301,14 +301,14 @@ each step below leaves evidence a reviewer can check.
   stays under.
 - **Keep a test in its project.** A `.test.ts` that needs no DOM stays in
   `node`; add it to `domTests` in `vitest.config.ts` only when it touches a
-  browser global. Anything that builds, runs Compose, or runs type-aware
-  ESLint belongs in `gateTests`.
+  browser global. Anything that builds, runs Compose, or runs Oxlint belongs
+  in `gateTests`.
 - **Assert behavior, never styling.** Exact text is appropriate for
   accessible names, user-authored input, provider fidelity, protocols,
   security, configuration, and localization keys; editorial fixture copy is
   not a readiness or state contract. No CSS classes, `data-slot` markup,
   computed styles, pixel sizes, bounding boxes, colors, contrast ratios, or
-  font sizes, in Vitest or Playwright; ESLint rejects the common forms.
+  font sizes, in Vitest or Playwright; Oxlint rejects the common forms.
   Verify appearance by looking at the rendered app. Do not assert icon
   internals or storage keys, and do not add test IDs solely to preserve
   implementation-coupled tests.
@@ -345,7 +345,7 @@ The everyday suite is two Vitest projects: `bunx vitest run --project node`
 runs the DOM-free web-server, browser-logic, and tooling tests, and
 `--project dom` the jsdom rest (`.tsx` files and the `domTests` list in
 `vitest.config.ts`). A third project, `gate`, holds the production-build,
-Compose, and type-aware ESLint checks; `bun run test` skips it and
+Compose, and Oxlint checks; `bun run test` skips it and
 `bun run test:gate` runs it alone.
 
 When a worktree-isolated session's shell guard rejects a compound command, put
