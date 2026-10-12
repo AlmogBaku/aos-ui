@@ -198,9 +198,12 @@ clears one unread Session; notification settings open from a header button in th
 drawer. The bell badge color reflects the highest state among counted Sessions:
 orange for waiting, red for failed, green for unread.
 
-Activity history lives in the gateway's in-memory feed; it does not survive a
-gateway restart by design. Browser and operating-system policies may delay or
-suppress delivery; Activity remains the place to check.
+The inbox is built from the provider's unread and waiting state, so it lists
+the same Sessions after a reload or a gateway restart; a Session leaves it once
+it is read or answered. What a tab saw on top of that, such as a question's text
+and an Agent the creator just made ("*name* is ready", until opened or marked
+read), lives in that tab's memory only. Browser and operating-system policies
+may delay or suppress delivery; Activity remains the place to check.
 
 ## Change language and appearance
 
