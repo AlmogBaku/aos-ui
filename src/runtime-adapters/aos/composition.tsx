@@ -64,7 +64,7 @@ import {
   rewindSource,
 } from "./conversation-controls"
 import { createGatewayClient } from "./gateway-client"
-import { useConnectionOutage } from "./use-connection-outage"
+import { useConnectionOutage, useSessionNotice } from "./use-connection-outage"
 
 /**
  * The operator surface over one ACP connection to the proxy. The connection
@@ -409,7 +409,7 @@ function ReadyAosRuntimeProvider({
       selectedSessionId ? client.sessionStatus(selectedSessionId) : "unknown",
     () => "unknown"
   )
-  const selectedSessionGone = useSyncExternalStore(
+  const selectedSessionState = useSyncExternalStore(
     useCallback(
       (listener) => {
         if (!selectedSessionId) return () => undefined
@@ -422,9 +422,14 @@ function ReadyAosRuntimeProvider({
       [client, connection, selectedSessionId]
     ),
     () =>
-      selectedSessionId !== undefined &&
-      connection.sessionState(selectedSessionId) === "gone",
-    () => false
+      selectedSessionId === undefined
+        ? undefined
+        : connection.sessionState(selectedSessionId),
+    () => undefined
+  )
+  const sessionStatus = useSessionNotice(
+    selectedSessionId,
+    selectedSessionState
   )
   const composer = useAosComposerFeatures(
     client,
@@ -478,7 +483,7 @@ function ReadyAosRuntimeProvider({
     activityCoverage: "workspace",
     push,
     connectionStatus,
-    sessionStatus: selectedSessionGone ? "unavailable" : undefined,
+    sessionStatus,
   })
 }
 

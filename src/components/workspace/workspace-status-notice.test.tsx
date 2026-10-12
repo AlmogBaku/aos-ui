@@ -26,6 +26,8 @@ it.each([
     "This Session is no longer available.",
   ],
   ["he", { sessionStatus: "unavailable" }, "השיחה הזו כבר אינה זמינה."],
+  ["en", { sessionStatus: "reconnecting" }, "Reconnecting this Session…"],
+  ["he", { sessionStatus: "reconnecting" }, "השיחה מתחברת מחדש…"],
 ] as const)(
   "tells the %s reader %o until it clears",
   (locale, status, statusText) => {

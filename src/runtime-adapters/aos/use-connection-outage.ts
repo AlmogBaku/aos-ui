@@ -1,6 +1,10 @@
 import { useEffect, useState, useSyncExternalStore } from "react"
 
-import type { AcpConnection, AcpConnectionOutage } from "@harness-gw/sdk"
+import type {
+  AcpConnection,
+  AcpConnectionOutage,
+  AcpSessionState,
+} from "@harness-gw/sdk"
 
 /** How long a reconnect may run before it shows, so a healthy resume shows nothing. */
 export const RECONNECTING_NOTICE_GRACE_MS = 2_000
@@ -51,4 +55,42 @@ export function useConnectionOutage(
     return () => clearTimeout(timer)
   }, [reconnected])
   return shown ?? (reconnected ? "reconnected" : undefined)
+}
+
+/** What the selected Session's own notice tells the reader. */
+export type SessionNotice = "unavailable" | "reconnecting"
+
+/**
+ * The selected Session's notice, beneath the connection's: `unavailable` once
+ * the Session is gone, and `reconnecting` once a Session joined since it was
+ * selected has been rejoining (`joining`, or `unavailable` between retries)
+ * past the grace the connection's notice waits. A first open shows nothing
+ * however long its join takes, and the notice goes once the Session is joined.
+ */
+export function useSessionNotice(
+  sessionId: string | undefined,
+  state: AcpSessionState | undefined
+): SessionNotice | undefined {
+  // Whether the selected Session has been joined since it was selected.
+  const [selected, setSelected] = useState(sessionId)
+  const [joined, setJoined] = useState(state === "joined")
+  if (selected !== sessionId) {
+    setSelected(sessionId)
+    setJoined(state === "joined")
+  } else if (state === "joined" && !joined) setJoined(true)
+  const rejoining = joined && (state === "joining" || state === "unavailable")
+  const [graceOver, setGraceOver] = useState(false)
+  useEffect(() => {
+    if (!rejoining) return
+    const timer = setTimeout(
+      () => setGraceOver(true),
+      RECONNECTING_NOTICE_GRACE_MS
+    )
+    return () => {
+      clearTimeout(timer)
+      setGraceOver(false)
+    }
+  }, [rejoining])
+  if (state === "gone") return "unavailable"
+  return rejoining && graceOver ? "reconnecting" : undefined
 }
