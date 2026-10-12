@@ -339,6 +339,12 @@ The row's accessible name lists the states, e.g. "Travel Planner, Trip planning,
 2 unread, 1 waiting for you". The badge number is centered by layout with
 tabular figures. Browsing the Activity drawer marks nothing read.
 
+**Muted Agent.** A muted Agent's badge keeps its own count in neutral gray
+(`--muted-foreground`), never a status color, and its running dot stays. A
+bell-off glyph sits beside the name, the tile does not hop (the hop is a motion
+alert), and the row's accessible name adds "Notifications muted". The row menu
+offers Mute or Unmute notifications only where the runtime can store the mute.
+
 ### Rich Output
 
 **Character:** informative when available and inspectable when it is not.
@@ -440,6 +446,9 @@ tabular figures. Browsing the Activity drawer marks nothing read.
 - **Scope:** the bell, the inbox, and the Agent tile badges count only Sessions
   whose Agent has a rail row (visible or draft). Read Sessions leave the pane.
   Browsing marks nothing read.
+- **Muted group:** a muted Agent's Sessions are listed last under "Muted", with
+  rows like the others and a neutral dot. The bell does not count them; Mark all
+  read covers their unread rows, and only answering clears a waiting one.
 
 **Bell badge color.** The badge uses the status color of the highest state among
 counted Sessions: orange (warning) when any is waiting, else red (destructive)

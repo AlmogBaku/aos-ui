@@ -361,7 +361,9 @@ goes only to devices refreshed within 30 days, and registrations idle for 90 day
 are removed; request text is credential-masked for every runtime; input
 notifications stay in the OS Notification Center until dismissed. Accepted
 residual: anyone who can reach the listener may register, delete, or fill the 32
-device slots; an invited guest whose prompts cause the Agent to ask questions can
+device slots; anyone who can reach the operator listener can mute or hide an
+editable Agent, silencing its pushes on every device (the guest lane cannot:
+its Agent update is not a method it offers); an invited guest whose prompts cause the Agent to ask questions can
 raise one input notification per invited Session per coalescing window, and its
 text can be shaped by the guest (plain text only; it opens only AOS); a small
 DNS check-to-connect window remains.

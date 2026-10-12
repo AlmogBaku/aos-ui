@@ -72,6 +72,13 @@ Any intentional visual departure must be called out before it is introduced.
   single dot.
 - **Drawer browsing marks nothing read:** the Activity drawer is browse-only;
   reading a Session there does not change its read state.
+- **A muted Agent stays visible but quiet:** muting an Agent stops its alerts
+  (OS notifications, in-app notice, chime, ring) without hiding its work. Its
+  Sessions keep their inbox rows in a "Muted" group listed last, and its tile
+  keeps its count in neutral gray with a bell-off mark, so the state reads
+  without a status color claiming urgency. The tile does not hop while muted,
+  since the hop is itself an alert. The bell counts only Agents that are not
+  muted, so their tiles still add up exactly to it.
 - **Published Artifacts render inline:** audio and video play as native players
   in the message; an image renders as a bounded preview (max height `max-h-64`)
   that opens its view in the side panel. Every other Artifact is a compact card

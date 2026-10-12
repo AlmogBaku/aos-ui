@@ -198,6 +198,18 @@ clears one unread Session; notification settings open from a header button in th
 drawer. The bell badge color reflects the highest state among counted Sessions:
 orange for waiting, red for failed, green for unread.
 
+### Mute an Agent
+
+To silence one Agent without hiding it, right-click its row in the rail (or
+long-press it in the phone's Agent list) and choose **Mute notifications**, or
+turn off its **Notifications** switch in **Manage Agents**. The mute is stored by
+the runtime, so it applies on every device, and only where the runtime can store
+it. A muted Agent sends no OS notifications and raises no in-app notice, sound,
+or bell ring. Its Sessions stay in the Activity inbox under **Muted**, listed
+last, and the bell does not count them. Its tile shows its count in gray with a
+bell-off mark beside the name. Choose **Unmute notifications** to bring its
+alerts back. Muting a hidden Agent is kept for when you show it again.
+
 The inbox is built from the provider's unread and waiting state, so it lists
 the same Sessions after a reload or a gateway restart; a Session leaves it once
 it is read or answered. What a tab saw on top of that, such as a question's text

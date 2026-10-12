@@ -104,6 +104,16 @@ drawer with Back. The bell, the inbox, and the Agent tile badges count only
 Sessions whose Agent has a rail row. Read Sessions leave the pane; the Session
 list is the history. Browsing the drawer marks nothing read.
 
+**Muting an Agent.** The operator can mute an Agent's notifications from its
+row's menu (right click on the rail, long press on the phone) or with the
+Notifications switch in Manage Agents, wherever the runtime can store the mute.
+The mute is the runtime's, so it holds on every device. A muted Agent's events
+raise no OS notification, push or in-tab, no in-app notice, chime, or ring.
+Its Sessions still appear in the inbox, in a "Muted" group listed last, and Mark
+all read covers them; the bell does not count them. Its tile keeps its own count
+in neutral gray with a bell-off mark beside the name, and does not hop. A mute
+set on a hidden Agent is kept and takes effect once the Agent is shown again.
+
 **Bell.** The badge count uses the status color of the highest state among
 counted Sessions: orange (warning) for waiting, else red (destructive) for
 failed, else green (success) for unread. Running never colors it. The accessible
