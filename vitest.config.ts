@@ -13,7 +13,6 @@ const domTests = [
   "src/components/agent-icons/pointer-tracking.test.ts",
   "src/components/artifacts/artifact-renderers.test.ts",
   "src/components/assistant-ui/elements/mermaid-sanitize.test.ts",
-  "src/components/assistant-ui/elements/thread-reading-position.test.ts",
   "src/components/keyboard/focus-regions.test.ts",
   "src/components/keyboard/keyboard-settings.test.ts",
   "src/components/mcp-apps/sandbox-proxy.test.ts",

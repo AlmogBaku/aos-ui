@@ -1790,7 +1790,7 @@ describe("useAcpRuntime clientId", () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
     const capturedIds: Array<string | undefined> = []
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // oxlint-disable-next-line typescript/no-explicit-any
     ;(fake.prompt as any).mockImplementation(
       async (_sid: string, _blocks: unknown, meta: Record<string, unknown>) => {
         capturedIds.push(meta.clientId as string | undefined)

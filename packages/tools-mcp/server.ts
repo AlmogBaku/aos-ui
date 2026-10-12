@@ -56,7 +56,7 @@ const PRESENT_ARTIFACT_DESCRIPTION =
 const MIME_TYPE =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
 
-// eslint-disable-next-line no-control-regex -- the rule rejects control characters
+// oxlint-disable-next-line no-control-regex -- the rule rejects control characters
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
 const presentArtifactSchema = z.strictObject({

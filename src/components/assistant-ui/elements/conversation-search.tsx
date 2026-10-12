@@ -374,7 +374,7 @@ export function ConversationSearch({
       if (frame !== null) cancelAnimationFrame(frame)
     }
     // Only a different active match moves the thread; new matches repaint.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react/exhaustive-deps
   }, [activeMessageId, activeOrdinal, needle, revealMessage])
 
   // Matches in messages mounted later, by scrolling or streaming, light up too.

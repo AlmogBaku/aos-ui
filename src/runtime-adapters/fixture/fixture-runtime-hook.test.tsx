@@ -5,6 +5,7 @@ import {
   type AssistantRuntime,
 } from "@assistant-ui/react"
 import { act, render, renderHook, waitFor } from "@testing-library/react"
+import { useLayoutEffect } from "react"
 import { describe, expect, it, vi } from "vitest"
 
 import { useFixtureRuntimeBundle } from "./fixture-runtime"
@@ -19,9 +20,11 @@ describe("useFixtureRuntimeBundle", () => {
         sessionId: "thread-aster-launch",
         streamDelayMs: 0,
       })
-      runtime = bundle.assistantRuntime
+      useLayoutEffect(() => {
+        runtime = bundle.assistantRuntime
+      })
       return (
-        <AssistantRuntimeProvider runtime={runtime}>
+        <AssistantRuntimeProvider runtime={bundle.assistantRuntime}>
           {null}
         </AssistantRuntimeProvider>
       )
@@ -97,9 +100,11 @@ describe("useFixtureRuntimeBundle", () => {
         onThreadIdChange: undefined,
         streamDelayMs: 1_000,
       })
-      runtime = bundle.assistantRuntime
+      useLayoutEffect(() => {
+        runtime = bundle.assistantRuntime
+      })
       return (
-        <AssistantRuntimeProvider runtime={runtime}>
+        <AssistantRuntimeProvider runtime={bundle.assistantRuntime}>
           {null}
         </AssistantRuntimeProvider>
       )
@@ -144,9 +149,11 @@ describe("useFixtureRuntimeBundle", () => {
         onThreadIdChange,
         streamDelayMs: 0,
       })
-      runtime = bundle.assistantRuntime
+      useLayoutEffect(() => {
+        runtime = bundle.assistantRuntime
+      })
       return (
-        <AssistantRuntimeProvider runtime={runtime}>
+        <AssistantRuntimeProvider runtime={bundle.assistantRuntime}>
           {null}
         </AssistantRuntimeProvider>
       )
@@ -182,12 +189,15 @@ describe("useFixtureRuntimeBundle", () => {
   it("resolves a question through the public runtime tool-result path", async () => {
     let bundle: ReturnType<typeof useFixtureRuntimeBundle> | undefined
     const Harness = () => {
-      bundle = useFixtureRuntimeBundle({
+      const current = useFixtureRuntimeBundle({
         sessionId: "thread-lumen-roadmap",
         streamDelayMs: 0,
       })
+      useLayoutEffect(() => {
+        bundle = current
+      })
       return (
-        <AssistantRuntimeProvider runtime={bundle.assistantRuntime}>
+        <AssistantRuntimeProvider runtime={current.assistantRuntime}>
           {null}
         </AssistantRuntimeProvider>
       )

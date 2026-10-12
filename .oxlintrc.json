@@ -1,0 +1,414 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript",
+    "react"
+  ],
+  "jsPlugins": [
+    {
+      "name": "aos",
+      "specifier": "./scripts/lint-rules.mjs"
+    }
+  ],
+  "categories": {
+    "correctness": "off"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "packages/tools-mcp/dist/**",
+    "coverage/**",
+    "**/.venv/**",
+    ".agents/**",
+    ".claude/**",
+    ".hermes/**",
+    ".impeccable/**",
+    ".worktrees/**"
+  ],
+  "rules": {
+    "constructor-super": "error",
+    "for-direction": "error",
+    "getter-return": "error",
+    "no-async-promise-executor": "error",
+    "no-case-declarations": "error",
+    "no-class-assign": "error",
+    "no-compare-neg-zero": "error",
+    "no-cond-assign": "error",
+    "no-const-assign": "error",
+    "no-constant-binary-expression": "error",
+    "no-constant-condition": "error",
+    "no-control-regex": "error",
+    "no-debugger": "error",
+    "no-delete-var": "error",
+    "no-dupe-class-members": "error",
+    "no-dupe-else-if": "error",
+    "no-dupe-keys": "error",
+    "no-duplicate-case": "error",
+    "no-empty": [
+      "error",
+      {
+        "allowEmptyCatch": true
+      }
+    ],
+    "no-empty-character-class": "error",
+    "no-empty-pattern": "error",
+    "no-empty-static-block": "error",
+    "no-ex-assign": "error",
+    "no-extra-boolean-cast": "error",
+    "no-fallthrough": "error",
+    "no-func-assign": "error",
+    "no-global-assign": "error",
+    "no-import-assign": "error",
+    "no-invalid-regexp": "error",
+    // Oxlint skips regular expressions, templates, and JSX text by default;
+    // ESLint checked them.
+    "no-irregular-whitespace": [
+      "error",
+      {
+        "skipRegExps": false,
+        "skipTemplates": false,
+        "skipJSXText": false
+      }
+    ],
+    "no-loss-of-precision": "error",
+    "no-misleading-character-class": "error",
+    "no-new-native-nonconstructor": "error",
+    "no-nonoctal-decimal-escape": "error",
+    "no-obj-calls": "error",
+    "no-prototype-builtins": "error",
+    "no-redeclare": "error",
+    "no-regex-spaces": "error",
+    "no-self-assign": "error",
+    "no-setter-return": "error",
+    "no-shadow-restricted-names": "error",
+    "no-sparse-arrays": "error",
+    "no-this-before-super": "error",
+    "no-unassigned-vars": "error",
+    "no-unexpected-multiline": "error",
+    "no-unreachable": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-negation": "error",
+    "no-unsafe-optional-chaining": "error",
+    "no-unused-labels": "error",
+    "no-unused-private-class-members": "error",
+    // An options object drops Oxlint's default "^_" ignore patterns, which
+    // ESLint never had; a value used only as a type is unused, as in
+    // typescript-eslint.
+    "no-unused-vars": [
+      "error",
+      {
+        "reportVarsOnlyUsedAsTypes": true
+      }
+    ],
+    "no-useless-backreference": "error",
+    "no-useless-catch": "error",
+    "no-useless-escape": "error",
+    "no-with": "error",
+    "preserve-caught-error": "error",
+    "require-yield": "error",
+    "use-isnan": "error",
+    "valid-typeof": "error",
+    "no-array-constructor": "error",
+    "no-unused-expressions": "error",
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "warn",
+    "react/static-components": "error",
+    "react/use-memo": "error",
+    "react/preserve-manual-memoization": "error",
+    "react/incompatible-library": "warn",
+    "react/immutability": "error",
+    "react/globals": "error",
+    "react/refs": "error",
+    "react/set-state-in-effect": "error",
+    "react/error-boundaries": "error",
+    "react/purity": "error",
+    "react/set-state-in-render": "error",
+    "react/unsupported-syntax": "warn",
+    "typescript/ban-ts-comment": "error",
+    "typescript/no-duplicate-enum-values": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-misused-new": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+    "typescript/no-require-imports": "error",
+    "typescript/no-this-alias": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unsafe-declaration-merging": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-wrapper-object-types": "error",
+    "typescript/prefer-as-const": "error",
+    "typescript/prefer-namespace-keyword": "error",
+    "typescript/triple-slash-reference": "error",
+    // Off for TypeScript below, as typescript-eslint has it.
+    "no-undef": "error",
+    "no-useless-assignment": "error",
+    "aos/runtime-package-boundaries": "error"
+  },
+  "overrides": [
+    // typescript-eslint's eslint-recommended: off where TypeScript checks it.
+    {
+      "files": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.mts",
+        "**/*.cts"
+      ],
+      "rules": {
+        "constructor-super": "off",
+        "getter-return": "off",
+        "no-class-assign": "off",
+        "no-const-assign": "off",
+        "no-dupe-class-members": "off",
+        "no-dupe-keys": "off",
+        "no-func-assign": "off",
+        "no-import-assign": "off",
+        "no-new-native-nonconstructor": "off",
+        "no-obj-calls": "off",
+        "no-redeclare": "off",
+        "no-setter-return": "off",
+        "no-this-before-super": "off",
+        "no-undef": "off",
+        "no-unreachable": "off",
+        "no-unsafe-negation": "off",
+        "no-var": "error",
+        "no-with": "off",
+        "prefer-const": "error",
+        "prefer-rest-params": "error",
+        "prefer-spread": "error"
+      }
+    },
+    // A group pattern matches a whole specifier, so each pattern also names what
+    // lies beneath it ("/**"), as ESLint's gitignore-style matching implied.
+    {
+      "files": [
+        "src/**/*.{ts,tsx}"
+      ],
+      "env": {
+        "browser": true
+      },
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          "process"
+        ],
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "packages/tools-mcp",
+                  "packages/tools-mcp/**",
+                  "../**/tools-mcp",
+                  "../**/tools-mcp/**",
+                  "node:*",
+                  "**/node:*/**",
+                  "scripts/**",
+                  "../**/scripts/**",
+                  "@assistant-ui/*/dist/**",
+                  "@assistant-ui/*/src/**"
+                ],
+                "message": "Browser code must not import native implementations or private Assistant UI internals."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // A later override replaces the rule's options, so this repeats the browser ban.
+    {
+      "files": [
+        "src/runtime-adapters/aos/acp/**/*.{ts,tsx}"
+      ],
+      "excludeFiles": [
+        "src/**/*.test.{ts,tsx}"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "packages/tools-mcp",
+                  "packages/tools-mcp/**",
+                  "../**/tools-mcp",
+                  "../**/tools-mcp/**",
+                  "node:*",
+                  "**/node:*/**",
+                  "scripts/**",
+                  "../**/scripts/**",
+                  "@assistant-ui/*/dist/**",
+                  "@assistant-ui/*/src/**"
+                ],
+                "message": "Browser code must not import native implementations or private Assistant UI internals."
+              },
+              {
+                "group": [
+                  "@/components",
+                  "@/components/**",
+                  "../**/components",
+                  "../**/components/**"
+                ],
+                "message": "The ACP client must not import UI components; what it shares with them lives in src/runtime-adapters/contracts.ts or src/lib."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/tools-mcp/views/**/*.{ts,tsx}"
+      ],
+      "excludeFiles": [
+        "packages/tools-mcp/views/build.ts"
+      ],
+      "env": {
+        "browser": true
+      }
+    },
+    // The relay page is a classic script; these are the globals it reads.
+    {
+      "files": [
+        "public/mcp-app-sandbox.js"
+      ],
+      "globals": {
+        "window": "readonly",
+        "document": "readonly",
+        "location": "readonly",
+        "URLSearchParams": "readonly"
+      }
+    },
+    {
+      "files": [
+        "packages/tools-mcp/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/**",
+                  "src/**",
+                  "../**/src/**"
+                ],
+                "message": "The tools MCP server and its views depend only on shared contracts, never on browser code."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "shared/**/*.ts"
+      ],
+      "excludeFiles": [
+        "shared/**/*.test.ts"
+      ],
+      "globals": {
+        "URL": "readonly"
+      },
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@/**",
+                  "react",
+                  "**/react/**",
+                  "@ag-ui/**",
+                  "@assistant-ui/**",
+                  "@opencode-ai/**",
+                  "src/**",
+                  "../src/**",
+                  "node:*",
+                  "**/node:*/**"
+                ],
+                "message": "Shared contracts must remain browser- and native-independent."
+              }
+            ]
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          "window",
+          "document",
+          "navigator",
+          "process"
+        ]
+      }
+    },
+    {
+      "files": [
+        "scripts/**/*.{ts,mts}",
+        "test/**/*.ts",
+        "e2e/**/*.ts",
+        "**/*.config.{ts,mts,mjs}",
+        "**/*.test.{ts,tsx}"
+      ],
+      "env": {
+        "browser": true,
+        "node": true
+      },
+      "globals": {
+        "Bun": "readonly"
+      },
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    },
+    // Tests assert behavior, never styling (see scripts/lint-rules.mjs).
+    {
+      "files": [
+        "e2e/**/*.ts",
+        "test/**/*.ts",
+        "**/*.test.{ts,tsx}"
+      ],
+      "rules": {
+        "aos/no-style-assertions": "error"
+      }
+    },
+    // Type-aware promise rules for the web server and the browser runtime
+    // adapters.
+    {
+      "files": [
+        "server/**/*.ts",
+        "src/runtime-adapters/**/*.{ts,tsx}"
+      ],
+      "excludeFiles": [
+        "**/*.test.{ts,tsx}",
+        "**/*.bun-spec.ts"
+      ],
+      "rules": {
+        "typescript/no-floating-promises": [
+          "error",
+          {
+            "ignoreVoid": false,
+            "ignoreIIFE": true
+          }
+        ],
+        "typescript/no-misused-promises": [
+          "error",
+          {
+            "checksVoidReturn": {
+              "attributes": false
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

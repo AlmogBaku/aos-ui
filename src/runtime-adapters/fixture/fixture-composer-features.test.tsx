@@ -5,6 +5,7 @@ import {
   type AssistantRuntime,
 } from "@assistant-ui/react"
 import { act, render, renderHook, waitFor } from "@testing-library/react"
+import { useLayoutEffect } from "react"
 import { describe, expect, it } from "vitest"
 
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
@@ -22,13 +23,16 @@ describe("fixture composer features", () => {
     let features: ComposerFeatureViewModel = {}
     const Harness = ({ sessionId }: { sessionId: string }) => {
       const bundle = useFixtureRuntimeBundle({ sessionId, streamDelayMs: 0 })
-      runtime = bundle.assistantRuntime
-      features = useFixtureComposerFeatures({
+      const current = useFixtureComposerFeatures({
         sessionId,
         config: allEnabled,
-        runtime,
+        runtime: bundle.assistantRuntime,
       })
-      return <AssistantRuntimeProvider runtime={runtime} />
+      useLayoutEffect(() => {
+        runtime = bundle.assistantRuntime
+        features = current
+      })
+      return <AssistantRuntimeProvider runtime={bundle.assistantRuntime} />
     }
     const view = render(<Harness sessionId="thread-aster-market" />)
 

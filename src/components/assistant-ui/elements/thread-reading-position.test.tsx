@@ -1,5 +1,5 @@
 import { cleanup, render } from "@testing-library/react"
-import { createElement, useRef } from "react"
+import { useRef } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -344,14 +344,14 @@ describe("thread reading position", () => {
         contentReady: true,
         viewportRef,
       })
-      return createElement(
-        "div",
-        { ref: viewportRef, "data-testid": "viewport" },
-        createElement("div", { "data-slot": "aui_message-group" })
+      return (
+        <div ref={viewportRef} data-testid="viewport">
+          <div data-slot="aui_message-group" />
+        </div>
       )
     }
 
-    const view = render(createElement(Harness))
+    const view = render(<Harness />)
     capture.mockClear()
     sync.mockClear()
     const viewport = view.getByTestId("viewport")

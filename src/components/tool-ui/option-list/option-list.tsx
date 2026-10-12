@@ -312,7 +312,7 @@ export function OptionList({
     // Keep the roving tab stop valid when provider-updated options remove or
     // disable the active item. This state intentionally follows external
     // option availability rather than deriving a new selection.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // oxlint-disable-next-line react/set-state-in-effect
     setActiveIndex((prev) => {
       if (
         prev < 0 ||

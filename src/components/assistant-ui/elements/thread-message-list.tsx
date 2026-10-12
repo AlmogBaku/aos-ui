@@ -218,7 +218,6 @@ export function ThreadMessageList({
 
   // The list re-renders with every virtualizer change by design, so the
   // compiler skipping its memoization costs nothing.
-  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count,
     getScrollElement: () => viewport,
@@ -261,7 +260,7 @@ export function ThreadMessageList({
 
   // The list re-renders on every scroll, so the margin follows what moves above
   // it; an unchanged value bails out of the update, so it cannot loop.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // oxlint-disable-next-line react/exhaustive-deps
   useLayoutEffect(() => {
     const list = listRef.current
     if (viewport && list) setScrollMargin(offsetWithin(viewport, list))

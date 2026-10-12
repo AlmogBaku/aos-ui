@@ -18,7 +18,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
-import { useEffect, useReducer } from "react"
+import { useEffect, useLayoutEffect, useReducer } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { Thread } from "../elements/thread.aui"
 import { VoiceMediaController } from "./voice-media"
@@ -124,10 +124,13 @@ function setup({
   })
   let runtime!: AssistantRuntime
   function Harness() {
-    runtime = useLocalRuntime(model, { adapters, initialMessages })
+    const current = useLocalRuntime(model, { adapters, initialMessages })
+    useLayoutEffect(() => {
+      runtime = current
+    })
     return (
       <VoiceMediaProvider media={media} locale="en">
-        <AssistantRuntimeProvider runtime={runtime}>
+        <AssistantRuntimeProvider runtime={current}>
           <Thread autoFocus={false} />
         </AssistantRuntimeProvider>
       </VoiceMediaProvider>
@@ -331,7 +334,7 @@ describe("real Assistant UI voice composer", () => {
     function QueuedHarness() {
       const [, rerender] = useReducer((revision) => revision + 1, 0)
       useEffect(() => queue.subscribe(rerender), [])
-      runtime = useExternalStoreRuntime<ThreadMessageLike>({
+      const current = useExternalStoreRuntime<ThreadMessageLike>({
         adapters,
         messages: [
           {
@@ -345,9 +348,12 @@ describe("real Assistant UI voice composer", () => {
         onNew: vi.fn(),
         queue: queue.adapter,
       })
+      useLayoutEffect(() => {
+        runtime = current
+      })
       return (
         <VoiceMediaProvider media={media} locale="en">
-          <AssistantRuntimeProvider runtime={runtime}>
+          <AssistantRuntimeProvider runtime={current}>
             <Thread autoFocus={false} />
           </AssistantRuntimeProvider>
         </VoiceMediaProvider>
@@ -391,7 +397,9 @@ describe("real Assistant UI voice composer", () => {
     let refresh!: () => void
     function ControlledHarness() {
       const [, rerender] = useReducer((revision) => revision + 1, 0)
-      refresh = rerender
+      useLayoutEffect(() => {
+        refresh = rerender
+      }, [])
       const runtime = useExternalStoreRuntime<ThreadMessageLike>({
         adapters,
         messages,
@@ -692,7 +700,9 @@ describe("real Assistant UI voice composer", () => {
       let refresh!: () => void
       function ControlledHarness() {
         const [, rerender] = useReducer((revision) => revision + 1, 0)
-        refresh = rerender
+        useLayoutEffect(() => {
+          refresh = rerender
+        }, [])
         const runtime = useExternalStoreRuntime<ThreadMessageLike>({
           adapters,
           messages,

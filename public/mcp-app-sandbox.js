@@ -1,4 +1,3 @@
-/* global window, document, location, URLSearchParams */
 // The MCP App sandbox proxy relay (see src/components/mcp-apps/sandbox-proxy.ts).
 // It creates the App frame once the host hands it the view's HTML, then
 // forwards messages between the host and that frame alone. The host names the

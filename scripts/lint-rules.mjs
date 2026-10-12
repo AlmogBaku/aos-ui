@@ -38,7 +38,7 @@ function runtimePackage(filename) {
   return packages.has(name) ? { name, module: rest.join("/") } : undefined
 }
 
-const rule = {
+const runtimePackageBoundaries = {
   meta: {
     type: "problem",
     schema: [],
@@ -110,4 +110,42 @@ const rule = {
   },
 }
 
-export default { rules: { "runtime-package-boundaries": rule } }
+// Tests assert behavior, never styling. Geometry and computed styles stay
+// available for driving the page (pointer coordinates, finding the scroller);
+// only asserting on them is banned.
+
+/** A read of styling or geometry, banned as the subject of an `expect`. */
+const styleRead =
+  ":matches(CallExpression[callee.name='getComputedStyle'], CallExpression[callee.property.name=/^(getComputedStyle|boundingBox|getBoundingClientRect)$/], MemberExpression[property.name=/^(className|classList|style|offsetWidth|offsetHeight|clientWidth|clientHeight)$/])"
+
+const styleAssertions = [
+  "CallExpression[callee.property.name=/^(toHaveClass|toHaveStyle|toHaveCSS|toHaveScreenshot)$/]",
+  "CallExpression[callee.property.name='toHaveAttribute'] > Literal.arguments:first-child[value=/^(class|style|data-slot)$/]",
+  `CallExpression[callee.name='expect'] > ${styleRead}`,
+  `CallExpression[callee.name='expect'] > * ${styleRead}`,
+]
+
+const noStyleAssertions = {
+  meta: {
+    type: "problem",
+    schema: [],
+    messages: {
+      style:
+        "Tests never assert styling (classes, data-slot, computed styles, geometry, screenshots); look at the rendered app instead. See AGENTS.md › Writing tests.",
+    },
+  },
+  create(context) {
+    const report = (node) => context.report({ node, messageId: "style" })
+    return Object.fromEntries(
+      styleAssertions.map((selector) => [selector, report])
+    )
+  },
+}
+
+export default {
+  meta: { name: "aos" },
+  rules: {
+    "runtime-package-boundaries": runtimePackageBoundaries,
+    "no-style-assertions": noStyleAssertions,
+  },
+}
