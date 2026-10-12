@@ -507,6 +507,7 @@ function WorkspaceContent({
   )
   const [managementOpen, setManagementOpen] = useState(false)
   const [conversationObscured, setConversationObscured] = useState(false)
+  const [conversationRevealRequest, setConversationRevealRequest] = useState(0)
   const {
     agentCreator,
     creatorNotice,
@@ -635,6 +636,8 @@ function WorkspaceContent({
     conversationExposed: !managementOpen && !conversationObscured,
     readNow,
     onOpenTarget: async (agentId, sessionId) => {
+      // A notification opens its Session in view, never behind a drawer.
+      setConversationRevealRequest((request) => request + 1)
       setPreferredAgentId(agentId)
       await openSession(sessionId, agentId)
     },
@@ -691,6 +694,7 @@ function WorkspaceContent({
         selectedAgentId={selectedAgentId}
         pagedAgentId={pagedAgentId}
         onBrowseAgent={browseAgent}
+        conversationRevealRequest={conversationRevealRequest}
         activeThreadId={visibleThreadId}
         environmentLabel={environmentLabel}
         agentBuilderAvailable={Boolean(agentCreator)}

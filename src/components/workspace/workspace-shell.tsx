@@ -191,6 +191,11 @@ export type WorkspaceShellProps = {
   onManageAgents?: () => void
   onConversationObscuredChange?: (obscured: boolean) => void
   agentFocusRequest?: { agentId: string; nonce: number } | null
+  /**
+   * Each new value closes the phone navigator and Activity, so a Session
+   * opened from outside them, such as from a notification, is in view.
+   */
+  conversationRevealRequest?: number
   onActionError?: (error: unknown) => void
   tabUndo?: { title: string; onUndo: () => WorkspaceActionResult } | null
   artifactOutputs?: ReactNode
@@ -1164,6 +1169,7 @@ export function WorkspaceShell({
   onManageAgents,
   onConversationObscuredChange,
   agentFocusRequest,
+  conversationRevealRequest,
   onActionError,
   tabUndo,
   artifactOutputs,
@@ -1214,6 +1220,16 @@ export function WorkspaceShell({
   const mobileNavigatorOpen = mobileNavigator.view !== "closed"
   const browsedAgentId =
     mobileNavigator.view === "sessions" ? mobileNavigator.agentId : null
+  // Served as the request arrives, during render, so a drawer opened after it
+  // stays open.
+  const [servedRevealRequest, setServedRevealRequest] = useState(
+    conversationRevealRequest
+  )
+  if (conversationRevealRequest !== servedRevealRequest) {
+    setServedRevealRequest(conversationRevealRequest)
+    dispatchMobileNavigator({ type: "DISMISS" })
+    setActivityOpen(false)
+  }
   useEffect(() => {
     onBrowseAgent?.(browsedAgentId)
   }, [browsedAgentId, onBrowseAgent])
