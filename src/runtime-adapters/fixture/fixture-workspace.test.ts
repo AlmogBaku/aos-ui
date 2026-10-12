@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { attentionLevel, bellSessions } from "@/lib/attention-level"
+
 import { ActivityStore } from "../../lib/notifications/store"
 import type { SessionMetadata, WorkspaceActivityEvent } from "../contracts"
 import { getWorkspaceCapabilities } from "../workspace-state"
@@ -473,6 +475,15 @@ describe("FixtureWorkspace", () => {
 
   it("stores a mute through its own update, for a hidden Agent too, and reports it editable", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const bell = async () =>
+      attentionLevel(
+        bellSessions(
+          await workspace.listAgents(),
+          workspace.listAllSessionMetadata()
+        )
+      ).count
+    // Lumen waits on the operator and Nori failed unread.
+    expect(await bell()).toBe(2)
     const lumen = async () =>
       (await workspace.listAgentCatalog()).find(
         ({ summary }) => summary.id === "agent-lumen"
@@ -484,6 +495,7 @@ describe("FixtureWorkspace", () => {
       muteEditable: true,
       summary: { muted: true },
     })
+    expect(await bell()).toBe(1)
 
     await workspace.updateAgent("agent-lumen", { muted: false })
     expect((await lumen())?.summary).not.toHaveProperty("muted")

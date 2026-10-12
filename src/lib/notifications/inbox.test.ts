@@ -157,6 +157,44 @@ describe("buildInbox", () => {
     expect(inbox.unread.map(({ request }) => request)).toEqual([undefined])
   })
 
+  it("lists a muted Agent's rows apart and last, waiting or not", () => {
+    const inbox = buildInbox({
+      sessions: [
+        session(
+          "lisbon",
+          "travel",
+          "waiting-for-input",
+          "2026-09-05T11:00:00Z"
+        ),
+        session(
+          "invoices",
+          "ledger",
+          "waiting-for-input",
+          "2026-09-05T10:00:00Z"
+        ),
+        session("hotels", "ledger", "idle", "2026-09-05T09:00:00Z"),
+      ],
+      records: [],
+      ready: [],
+      agents: agents.map((agent) =>
+        agent.id === "ledger" ? { ...agent, muted: true as const } : agent
+      ),
+      titles,
+    })
+    expect({
+      waiting: summary(inbox.waiting),
+      unread: summary(inbox.unread),
+      muted: summary(inbox.muted),
+    }).toEqual({
+      waiting: ["lisbon waiting 2026-09-05T11:00:00Z"],
+      unread: [],
+      muted: [
+        "invoices waiting 2026-09-05T10:00:00Z",
+        "hotels unread 2026-09-05T09:00:00Z",
+      ],
+    })
+  })
+
   it("draws a creator Session as the rail's draft, and names each row", () => {
     const inbox = buildInbox({
       sessions: [

@@ -7,7 +7,7 @@ import type { InboxRow } from "@/lib/notifications/inbox"
 import { relativeTime } from "@/lib/relative-time"
 
 import styles from "./activity-row.module.css"
-import { StatusDot, UnreadDot } from "./status-dots"
+import { QuietDot, StatusDot, UnreadDot } from "./status-dots"
 import { WorkspaceAgentTile } from "./workspace-agent-tile"
 
 /** What a row says, before its time: its lead, its Session, and its state. */
@@ -43,6 +43,7 @@ export function rowCopy(row: InboxRow, dictionary: Dictionary) {
 
 export function ActivityRow({
   row,
+  quiet,
   dictionary,
   locale,
   now,
@@ -50,6 +51,8 @@ export function ActivityRow({
   onMarkRead,
 }: {
   row: InboxRow
+  /** A muted Agent's row, whose dot claims no status color. */
+  quiet: boolean
   dictionary: Dictionary
   locale: Locale
   now: Date
@@ -79,8 +82,11 @@ export function ActivityRow({
             <time dateTime={row.time}>
               {relativeTime(row.time, now, locale)}
             </time>
-            {/* The navigation rows' one dot, decorative like theirs. */}
-            {row.state === "waiting" || row.state === "failed" ? (
+            {/* The navigation rows' one dot, decorative like theirs; a muted
+                Agent's row keeps it neutral. */}
+            {quiet ? (
+              <QuietDot label={copy.mutedGroup} />
+            ) : row.state === "waiting" || row.state === "failed" ? (
               <StatusDot
                 status={
                   row.state === "waiting" ? "waiting-for-input" : "failed"

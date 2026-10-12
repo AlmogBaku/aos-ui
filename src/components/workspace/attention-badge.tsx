@@ -13,17 +13,20 @@ import { StatusDot } from "./status-dots"
 export function AttentionBadge({
   level,
   runningLabel,
+  muted = false,
   className,
 }: {
   level: AttentionLevel | undefined
   runningLabel: string
+  /** A muted Agent keeps its count, in no status color. */
+  muted?: boolean
   className?: string
 }) {
   if (level?.count)
     return (
       <span
         className={cn(styles.badge, className)}
-        data-top={level.top}
+        data-top={muted ? "muted" : level.top}
         aria-hidden="true"
       >
         {badgeCount(level.count)}

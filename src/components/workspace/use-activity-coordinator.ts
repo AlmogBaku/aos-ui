@@ -12,6 +12,7 @@ import {
 import { isSessionUnread } from "@/lib/workspace-view-model"
 import {
   attentionLevel,
+  bellSessions,
   railSessions,
   type AttentionLevel,
 } from "@/lib/attention-level"
@@ -100,6 +101,7 @@ export type ActivityAgent = {
   avatar?: string
   role?: "creator"
   visibility?: "visible" | "hidden"
+  muted?: true
 }
 type Options = {
   workspace: WorkspaceAdapter
@@ -200,6 +202,9 @@ export function useActivityCoordinator(
     conversationExposed: current.current.conversationExposed,
     pageVisible: document.visibilityState === "visible",
     pageFocused: document.hasFocus(),
+    quietAgentIds: new Set(
+      current.current.agents.filter(({ muted }) => muted).map(({ id }) => id)
+    ),
   })
   /**
    * The proxy owns read state, so the browser only reports what is exposed, and
@@ -532,7 +537,10 @@ export function useActivityCoordinator(
     setReady((previous) =>
       previous.filter((entry) => entry.agentId !== agentId)
     )
-  const attention = attentionLevel(rail)
+  // The inbox lists a muted Agent's Sessions; the bell counts none of them.
+  const attention = attentionLevel(
+    bellSessions(options.agents, options.sessions)
+  )
   /** Reading a Session is a provider write; the browser never stores it. */
   const markSessionsRead = (sessionIds: readonly string[]) => {
     void Promise.all(
@@ -632,10 +640,14 @@ export function useActivityCoordinator(
       else markSessionsRead([row.sessionId])
     },
     markAllRead() {
-      // As the bell counts: a hidden Agent's Session is never touched.
+      // Exactly the inbox's unread rows, a muted Agent's among them; a hidden
+      // Agent's Session is never touched, and only answering clears a wait.
       markSessionsRead(
         railSessions(current.current.agents, current.current.sessions)
-          .filter(isSessionUnread)
+          .filter(
+            ({ unread, status }) =>
+              unread === true && status !== "waiting-for-input"
+          )
           .map(({ sessionId }) => sessionId)
       )
       setReady([])

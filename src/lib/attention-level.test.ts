@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import type { SessionMetadata } from "@/runtime-adapters/contracts"
 
-import { attentionLevel, railSessions } from "./attention-level"
+import { attentionLevel, bellSessions, railSessions } from "./attention-level"
 
 const session = (
   sessionId: string,
@@ -80,10 +80,11 @@ describe("attentionLevel", () => {
   })
 })
 
-describe("the counted set", () => {
+describe("the inbox set and the bell set", () => {
   const agents = [
     { id: "a" },
     { id: "b" },
+    { id: "muted", muted: true as const },
     { id: "hidden", visibility: "hidden" as const },
     { id: "creator", role: "creator" as const },
   ]
@@ -91,18 +92,29 @@ describe("the counted set", () => {
     session("a-wait", "a", "waiting-for-input"),
     session("a-unread", "a", "idle", true),
     session("b-failed", "b", "failed", true),
+    session("muted-unread", "muted", "idle", true),
     session("hidden-wait", "hidden", "waiting-for-input", true),
     session("creator-unread", "creator", "idle", true),
   ]
+  const ids = (list: readonly SessionMetadata[]) =>
+    list.map(({ sessionId }) => sessionId)
 
-  it("counts no Session of an Agent without a rail row", () => {
-    expect(
-      railSessions(agents, sessions).map(({ sessionId }) => sessionId)
-    ).toEqual(["a-wait", "a-unread", "b-failed"])
+  it("lists a muted Agent's Sessions, but rings for none of them, and a hidden Agent's in neither", () => {
+    expect(ids(railSessions(agents, sessions))).toEqual([
+      "a-wait",
+      "a-unread",
+      "b-failed",
+      "muted-unread",
+    ])
+    expect(ids(bellSessions(agents, sessions))).toEqual([
+      "a-wait",
+      "a-unread",
+      "b-failed",
+    ])
   })
 
-  it("sums the rail's tiles exactly to the bell", () => {
-    const bell = attentionLevel(railSessions(agents, sessions))
+  it("sums the tiles of the Agents that are not muted exactly to the bell", () => {
+    const bell = attentionLevel(bellSessions(agents, sessions))
     const tiles = ["a", "b"].map((agentId) =>
       attentionLevel(sessions.filter((item) => item.agentId === agentId))
     )

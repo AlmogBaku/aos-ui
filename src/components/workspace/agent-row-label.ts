@@ -7,6 +7,7 @@ export type AgentRowCopy = {
   selected: string
   running: string
   unknown: string
+  muted: string
   unreadCount: string
   waitingCount: string
   failedCount: string
@@ -18,6 +19,7 @@ export function agentRowCopy(dictionary: Dictionary): AgentRowCopy {
     selected: dictionary.accessibility.selectedAgent,
     running: dictionary.status.running,
     unknown: dictionary.status.unknown,
+    muted: dictionary.status.muted,
     unreadCount: dictionary.activity.unreadCount,
     waitingCount: dictionary.activity.waitingCount,
     failedCount: dictionary.activity.failedCount,
@@ -35,6 +37,7 @@ export function agentRowLabel(
     name: string
     description?: string
     status?: string
+    muted?: true
     attention?: AttentionLevel
   },
   selected: boolean,
@@ -50,6 +53,7 @@ export function agentRowLabel(
       : level?.top === "running"
         ? [copy.running]
         : []),
+    agent.muted ? copy.muted : null,
     // A catalog that could not be read is said so; no badge shows it.
     agent.status === "unknown" ? copy.unknown : null,
     selected ? copy.selected : null,

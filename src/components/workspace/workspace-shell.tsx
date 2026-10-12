@@ -5,6 +5,7 @@ import {
   type ThreadListRuntime,
 } from "@assistant-ui/react"
 import {
+  BellOff,
   Menu,
   PanelRightClose,
   PanelRightOpen,
@@ -103,6 +104,10 @@ type WorkspaceAgentBase = {
   avatar?: string
   /** What this Agent's Sessions hold for the operator, for its tile badge. */
   attention?: AttentionLevel
+  /** The operator silenced this Agent's notifications. */
+  muted?: true
+  /** Whether the runtime can store a mute for this Agent. */
+  muteEditable?: boolean
 }
 
 export type WorkspaceAgent = WorkspaceAgentBase & { kind?: "ready" }
@@ -526,11 +531,18 @@ function AgentsPanel({
                   <AttentionBadge
                     level={agent.attention}
                     runningLabel={rowCopy.running}
+                    muted={agent.muted}
                   />
                 </span>
                 <span className={styles.agentText}>
                   <span className={cn(styles.agentName, "text-sm leading-5")}>
                     <bdi>{agent.name}</bdi>
+                    {agent.muted ? (
+                      <BellOff
+                        className={styles.mutedMark}
+                        aria-hidden="true"
+                      />
+                    ) : null}
                   </span>
                   {agent.description ? (
                     <bdi

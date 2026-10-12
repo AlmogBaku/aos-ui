@@ -13,6 +13,8 @@ export type InboxAgent = {
   name: string
   avatar?: string
   description?: string
+  /** A muted Agent's rows are listed apart, after every other row. */
+  muted?: true
 }
 
 /**
@@ -39,7 +41,12 @@ export type InboxRow = {
   request?: { text: string; more: number | undefined }
 }
 
-export type Inbox = { waiting: InboxRow[]; unread: InboxRow[] }
+export type Inbox = {
+  waiting: InboxRow[]
+  unread: InboxRow[]
+  /** A muted Agent's rows, waiting or not: listed, never alerted. */
+  muted: InboxRow[]
+}
 
 /** What a Session's newest record says it is, once it is not waiting. */
 const recordStates: Record<ActivityRecord["type"], InboxState> = {
@@ -130,8 +137,13 @@ export function buildInbox({
     })
   }
   rows.sort((left, right) => Date.parse(right.time) - Date.parse(left.time))
+  const muted = new Set(
+    agents.filter((agent) => agent.muted).map(({ id }) => id)
+  )
+  const heard = rows.filter(({ agentId }) => !muted.has(agentId))
   return {
-    waiting: rows.filter(({ state }) => state === "waiting"),
-    unread: rows.filter(({ state }) => state !== "waiting"),
+    waiting: heard.filter(({ state }) => state === "waiting"),
+    unread: heard.filter(({ state }) => state !== "waiting"),
+    muted: rows.filter(({ agentId }) => muted.has(agentId)),
   }
 }

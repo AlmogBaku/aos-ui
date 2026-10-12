@@ -27,6 +27,7 @@ export const he = {
     failedCount: "{count} נכשלו",
     waitingGroup: "ממתינים לתשובה שלכם",
     unreadGroup: "לא נקראו",
+    mutedGroup: "מושתקים",
     emptyTitle: "אין כרגע משהו שדורש אתכם.",
     emptyDetail: "שאלות ועבודה שהסתיימה יופיעו כאן.",
     markAllRead: "סימון הכול כנקרא",
@@ -150,6 +151,7 @@ export const he = {
     failed: "נכשל",
     unread: "לא נקרא",
     pinned: "מוצמדת",
+    muted: "התראות מושתקות",
     archived: "בארכיון",
   },
   platform: {

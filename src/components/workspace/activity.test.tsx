@@ -17,7 +17,10 @@ import type {
 } from "@/runtime-adapters/contracts"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
-import { useActivityCoordinator } from "./use-activity-coordinator"
+import {
+  useActivityCoordinator,
+  type ActivityAgent,
+} from "./use-activity-coordinator"
 import { createFixtureWorkspace } from "@/runtime-adapters/fixture/fixture-workspace"
 import {
   ActivityAsk,
@@ -658,13 +661,17 @@ describe("the Activity inbox", () => {
     },
   ]
   /** The panel over a live coordinator; `update` is the provider's next read. */
-  function renderInbox() {
+  function renderInbox(
+    initial = inboxSessions,
+    extraAgents: ActivityAgent[] = []
+  ) {
     const provider = source()
     const props = {
       ...options(provider.workspace),
       agents: [
         ...agents,
         { id: "h", name: "Hidden", visibility: "hidden" as const },
+        ...extraAgents,
       ],
       titles: new Map([
         ["one", "First"],
@@ -686,7 +693,7 @@ describe("the Activity inbox", () => {
         />
       )
     }
-    const view = render(<Harness sessions={inboxSessions} />)
+    const view = render(<Harness sessions={initial} />)
     return {
       provider,
       props,
@@ -785,8 +792,9 @@ describe("the Activity inbox", () => {
     await user.click(markAll)
     expect(
       provider.markSessionRead.mock.calls.map(([sessionId]) => sessionId)
-    ).toEqual(["one", "two", "three"])
-    // Reading a waiting Session changes nothing, so it cannot enable this.
+    ).toEqual(["one", "three"])
+    // Reading a waiting Session changes nothing, so it neither takes this nor
+    // enables it.
     update([inboxSessions[1]!])
     expect(markAll).toBeDisabled()
   })
@@ -813,6 +821,33 @@ describe("the Activity inbox", () => {
     expect(live).toHaveTextContent(/^Aster, Fifth, waiting for your input$/)
     update([...inboxSessions.slice(1), arrival, older])
     expect(live).toHaveTextContent(/^Aster, Fifth, waiting for your input$/)
+  })
+
+  it("lists a muted Agent's rows last, and Mark all read covers them", async () => {
+    const user = userEvent.setup()
+    const quiet = { id: "q", name: "Quill", muted: true as const }
+    const { provider } = renderInbox(
+      [
+        inboxSessions[1]!,
+        {
+          sessionId: "quiet",
+          agentId: "q",
+          status: "idle",
+          updatedAt: minutesAgo(1),
+          unread: true,
+        },
+      ],
+      [quiet]
+    )
+    expect(
+      screen
+        .getAllByRole("heading", { level: 3 })
+        .map(({ textContent }) => textContent?.replace(/ \d+$/, ""))
+    ).toEqual(["Waiting for you", "Muted"])
+    await user.click(screen.getByRole("button", { name: "Mark all read" }))
+    expect(
+      provider.markSessionRead.mock.calls.map(([sessionId]) => sessionId)
+    ).toEqual(["quiet"])
   })
 
   it("shows one calm message while nothing needs the operator", () => {

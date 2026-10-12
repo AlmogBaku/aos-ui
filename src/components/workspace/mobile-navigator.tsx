@@ -12,6 +12,7 @@ import {
 } from "react"
 import {
   ArrowLeft,
+  BellOff,
   Bot,
   ChevronRight,
   Plus,
@@ -399,10 +400,19 @@ export function MobileNavigator({
                       <AttentionBadge
                         level={agent.attention}
                         runningLabel={copy.agentRow.running}
+                        muted={agent.muted}
                       />
                     </span>
                     <span className={styles.rowText}>
-                      <bdi className={styles.rowTitle}>{agent.name}</bdi>
+                      <span className={styles.rowTitleLine}>
+                        <bdi className={styles.rowTitle}>{agent.name}</bdi>
+                        {agent.muted ? (
+                          <BellOff
+                            className={styles.mutedMark}
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                      </span>
                       {agent.description ? (
                         <bdi className={styles.rowDescription}>
                           {agent.description}

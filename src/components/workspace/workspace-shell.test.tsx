@@ -471,6 +471,22 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("tab", { name: "Launch review" })).toBeVisible()
   })
 
+  it("keeps a muted Agent's count on its tile and says it is muted", () => {
+    renderShell({
+      agents: [
+        agents[0]!,
+        {
+          ...agents[1]!,
+          muted: true,
+          attention: { count: 3, waiting: 1, failed: 0, top: "waiting" },
+        },
+      ],
+    })
+
+    const mica = agentRow(/^Mica, .*3 unread.*Notifications muted/)
+    expect(within(mica).getByText("3")).toHaveAttribute("aria-hidden", "true")
+  })
+
   it("names a pinned tab, and names both states when it is unread too", () => {
     renderShell({
       openSessions: [
@@ -1220,7 +1236,7 @@ describe("WorkspaceShell", () => {
         items: [],
         attention: { count: 2, waiting: 0, failed: 0, top: "unread" },
         ring: 0,
-        inbox: { waiting: [], unread: [] },
+        inbox: { waiting: [], unread: [], muted: [] },
         readNow: () => new Date(),
         notice: { count: 2, urgent: true },
         error: false,

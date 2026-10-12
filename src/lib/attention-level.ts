@@ -45,14 +45,34 @@ export function attentionLevel(
   return { count: counted.length, waiting, failed, top }
 }
 
-/** Only a Session the rail can open counts, so a hidden Agent's count nowhere. */
-export function railSessions<Session extends Pick<SessionMetadata, "agentId">>(
-  agents: readonly Pick<AgentSummary, "id" | "role" | "visibility">[],
+type SetAgent = Pick<AgentSummary, "id" | "role" | "visibility" | "muted">
+
+function sessionsOf<Session extends Pick<SessionMetadata, "agentId">>(
+  agents: readonly SetAgent[],
   sessions: readonly Session[]
 ) {
-  const rail = new Set(agents.filter(isRosterAgent).map(({ id }) => id))
-  return sessions.filter(({ agentId }) => rail.has(agentId))
+  const ids = new Set(agents.map(({ id }) => id))
+  return sessions.filter(({ agentId }) => ids.has(agentId))
 }
+
+/**
+ * The inbox's Sessions: only one the rail can open is listed, so a hidden
+ * Agent's are nowhere. A muted Agent's are listed, in their own group.
+ */
+export const railSessions = <Session extends Pick<SessionMetadata, "agentId">>(
+  agents: readonly SetAgent[],
+  sessions: readonly Session[]
+) => sessionsOf(agents.filter(isRosterAgent), sessions)
+
+/** The bell's Sessions: the inbox's, less a muted Agent's. */
+export const bellSessions = <Session extends Pick<SessionMetadata, "agentId">>(
+  agents: readonly SetAgent[],
+  sessions: readonly Session[]
+) =>
+  sessionsOf(
+    agents.filter((agent) => isRosterAgent(agent) && !agent.muted),
+    sessions
+  )
 
 /** "4 unread, 1 waiting for you, 1 failed": a level as a name reads it. */
 export function attentionLabels(

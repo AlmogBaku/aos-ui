@@ -85,7 +85,7 @@ export function ActivityBell({
   )
 }
 
-const emptyInbox: Inbox = { waiting: [], unread: [] }
+const emptyInbox: Inbox = { waiting: [], unread: [], muted: [] }
 
 /**
  * The Sessions that need the operator, one row each, waiting ones first. The
@@ -132,9 +132,14 @@ export function ActivityPanel({
       text: arrivals.map((row) => rowCopy(row, dictionary).summary).join(". "),
     })
   const groups = [
-    { title: copy.waitingGroup, rows: inbox.waiting },
-    { title: copy.unreadGroup, rows: inbox.unread },
+    { title: copy.waitingGroup, rows: inbox.waiting, quiet: false },
+    { title: copy.unreadGroup, rows: inbox.unread, quiet: false },
+    { title: copy.mutedGroup, rows: inbox.muted, quiet: true },
   ].filter(({ rows }) => rows.length)
+  // Only answering clears a waiting Session, muted or not.
+  const markable =
+    inbox.unread.length > 0 ||
+    inbox.muted.some(({ state }) => state !== "waiting")
 
   const open = (row: InboxRow) => {
     if (opening) return
@@ -186,7 +191,7 @@ export function ActivityPanel({
           <Button
             variant="ghost"
             size="sm"
-            disabled={!inbox.unread.length}
+            disabled={!markable}
             onClick={() => activity?.markAllRead()}
           >
             {copy.markAllRead}
@@ -239,6 +244,7 @@ export function ActivityPanel({
                       <ActivityRow
                         key={row.key}
                         row={row}
+                        quiet={group.quiet}
                         dictionary={dictionary}
                         locale={locale}
                         now={now}

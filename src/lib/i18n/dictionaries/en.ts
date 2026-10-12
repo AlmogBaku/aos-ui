@@ -27,6 +27,7 @@ export const en = {
     failedCount: "{count} failed",
     waitingGroup: "Waiting for you",
     unreadGroup: "Unread",
+    mutedGroup: "Muted",
     emptyTitle: "Nothing needs you right now.",
     emptyDetail: "Questions and finished work show up here.",
     markAllRead: "Mark all read",
@@ -156,6 +157,7 @@ export const en = {
     failed: "Failed",
     unread: "Unread",
     pinned: "Pinned",
+    muted: "Notifications muted",
     archived: "Archived",
   },
   platform: {

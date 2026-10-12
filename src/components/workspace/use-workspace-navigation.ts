@@ -240,6 +240,7 @@ export function useWorkspaceNavigation({
     agents,
     setAgents,
     avatarEditableIds,
+    muteEditableIds,
     reloadCatalog,
     agentsLoading,
     setAgentsLoading,
@@ -1095,6 +1096,7 @@ export function useWorkspaceNavigation({
       ...agent,
       avatar: agentIcons.get(agent.id)?.token,
       status,
+      muteEditable: muteEditableIds.includes(agent.id),
       unread: agentUnreadFromSessions(agent, sessions),
       // The Agent's own status knows its native activity too.
       attention: attentionLevel(

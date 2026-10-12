@@ -53,6 +53,16 @@ describe("an Agent row's accessible name", () => {
       "New Agent, draft, 1 unread, 1 waiting for you",
     ],
     [
+      "says a muted Agent is muted, beside the count its badge keeps",
+      {
+        ...agent,
+        muted: true,
+        attention: { count: 2, waiting: 1, failed: 0, top: "waiting" },
+      },
+      false,
+      "Travel Planner, Trip planning, 2 unread, 1 waiting for you, Notifications muted",
+    ],
+    [
       "keeps an Agent whose status could not be read saying so",
       { ...agent, status: "unknown", attention: attentionLevel([]) },
       false,

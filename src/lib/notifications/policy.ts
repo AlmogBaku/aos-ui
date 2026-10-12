@@ -22,6 +22,8 @@ export type ActivityContext = {
   conversationExposed?: boolean
   /** True while this device receives Web Push, which owns its OS alerts. */
   pushActive?: boolean
+  /** Agents the operator muted: their events are listed, never alerted. */
+  quietAgentIds?: ReadonlySet<string>
 }
 
 export type BrowserPermission = "default" | "granted" | "denied" | "unsupported"
@@ -65,9 +67,13 @@ export function getActivityPolicy(
     isSelectionExposed(context) &&
     context.selection?.agentId === event.agentId &&
     context.selection?.sessionId === event.sessionId
-  // Activity the gateway re-sends on connect already happened: it is listed,
-  // never alerted again.
-  const eligible = !event.read && !event.resolved && !event.replayed
+  // Activity the gateway re-sends on connect already happened, and a muted
+  // Agent's is the operator's to look for: both are listed, never alerted.
+  const eligible =
+    !event.read &&
+    !event.resolved &&
+    !event.replayed &&
+    !context.quietAgentIds?.has(event.agentId)
   const category = categoryOf(event.type)
   return {
     markRead,

@@ -256,6 +256,15 @@
   text-overflow: ellipsis;
 }
 
+/* Beside the name, so a muted Agent reads as muted without its badge. */
+.mutedMark {
+  flex: none;
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
+  margin-inline-start: 0.25rem;
+  color: var(--muted-foreground);
+}
+
 .agentDescription {
   overflow: hidden;
   color: var(--muted-foreground);

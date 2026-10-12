@@ -25,6 +25,7 @@ export type Dictionary = {
     /** The inbox's two groups, and its one message while both are empty. */
     waitingGroup: string
     unreadGroup: string
+    mutedGroup: string
     emptyTitle: string
     emptyDetail: string
     markAllRead: string
@@ -158,6 +159,7 @@ export type Dictionary = {
     failed: string
     unread: string
     pinned: string
+    muted: string
     archived: string
   }
   /** "From {platform}" labels for Session row accessible names. */

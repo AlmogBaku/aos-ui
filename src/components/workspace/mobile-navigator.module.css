@@ -157,6 +157,25 @@ nav.list {
   text-align: left;
 }
 
+/* The name and, for a muted Agent, its mark, on one line. */
+.rowTitleLine {
+  display: flex;
+  min-inline-size: 0;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.rowTitleLine .rowTitle {
+  min-inline-size: 0;
+}
+
+.mutedMark {
+  flex: none;
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+
 .rowTitle {
   font-weight: 550;
 }

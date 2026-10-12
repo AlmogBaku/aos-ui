@@ -37,6 +37,11 @@ export function UnreadDot({ label }: { label: string }) {
   return <span className={styles.unreadDot} title={label} aria-hidden="true" />
 }
 
+/** A muted Agent's dot: present, but in no status color. */
+export function QuietDot({ label }: { label: string }) {
+  return <span className={styles.statusDot} title={label} aria-hidden="true" />
+}
+
 /** The states a Session row shows; an Agent row carries a tile badge instead. */
 export type SessionRowStatus = Exclude<RowStatus, "active" | "attention">
 
