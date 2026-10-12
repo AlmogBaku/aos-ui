@@ -116,6 +116,11 @@ type Options = {
   onOpenTarget: (agentId: string, sessionId: string) => Promise<void>
   /** Opens an Agent the creator just made, which owns no Session yet. */
   onOpenAgent: (agentId: string) => Promise<void>
+  /**
+   * An open that fails is that action's failure, reported where every other
+   * workspace action's is; it never marks Activity itself as interrupted.
+   */
+  onActionError: (error: unknown) => void
   browser?: {
     port?: BrowserNotificationPort
     platform?: ActivityBrowserPlatform
@@ -356,8 +361,8 @@ export function useActivityCoordinator(
         ).catch(() => {})
         setRecords(store.records())
         setNotice(null)
-      })().catch(() => {
-        if (active) setError(true)
+      })().catch((reason: unknown) => {
+        if (active) current.current.onActionError(reason)
       })
     }
     const stopPushListening = push?.listen({
@@ -551,13 +556,17 @@ export function useActivityCoordinator(
   const attention = attentionLevel(
     bellSessions(options.agents, options.sessions)
   )
-  /** Reading a Session is a provider write; the browser never stores it. */
+  /**
+   * Reading a Session is a provider write; the browser never stores it. A
+   * write that fails leaves the Session unread, which the provider still
+   * reports, so it is no Activity failure.
+   */
   const markSessionsRead = (sessionIds: readonly string[]) => {
     void Promise.all(
       sessionIds.map((sessionId) =>
         current.current.workspace.markSessionRead?.(sessionId)
       )
-    ).catch(() => setError(true))
+    ).catch(() => {})
   }
   // One identity per method, so a render that changes no Activity data hands
   // the bell, the panel, and the settings the same object.
@@ -595,8 +604,8 @@ export function useActivityCoordinator(
         browserRef.current?.publish()
         setNotice(null)
         return true
-      })().catch(() => {
-        setError(true)
+      })().catch((reason: unknown) => {
+        current.current.onActionError(reason)
         return false
       })
     },
@@ -611,8 +620,8 @@ export function useActivityCoordinator(
             setNotice(null)
             return true
           },
-          () => {
-            setError(true)
+          (reason: unknown) => {
+            current.current.onActionError(reason)
             return false
           }
         )
@@ -640,8 +649,8 @@ export function useActivityCoordinator(
         markSessionsRead([sessionId])
         setNotice(null)
         return true
-      })().catch(() => {
-        setError(true)
+      })().catch((reason: unknown) => {
+        current.current.onActionError(reason)
         return false
       })
     },
