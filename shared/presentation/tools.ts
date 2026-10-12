@@ -92,11 +92,15 @@ export type AosUiToolName = PresentationToolName | "present_artifact"
 
 /**
  * What `present_artifact`'s result hands its view: the file's display name and
- * declared type, never its path, since a result reaches guests.
+ * declared type, never its path, since a result reaches guests; and `fileId`,
+ * an opaque identity of the path that every call for it shares, so the page
+ * knows a re-presented file as the same Artifact. A result recorded before
+ * `fileId` existed has none.
  */
 export const presentArtifactResultSchema = z.object({
   filename: z.string().min(1),
   mimeType: z.string().min(1).optional(),
+  fileId: z.string().min(1).optional(),
 })
 
 export type PresentArtifactResult = z.infer<typeof presentArtifactResultSchema>

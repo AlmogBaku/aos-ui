@@ -136,6 +136,11 @@ export type McpAppFrameProps = {
   title: string
   /** The type of the file the view shows, under its name in full screen. */
   detail?: string | undefined
+  /**
+   * The revision of the file the view shows, which changes once a later call
+   * shows the file again; the view re-reads its files on the change.
+   */
+  filesRevision?: string | undefined
 }
 
 /**
@@ -158,6 +163,7 @@ export default function McpAppFrame({
   adapter,
   title,
   detail,
+  filesRevision,
   onUnavailable,
   placement = "inline",
   onMove,
@@ -263,8 +269,12 @@ export default function McpAppFrame({
     // host pads the frame by the device's own insets.
     safeAreaInsets: NO_INSETS,
     styles: { variables: styleVariables() },
-    // Where the view fetches each file its call names, by argument.
+    // Where the view fetches each file its call names, by argument, and the
+    // revision of the file it shows.
     ...(files ? { "aos/files": files.addresses } : {}),
+    ...(filesRevision === undefined
+      ? {}
+      : { "aos/filesRevision": filesRevision }),
     // Inline, the view grows with its content; elsewhere it fills its space.
     ...(size === undefined
       ? {}
@@ -282,11 +292,12 @@ export default function McpAppFrame({
   useEffect(() => {
     latestHostContext.current = hostContext
   })
-  // Renewed addresses reach the view at once, before their old passes lapse.
+  // Renewed addresses reach the view at once, before their old passes lapse,
+  // as does a new revision of its file.
   useEffect(() => {
     if (initialized)
       bridgeRef.current?.setHostContext(latestHostContext.current())
-  }, [files, initialized])
+  }, [files, filesRevision, initialized])
 
   useEffect(() => {
     const element = container.current

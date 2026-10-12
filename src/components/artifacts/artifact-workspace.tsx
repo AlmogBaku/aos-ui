@@ -145,7 +145,8 @@ function sameSessionOutput(previous: SessionOutput, next: SessionOutput) {
     previous.toolCallId === next.toolCallId &&
     previous.toolName === next.toolName &&
     previous.file.filename === next.file.filename &&
-    previous.file.mimeType === next.file.mimeType
+    previous.file.mimeType === next.file.mimeType &&
+    previous.file.fileId === next.file.fileId
   )
 }
 

@@ -44,6 +44,13 @@ vi.mock("react-router", () => import("./test-utils/window-router"))
 
 resetWorkspaceBetweenTests()
 
+/** Collapses the desktop inspector so the Session tab strip becomes reachable. */
+async function collapseInspector(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    screen.getByRole("button", { name: en.actions.hideAgentDetails })
+  )
+}
+
 const useMarketWorkspace = () =>
   useControlledWorkspace({ initialThreadId: "thread-aster-market" })
 /** The public fixture demo's runtime, which lists no creator. */
@@ -341,6 +348,7 @@ describe("reversible local Session tabs", () => {
   it("returns focus to the restored tab after Undo", async () => {
     const user = userEvent.setup()
     renderWorkspace(useMarketWorkspace)
+    await collapseInspector(user)
     await user.click(
       await screen.findByRole("button", { name: "Close session: Market brief" })
     )
@@ -443,7 +451,7 @@ describe("artifact Session scope", () => {
       artifacts,
     }))
 
-    await screen.findByRole("tab", { name: "Market brief" })
+    await screen.findByRole("complementary", { name: "Agent details" })
     await waitFor(() => expect(reads.length).toBeGreaterThan(0))
 
     // The switch a tab performs, driven through the runtime that owns it.
@@ -579,6 +587,37 @@ describe("paged Session History", () => {
       expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(1)
     )
     expect(loadMoreButton()).toBeNull()
+  })
+
+  // Full mount: a query that hides every loaded row keeps the end of History
+  // in view, and reading on scroll would then walk the whole catalog.
+  it("reads no further page on scroll while a query filters History, only from the button", async () => {
+    const user = userEvent.setup()
+    renderWorkspace(usePagedWorkspace)
+    await waitFor(() => expect(loadMoreButton()).not.toBeNull())
+    await user.type(
+      screen.getByRole("searchbox", {
+        name: en.mobileNavigation.searchSessions,
+      }),
+      "thread-aster-9"
+    )
+
+    await act(async () => {
+      for (const callback of observed)
+        callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          {} as IntersectionObserver
+        )
+    })
+
+    expect(loadMoreButton()).not.toBeNull()
+    expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(0)
+
+    await user.click(loadMoreButton()!)
+
+    await waitFor(() =>
+      expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(1)
+    )
   })
 
   // Full mount: on a runtime that scopes the catalog, the thread list's cursor

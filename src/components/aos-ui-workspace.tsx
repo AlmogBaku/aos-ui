@@ -222,6 +222,7 @@ function ArtifactWorkspaceBridge({
         agentId={agentId}
         sessionId={artifactThreadId}
         connectionStatus={bundle.connectionStatus}
+        messages={artifactMessages}
       >
         <ArtifactWorkspaceContent {...shell} locale={locale}>
           {children}

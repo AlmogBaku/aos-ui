@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { posix } from "node:path"
 import {
   registerAppResource,
@@ -50,7 +51,7 @@ const SAFE_OUTPUT =
   "Never emit executable HTML, scripts, or browser-side code; Mermaid belongs only in fenced mermaid blocks."
 
 const PRESENT_ARTIFACT_DESCRIPTION =
-  "Show a file to the user in a live preview they can refresh, open, and download. Use when a concrete file is part of the answer delivered to the user, as its source, subject, or output; inspecting a candidate does not qualify. Call it once the file is ready, and call it again after each change to the file, so the user sees its latest version. Pass an absolute path inside the project workspace."
+  "Show a file to the user as a live Artifact they can preview, refresh, open, and download. Use it when a concrete file is part of the answer, as its source, subject, or output; inspecting a candidate does not qualify. Call it once the file is ready, and again after each change to that file: one path is one Artifact, and each call refreshes it in place instead of adding another. Keep the title the same on every call, or omit it; never rename the file or present a copy to mark a version. Pass an absolute path inside the project workspace."
 
 const MIME_TYPE =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
@@ -70,7 +71,14 @@ const presentArtifactSchema = z.strictObject({
       "Path must not contain control characters"
     )
     .describe("Absolute POSIX path of the file inside the project workspace"),
-  title: z.string().min(1).max(160).optional().describe("Display filename"),
+  title: z
+    .string()
+    .min(1)
+    .max(160)
+    .optional()
+    .describe(
+      "Display filename, when the path's own name would not tell the user what the file is; the same on every call for one path"
+    ),
   mimeType: z.string().max(255).regex(MIME_TYPE).optional(),
 })
 
@@ -84,6 +92,19 @@ function displayFilename(path: string, title: string | undefined) {
   return title.toLowerCase().endsWith(extension.toLowerCase())
     ? title
     : `${title}${extension}`
+}
+
+/**
+ * The file's identity across calls: a digest of its normalized path, so every
+ * call for one path names the same Artifact whatever its title, while a
+ * result still carries no path. Sixteen hex digits keep it apart from any
+ * other file in a Session and short in the text the model reads back.
+ */
+function fileId(path: string) {
+  return createHash("sha256")
+    .update(posix.normalize(path))
+    .digest("hex")
+    .slice(0, 16)
 }
 
 /**
@@ -238,6 +259,7 @@ export function createToolsServer({
     ({ path, title, mimeType }) => {
       const file: PresentArtifactResult = {
         filename: displayFilename(path, title),
+        fileId: fileId(path),
         ...(mimeType ? { mimeType } : {}),
       }
       return presentationResult("present_artifact", file.filename, file)

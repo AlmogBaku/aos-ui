@@ -16,6 +16,7 @@ import { CommandPalette, type KeyboardCommand } from "./command-palette"
 import { KEYBOARD_UI_CATALOG } from "./keyboard-actions"
 import {
   createFocusRegionCoordinator,
+  focusRegion,
   observeKeyboardRegions,
 } from "./focus-regions"
 import { KeyboardReference } from "./keyboard-reference"
@@ -178,9 +179,10 @@ export function WorkspaceKeyboard({
       else if (actionId === "workspace.focusPreviousPane")
         coordinatorRef.current.focusPrevious(root ?? document.body)
       else if (actionId === "workspace.focusAgents") focusRegion(root, "agents")
-      else if (actionId === "workspace.focusSessions")
-        focusRegion(root, "sessions")
-      else if (actionId === "workspace.focusConversation") {
+      else if (actionId === "workspace.focusSessions") {
+        // The inspector lists the Sessions while the tab strip is hidden.
+        if (!focusRegion(root, "sessions")) focusRegion(root, "inspector")
+      } else if (actionId === "workspace.focusConversation") {
         if (!focusRegion(root, "transcript")) focusRegion(root, "conversation")
       } else if (actionId === "conversation.search") {
         if (activeThreadId)
@@ -467,18 +469,6 @@ export function WorkspaceKeyboard({
       </Dialog>
     </>
   )
-}
-
-function focusRegion(root: HTMLElement | null, name: string) {
-  const target = root?.querySelector<HTMLElement>(
-    `[data-keyboard-region="${name}"]`
-  )
-  if (!target) return false
-  const focusable = target.querySelector<HTMLElement>(
-    "button:not(:disabled), [tabindex]:not([tabindex='-1']), input, textarea"
-  )
-  ;(focusable ?? target).focus()
-  return true
 }
 
 function selectNeighbor<T extends { id?: string; sessionId?: string }>(

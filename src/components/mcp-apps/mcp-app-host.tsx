@@ -13,7 +13,11 @@ import {
 } from "react"
 
 import type { McpAppView } from "@harness-gw/sdk/protocol"
-import type { ShownFile } from "@/artifacts/artifacts"
+import {
+  latestCallsByFile,
+  type ArtifactMessage,
+  type ShownFile,
+} from "@/artifacts/artifacts"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
 import type { AppConnectionStatus } from "./use-app-files"
@@ -54,6 +58,12 @@ export type McpAppHost = {
   connectionStatus?: AppConnectionStatus
   /** The view in the side panel, while its Session is the one shown. */
   pip?: McpAppPip
+  /**
+   * The call that last showed each identified file, by the file's id. A frame
+   * hands its view the one for its file as the file's revision, so a view of
+   * an earlier call re-reads the file once a later call shows it again.
+   */
+  latestCalls: ReadonlyMap<string, string>
   /** Shows a view in the side panel, returning any other to its message. */
   showInPip: (pip: McpAppPip) => void
   /** Returns the side panel's view to its message. */
@@ -63,6 +73,8 @@ export type McpAppHost = {
 }
 
 const McpAppHostContext = createContext<McpAppHost | undefined>(undefined)
+
+const NO_MESSAGES: readonly ArtifactMessage[] = []
 
 /** What a target addresses within its Session: a tool call or an Artifact. */
 export const mcpAppTargetKey = (target: McpAppTarget) =>
@@ -74,6 +86,23 @@ export const sameMcpAppTarget = (a: McpAppTarget, b: McpAppTarget) =>
   a.agentId === b.agentId &&
   a.sessionId === b.sessionId &&
   mcpAppTargetKey(a) === mcpAppTargetKey(b)
+
+/**
+ * The revision of the file a view shows: the call that last showed it, which
+ * is the view's own call until a later one shows the file again. A file no
+ * tool identifies has none.
+ */
+export function fileRevision(
+  host: Pick<McpAppHost, "latestCalls">,
+  file: ShownFile | undefined,
+  target: McpAppTarget
+) {
+  if (file?.fileId === undefined) return undefined
+  return (
+    host.latestCalls.get(file.fileId) ??
+    ("toolCallId" in target ? target.toolCallId : undefined)
+  )
+}
 
 function restoreFocus(opener: HTMLElement) {
   const key = opener.dataset.artifactOpenId
@@ -96,14 +125,18 @@ export function McpAppHostProvider({
   agentId,
   sessionId,
   connectionStatus,
+  messages = NO_MESSAGES,
   children,
 }: {
   adapter?: McpAppAdapter
   agentId?: string
   sessionId?: string
   connectionStatus?: AppConnectionStatus
+  /** The Session's conversation, which says what each file's latest call is. */
+  messages?: readonly ArtifactMessage[]
   children: ReactNode
 }) {
+  const latestCalls = useMemo(() => latestCallsByFile(messages), [messages])
   const [pip, setPip] = useState<McpAppPip>()
   const opener = useRef<HTMLElement>(undefined)
   const shown =
@@ -121,9 +154,16 @@ export function McpAppHostProvider({
     return () => window.clearTimeout(timer)
   }, [pip, shown])
 
+  // Showing the target already there keeps its view: two publications of one
+  // file share an Artifact, and a new target object would rebuild the view's
+  // connection on a frame whose sandbox never reports ready again.
   const showInPip = useCallback((next: McpAppPip) => {
     opener.current = next.opener
-    setPip(next)
+    setPip((current) =>
+      current && sameMcpAppTarget(current.target, next.target)
+        ? { ...current, opener: next.opener }
+        : next
+    )
   }, [])
   // The control that opened the panel may render only once the panel is
   // gone, as an inspector row does on a desktop.
@@ -160,6 +200,7 @@ export function McpAppHostProvider({
             sessionId,
             connectionStatus,
             pip: shown,
+            latestCalls,
             showInPip,
             leavePip,
             updatePip,
@@ -169,6 +210,7 @@ export function McpAppHostProvider({
       adapter,
       agentId,
       connectionStatus,
+      latestCalls,
       leavePip,
       sessionId,
       showInPip,

@@ -6,7 +6,12 @@ act on a named profile. List them first with `hermes profile list`.
 
 ## Register the tools MCP server
 
-For each named profile:
+A profile never inherits MCP servers from the default profile, so register
+the server on the default profile and on every profile a person talks to
+through AOS, including the Agent creator and any guest-facing Agent. An Agent
+without it has no `present_artifact` and falls back to attachments AOS cannot
+preview. Ask the operator which profiles are user-facing; a background Agent
+does not need it. For each of those profiles:
 
 ```bash
 hermes -p <profile> config set mcp_servers.aos-ui.url http://127.0.0.1:4110/mcp
@@ -18,6 +23,10 @@ model as `mcp__aos_ui__render_chart` and so on. The harness-gw gateway reads the
 map, and stats views from the same URL, so it must be one the gateway can reach
 too; ask the operator when the gateway runs in a container. In a Session that is already
 open, `/reload-mcp` picks them up; a new Session loads them on its own.
+
+A profile created later needs the same two commands. The Agent creator runs
+them for every Agent it builds; anything else that creates a user-facing
+profile must run them too.
 
 ## Install the skills
 

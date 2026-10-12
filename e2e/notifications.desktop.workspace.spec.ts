@@ -10,6 +10,7 @@ import {
   prepare,
   publish,
 } from "./notifications"
+import { collapseInspector } from "./support/inspector"
 
 test("the first watched turn offers the ask, and turning it on delivers one alert", async ({
   page,
@@ -46,6 +47,7 @@ test("hidden tab failure names its Agent and Session, and click opens them", asy
   page,
 }) => {
   await prepare(page, "granted")
+  await collapseInspector(page)
   await background(page, true)
   await publish(page, "turn-failed")
   await expect.poll(() => notificationCount(page)).toBe(1)

@@ -477,6 +477,30 @@ describe("MCP App files", () => {
   const viewFiles = (bridge: FakeBridge) =>
     bridge.contexts.at(-1)?.["aos/files"]
 
+  it("hands the view its file's revision, and a new one at once without remounting it", () => {
+    const view = { html: "<p>app</p>" }
+    const frame = (revision: string) => (
+      <ToolUiLocaleProvider locale="en">
+        <McpAppFrame
+          view={view}
+          openedAt={0}
+          target={target}
+          adapter={adapter}
+          title="report.pdf"
+          filesRevision={revision}
+        />
+      </ToolUiLocaleProvider>
+    )
+    const { rerender } = render(frame("t1"))
+    const bridge = bridges.at(-1)!
+    act(() => bridge.initialize())
+    expect(bridge.contexts.at(-1)?.["aos/filesRevision"]).toBe("t1")
+
+    rerender(frame("t2"))
+    expect(bridge.contexts.at(-1)?.["aos/filesRevision"]).toBe("t2")
+    expect(bridges).toHaveLength(1)
+  })
+
   it("renews the passes at half their life and hands the view the fresh addresses", async () => {
     const { bridge, renewFiles } = mountFiles()
     expect(viewFiles(bridge)).toEqual({ path: address("t1", "first") })

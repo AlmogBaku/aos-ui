@@ -29,6 +29,13 @@ vi.mock("react-router", () => import("./test-utils/window-router"))
 
 resetWorkspaceBetweenTests()
 
+/** Collapses the desktop inspector so the Session tab strip becomes reachable. */
+async function collapseInspector(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    screen.getByRole("button", { name: en.actions.hideAgentDetails })
+  )
+}
+
 /** The public fixture demo's runtime, which lists no creator. */
 const usePublicFixture = () => useFixtureBundle({ enableAgentCreator: false })
 const fixtureClock = { readNow: () => FIXTURE_NOW }
@@ -49,6 +56,7 @@ describe("AosUiApp fixture composition", () => {
     try {
       const view = renderWorkspace(useFixtureBundle, fixtureClock)
       const provider = () => view.runtime.workspace
+      await collapseInspector(user)
       await screen.findByRole("tab", { name: "Market brief" })
       // The focused Session's turn is seen, so the bell still counts only the
       // fixture's two unread Sessions.
@@ -159,6 +167,7 @@ describe("AosUiApp fixture composition", () => {
   // Full mount: Agents, tabs, the thread's messages, and the Todo dock are
   // separate parts that only the workspace joins.
   it("joins provider Agents, Session tabs, the thread, and explicit todos", async () => {
+    const user = userEvent.setup()
     render(
       <ControlledWorkspaceFixture
         initialThreadId="session-primary"
@@ -230,6 +239,7 @@ describe("AosUiApp fixture composition", () => {
       </ControlledWorkspaceFixture>
     )
 
+    await collapseInspector(user)
     const tablist = await screen.findByRole("tablist", { name: "Sessions" })
     expect(
       await within(tablist).findByRole("tab", { name: "Selected session" })
@@ -360,6 +370,7 @@ describe("AosUiApp fixture composition", () => {
         name: "Open session: Pricing analysis",
       })
     )
+    await collapseInspector(user)
     await waitFor(() =>
       expect(
         screen.getByRole("tab", { name: "Pricing analysis" })

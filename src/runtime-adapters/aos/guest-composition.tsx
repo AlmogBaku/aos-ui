@@ -209,6 +209,7 @@ function GuestArtifactShell({
         agentId={agentId}
         sessionId={sessionId}
         connectionStatus={connectionStatus}
+        messages={messages}
       >
         <GuestConversationShell
           locale={locale}

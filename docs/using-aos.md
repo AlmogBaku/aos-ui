@@ -78,7 +78,7 @@ The card's controls are Refresh, Download, Full screen, Open in new tab, and pip
 
 A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) shows Download, and Open in new tab where the browser shows that kind, instead of a preview.
 
-The tool's description tells the Agent to call it again after each change so the card shows the latest version.
+The tool's description tells the Agent to call it again after each change to the file. One path is one Artifact however the Agent titles it: every open view of that file, in its message, in the side panel, or in full screen, re-reads it when a later call presents it again, and the inspector's Outputs list names the file once, at its latest call, under the latest title. Earlier cards stay in the conversation as history and show the current file on Refresh.
 
 **pip** moves the view into the side panel beside the conversation, or into a drawer over the conversation on phones. The message shows a short placeholder with a control that brings the view back. Moving the view reloads it, so a PDF reopens at its first page. Only one view is in pip at a time, within a Session. Close the panel, press Escape, or use the view's own inline control to return it.
 

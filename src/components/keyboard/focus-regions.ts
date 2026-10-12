@@ -53,6 +53,24 @@ function focusTarget(region: HTMLElement): HTMLElement | null {
   )
 }
 
+/**
+ * Focus a named region's first reachable control, or the region itself when it
+ * takes focus; false when the region is missing or nothing in it can take focus.
+ */
+export function focusRegion(root: ParentNode | null, name: string) {
+  const region = root?.querySelector<HTMLElement>(
+    `[data-keyboard-region="${name}"]`
+  )
+  if (!region || isExcluded(region)) return false
+  const control = [
+    ...region.querySelectorAll<HTMLElement>(focusableSelector),
+  ].find((element) => !isExcluded(element))
+  const candidate = control ?? (region.hasAttribute("tabindex") ? region : null)
+  if (!candidate) return false
+  candidate.focus()
+  return true
+}
+
 /** Add the provider-neutral markers used by F6 to currently mounted slots. */
 export function annotateKeyboardRegions(root: ParentNode) {
   const transcript = root.querySelector<HTMLElement>(

@@ -715,6 +715,40 @@ describe("artifact view", () => {
     expect(fetched).toEqual([first, second, third])
   })
 
+  it("re-reads the file once the page reports a new revision of it, and not when only its address renews", async () => {
+    const [first, second] = ["one", "two"].map(
+      (pass) => `https://aos.test/files/notes.txt?pass=${pass}`
+    ) as [string, string]
+    const bodies = ["Draft notes", "Final notes"]
+    const fetched: string[] = []
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (address: string) => {
+        fetched.push(address)
+        return new Response(bodies[fetched.length - 1] ?? "")
+      })
+    )
+    const view = props(notes)
+    const shown = (address: string, revision: string) => (
+      <ArtifactView
+        {...view}
+        context={{
+          ...files(address),
+          "aos/filesRevision": revision,
+          ...PIP,
+        }}
+      />
+    )
+    const { rerender } = render(shown(first, "call-1"))
+    expect(await screen.findByText("Draft notes")).toBeVisible()
+
+    rerender(shown(second, "call-1"))
+    expect(await screen.findByText("Draft notes")).toBeVisible()
+    rerender(shown(second, "call-2"))
+    expect(await screen.findByText("Final notes")).toBeVisible()
+    expect(fetched).toEqual([first, second])
+  })
+
   it("runs HTML's scripts only in an opaque origin, under a policy that reaches no network or frame", async () => {
     const html =
       "<head><script>parent.postMessage('ran', '*')</script></head><h1>Launch plan</h1>"

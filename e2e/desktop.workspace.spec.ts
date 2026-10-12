@@ -2,6 +2,7 @@ import { expect, test, type Page } from "./test"
 import { exerciseMessageActions } from "./message-actions"
 import { exerciseSessionActions } from "./session-actions"
 import { exerciseSessionTabs } from "./session-tabs"
+import { collapseInspector } from "./support/inspector"
 
 test("desktop Session tabs and identity in en", async ({ page }) => {
   await exerciseSessionTabs(page, false)
@@ -26,7 +27,7 @@ const hebrew = {
 
 async function openWorkspace(page: Page, locale: "en" | "he" = "en") {
   await page.goto(`/${locale}`)
-  await expect(page.getByRole("tablist")).toBeVisible()
+  await collapseInspector(page)
 }
 
 function agentButton(page: Page, name: string) {
@@ -80,7 +81,7 @@ test("the language control preserves URL context and the selected Session", asyn
   page,
 }) => {
   await page.goto("/en?view=compact#thread-market")
-  await expect(page.getByRole("tablist")).toBeVisible()
+  await collapseInspector(page)
   await page.getByRole("tab", { name: "Launch review" }).click()
   const workspaceUrl = page.url()
 

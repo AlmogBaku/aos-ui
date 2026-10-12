@@ -17,11 +17,11 @@ import {
   type RichToolPart,
 } from "@/components/tool-ui"
 import { MenuPopup } from "@/components/ui/menu-popup"
-import type { McpAppAdapter } from "@/runtime-adapters/contracts"
+import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { McpAppPipPanel } from "./mcp-app-card"
-import { McpAppHostProvider } from "./mcp-app-host"
+import { McpAppHostProvider, useMcpAppHost } from "./mcp-app-host"
 import type { McpAppFrameProps } from "./mcp-app-frame"
 import { MCP_APP_TOOL_ARTIFACT, mcpAppToolArtifact } from "./tool-part"
 
@@ -126,6 +126,55 @@ describe("MCP App routing", () => {
     expect(
       await screen.findByLabelText("report.pdf", { selector: "iframe" })
     ).toBeInTheDocument()
+  })
+
+  it("hands each view the call that last showed its file, so an earlier view follows the latest", async () => {
+    const results: Record<string, unknown> = {
+      "call-1": { filename: "Report.pdf", fileId: "report" },
+      "call-2": { filename: "Report v2.pdf", fileId: "report" },
+      "call-3": { filename: "notes.txt" },
+    }
+    const toolResult = (toolCallId: string) => ({
+      content: [],
+      structuredContent: { value: results[toolCallId] },
+    })
+    const parts = Object.keys(results).map((toolCallId) =>
+      toolPart({
+        toolName: "present_artifact",
+        toolCallId,
+        artifact: MCP_APP_TOOL_ARTIFACT,
+        result: toolResult(toolCallId),
+      })
+    )
+    const callOf = (target: McpAppTarget) =>
+      "toolCallId" in target ? target.toolCallId : ""
+    render(
+      <McpAppHostProvider
+        adapter={adapter(async (target) => ({
+          html: "<p>app</p>",
+          toolResult: toolResult(callOf(target)),
+        }))}
+        agentId="researcher"
+        sessionId="session-1"
+        messages={parts.map((part) => ({
+          id: `message-${part.toolCallId}`,
+          role: "assistant",
+          content: [part],
+        }))}
+      >
+        {parts.map((part) => (
+          <AosToolPresentation key={part.toolCallId} {...part} />
+        ))}
+      </McpAppHostProvider>
+    )
+    await screen.findByLabelText("notes.txt", { selector: "iframe" })
+
+    const revision = (toolCallId: string) =>
+      frames.findLast((frame) => callOf(frame.target) === toolCallId)
+        ?.filesRevision
+    expect(revision("call-1")).toBe("call-2")
+    expect(revision("call-2")).toBe("call-2")
+    expect(revision("call-3")).toBeUndefined()
   })
 
   it("hosts a settled call that carries neither input nor result", async () => {
@@ -347,6 +396,60 @@ describe("MCP App side panel", () => {
     const focused = document.activeElement
     expect(focused).not.toBe(document.body)
     expect(focused?.contains(screen.getByLabelText(...FRAME))).toBe(true)
+  })
+
+  it("keeps the open view when the same Artifact is shown again from another card", async () => {
+    // Two publications of one file share an Artifact id; each card asks for
+    // the panel with its own target object.
+    const user = userEvent.setup()
+    const apps = adapter()
+    function OpenArtifact({ label }: { label: string }) {
+      const host = useMcpAppHost()
+      return (
+        <button
+          type="button"
+          onClick={() =>
+            host?.showInPip({
+              target: {
+                agentId: "researcher",
+                sessionId: "session-1",
+                artifactId: "memo",
+              },
+              file: { filename: "episode-memo.md" },
+            })
+          }
+        >
+          {label}
+        </button>
+      )
+    }
+    render(
+      <Session
+        apps={apps}
+        message={false}
+        beside={
+          <>
+            <OpenArtifact label="First card" />
+            <OpenArtifact label="Second card" />
+          </>
+        }
+      />
+    )
+    const panelFrame = () =>
+      within(
+        screen.getByRole("region", { name: "episode-memo.md" })
+      ).getByLabelText("episode-memo.md", { selector: "iframe" })
+
+    await user.click(screen.getByRole("button", { name: "First card" }))
+    const frame = await waitFor(panelFrame)
+    await user.click(screen.getByRole("button", { name: "Second card" }))
+
+    expect(panelFrame()).toBe(frame)
+    expect(apps.open).toHaveBeenCalledTimes(1)
+    const targets = new Set(
+      frames.filter((f) => f.placement === "pip").map((f) => f.target)
+    )
+    expect(targets.size).toBe(1)
   })
 
   it("keeps the view while newer messages push its message out of the rendered window", async () => {

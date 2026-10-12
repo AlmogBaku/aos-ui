@@ -598,7 +598,13 @@ export function AgentSessionHistory({
           </div>
         ) : null}
         {threadListRuntime && pagesThisAgent ? (
-          <SessionHistoryLoadMore copy={copy} />
+          // A query can hide every loaded row and keep the end in view, so
+          // reading on scroll would walk the whole catalog for rows the filter
+          // drops; the provider search already lists matches not yet loaded.
+          <SessionHistoryLoadMore
+            copy={copy}
+            paused={Boolean(normalizedQuery)}
+          />
         ) : null}
         {navigation.archivedSessions.length ? (
           <ArchivedSection

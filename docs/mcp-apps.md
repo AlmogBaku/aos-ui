@@ -107,7 +107,15 @@ The host renews the passes while the view is mounted: at half their life,
 when the page wakes or comes back online past that point, and when the
 workspace's connection recovers. A failed renewal retries with backoff until
 the gateway refuses it. The fresh addresses arrive as a host-context change, so
-a view fetches a file by the address it received last. `ui/open-link` and
+a view fetches a file by the address it received last.
+
+A result that carries a `fileId` beside its `filename`, as `present_artifact`'s
+does with a digest of the file's path, identifies the file across calls. The
+host context then also carries `aos/filesRevision`, an opaque token that changes
+once a later call shows the same file again, and the `present_artifact` view
+re-reads the file on the change, in its message, in the side panel, and in
+full screen alike. The inspector's Outputs list names such a file once, at its
+latest call. `ui/open-link` and
 `ui/download-file` recognize the view's own file by its address, whatever
 pass it carries, and use a fresh one. An own file opens over `http` too when
 the workspace itself is served over `http`. A download names the file by a
@@ -240,7 +248,8 @@ The host context carries the theme (`light` or `dark`), the locale (`en-US`
 or `he-IL`), and the workspace's colors and font as the spec's style
 variables, plus the time zone, the tool call, pointer and hover support,
 zero safe-area insets, since the host keeps every view clear of the device's
-edges, and a view's file addresses as `aos/files`.
+edges, a view's file addresses as `aos/files`, and the shown file's revision as
+`aos/filesRevision` when its tool identifies the file.
 A view's log messages go only to the browser console. AOS sets `lang` and
 `dir` on the view's root element unless the view sets its own, so a view can
 follow Hebrew right-to-left layout.

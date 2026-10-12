@@ -2,11 +2,9 @@ import { expect, test, type Page } from "./test"
 
 async function openWorkspace(page: Page, locale: "en" | "he" = "en") {
   await page.goto(`/${locale}`)
-  await expect(page.getByRole("tablist")).toBeVisible()
-  await expect(page.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  )
+  await expect(
+    page.getByRole("complementary", { name: /^(?:Agent details|פרטי הסוכן)$/ })
+  ).toBeVisible()
 }
 
 async function sendPrompt(

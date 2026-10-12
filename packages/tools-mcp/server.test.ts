@@ -86,6 +86,9 @@ describe("tools/list", () => {
     expect(byName.get("present_artifact")!.description).toMatch(
       /again after each change/u
     )
+    expect(byName.get("present_artifact")!.description).toMatch(
+      /one path is one Artifact/u
+    )
   })
 })
 
@@ -303,6 +306,7 @@ describe("present_artifact", () => {
   // A result reaches guests through the view, so it names the file and never
   // its path; the proxy reads the path from the call's own arguments. A title
   // keeps the path's extension, which the view and a download type it by.
+  const anyFileId = { fileId: expect.stringMatching(/^[0-9a-f]{16}$/u) }
   it.each([
     [{ path: "/workspace/out/report.pdf" }, { filename: "report.pdf" }],
     [
@@ -327,15 +331,31 @@ describe("present_artifact", () => {
         ok: true,
         type: "aos.presentation",
         kind: "present_artifact",
-        value,
+        value: { ...value, ...anyFileId },
       })
       expect(fallback(result)).toEqual({
         heading: `${value.filename} is ready for display.`,
-        value,
+        value: { ...value, ...anyFileId },
       })
       expect(JSON.stringify(result)).not.toContain("/workspace")
     }
   )
+
+  it("gives one path one id whatever its title or spelling, and another path another", async () => {
+    const id = async (args: Record<string, unknown>) =>
+      (
+        (await call("present_artifact", args)).structuredContent as {
+          value: { fileId: string }
+        }
+      ).value.fileId
+    const plain = await id({ path: "/workspace/out/report.pdf" })
+
+    expect(await id({ path: "/workspace/out/report.pdf", title: "Q3" })).toBe(
+      plain
+    )
+    expect(await id({ path: "/workspace/out/./report.pdf" })).toBe(plain)
+    expect(await id({ path: "/workspace/out/report-v2.pdf" })).not.toBe(plain)
+  })
 
   it.each([
     ["a relative path", { path: "out/report.pdf" }, /absolute at path/u],

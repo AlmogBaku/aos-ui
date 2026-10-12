@@ -1,9 +1,62 @@
 import { describe, expect, it } from "vitest"
 
+import { withAosToolArtifact } from "@/lib/tool-artifact"
+
 import {
   extractArtifactOccurrences,
+  extractSessionOutputs,
+  latestCallsByFile,
   parseArtifactDescriptor,
 } from "./artifacts"
+
+describe("extractSessionOutputs", () => {
+  /** One `present_artifact` call in its own message, by the file it shows. */
+  const shown = (
+    toolCallId: string,
+    file: { filename: string; fileId?: string }
+  ) => ({
+    id: `message-${toolCallId}`,
+    role: "assistant",
+    content: [
+      {
+        type: "tool-call",
+        toolCallId,
+        toolName: "present_artifact",
+        artifact: withAosToolArtifact(undefined, { app: {} }),
+        result: { content: [], structuredContent: { value: file } },
+      },
+    ],
+  })
+
+  it("lists an identified file once, at its latest call, and an unidentified one per call", () => {
+    const messages = [
+      shown("call-1", { filename: "Notes.txt", fileId: "notes" }),
+      shown("call-2", { filename: "plan.md", fileId: "plan" }),
+      shown("call-3", { filename: "scratch.txt" }),
+      shown("call-4", { filename: "Notes v2.txt", fileId: "notes" }),
+      shown("call-5", { filename: "scratch.txt" }),
+    ]
+
+    expect(
+      extractSessionOutputs(messages).map((output) =>
+        output.kind === "app"
+          ? [output.toolCallId, output.file.filename]
+          : output.kind
+      )
+    ).toEqual([
+      ["call-2", "plan.md"],
+      ["call-3", "scratch.txt"],
+      ["call-4", "Notes v2.txt"],
+      ["call-5", "scratch.txt"],
+    ])
+    expect(latestCallsByFile(messages)).toEqual(
+      new Map([
+        ["notes", "call-4"],
+        ["plan", "call-2"],
+      ])
+    )
+  })
+})
 
 describe("parseArtifactDescriptor", () => {
   it.each([

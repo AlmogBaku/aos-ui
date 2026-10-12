@@ -31,6 +31,7 @@ import { SystemNotice } from "@/components/ui/system-notice"
 import type { AppPlacement } from "./host-handlers"
 import type { McpAppFrameProps } from "./mcp-app-frame"
 import {
+  fileRevision,
   mcpAppTargetKey,
   sameMcpAppTarget,
   useMcpAppHost,
@@ -176,6 +177,7 @@ function HostedMcpApp({
   const unavailable = useCallback(() => setState({ status: "failed" }), [])
   const toolName = part.toolName === toolCallId ? undefined : part.toolName
   const file = shownFileOf(result)
+  const revision = fileRevision(host, file, target)
 
   // While the view shows in the side panel, which mounts it afresh, its message
   // keeps its own and passes on what the call reports.
@@ -231,6 +233,7 @@ function HostedMcpApp({
           adapter={adapter}
           title={viewTitle(labels, { file, toolName, target })}
           detail={file?.mimeType}
+          filesRevision={revision}
           onUnavailable={unavailable}
           onMove={move}
         />
@@ -395,6 +398,7 @@ function PipPanel({
             adapter={adapter}
             title={title}
             detail={pip.file?.mimeType}
+            filesRevision={fileRevision(host, pip.file, pip.target)}
             onUnavailable={unavailable}
             placement="pip"
             onMove={leavePip}

@@ -48,7 +48,9 @@ function artifactCall(
         ok: true,
         type: "aos.presentation",
         kind: "present_artifact",
-        ...result.structuredContent,
+        // The tools server names a file by a digest of its path; a fixture
+        // file's name is as unique.
+        value: { filename, mimeType, fileId: filename },
       },
     },
   }
