@@ -45,6 +45,7 @@ import {
   ToolUiSessionLinkProvider,
   type ToolUiSessionLinkResolver,
 } from "@/components/tool-ui"
+import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import {
@@ -141,6 +142,8 @@ const workspaceCopy = {
     retry: "Try again",
     loading: "Loading workspace…",
     unavailable: "The workspace could not be loaded.",
+    sessionUnavailable:
+      "This Session could not be shown. Open another Session from the list.",
     tasks: "Session todos",
     tasksUnavailable: "Execution tasks are not available from this provider.",
     tasksFailed: "Todos could not be loaded.",
@@ -155,6 +158,7 @@ const workspaceCopy = {
     retry: "ניסיון חוזר",
     loading: "סביבת העבודה נטענת…",
     unavailable: "לא ניתן לטעון את סביבת העבודה.",
+    sessionUnavailable: "לא ניתן להציג את השיחה הזו. פתחו שיחה אחרת מהרשימה.",
     tasks: "משימות השיחה",
     tasksUnavailable: "ספק זה אינו מציע משימות ביצוע.",
     tasksFailed: "לא ניתן לטעון את המשימות.",
@@ -747,14 +751,29 @@ function WorkspaceContent({
             ) : selectedAgent && conversationThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
                 <ToolUiSessionLinkProvider sessionLink={toolSessionLink}>
-                  <Thread
-                    autoFocus={false}
-                    direction={getLocaleDirection(locale)}
-                    labels={threadLabels[locale]}
-                    composerFeatures={threadComposerFeatures}
-                    messageRewind={bundle.messageRewind}
-                    components={activeThreadComponents}
-                  />
+                  {/* A reset key, not a React key: a key would remount the
+                      Thread on every switch and lose its composer state. */}
+                  <LazyVisualBoundary
+                    resetKey={conversationThreadId}
+                    fallbackLabel={workspaceCopy[locale].sessionUnavailable}
+                    fallback={
+                      <p
+                        className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
+                        role="alert"
+                      >
+                        {workspaceCopy[locale].sessionUnavailable}
+                      </p>
+                    }
+                  >
+                    <Thread
+                      autoFocus={false}
+                      direction={getLocaleDirection(locale)}
+                      labels={threadLabels[locale]}
+                      composerFeatures={threadComposerFeatures}
+                      messageRewind={bundle.messageRewind}
+                      components={activeThreadComponents}
+                    />
+                  </LazyVisualBoundary>
                 </ToolUiSessionLinkProvider>
               </WorkspaceThreadChromeContext.Provider>
             ) : (

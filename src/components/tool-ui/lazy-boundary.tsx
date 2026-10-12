@@ -6,15 +6,24 @@ type LazyBoundaryProps = {
   children: ReactNode
   fallbackLabel: string
   fallback?: ReactNode
+  /** A failed boundary renders its children again once this changes. */
+  resetKey?: string | undefined
 }
 
-type LazyBoundaryState = { failed: boolean }
+type LazyBoundaryState = { failed: boolean; resetKey?: string | undefined }
 
 export class LazyVisualBoundary extends Component<
   LazyBoundaryProps,
   LazyBoundaryState
 > {
   state: LazyBoundaryState = { failed: false }
+
+  static getDerivedStateFromProps(
+    { resetKey }: LazyBoundaryProps,
+    state: LazyBoundaryState
+  ): LazyBoundaryState | null {
+    return resetKey === state.resetKey ? null : { failed: false, resetKey }
+  }
 
   static getDerivedStateFromError(): LazyBoundaryState {
     return { failed: true }
