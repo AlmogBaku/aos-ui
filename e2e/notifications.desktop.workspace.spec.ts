@@ -42,7 +42,7 @@ test("the first watched turn offers the ask, and turning it on delivers one aler
 
 // Delivery follows the Session's own unread state, so the background arrival
 // is Nori's, the Session the provider already reports unread.
-test("hidden tab failure delivers private text and click opens the owning Agent/Session", async ({
+test("hidden tab failure names its Agent and Session, and click opens them", async ({
   page,
 }) => {
   await prepare(page, "granted")
@@ -52,11 +52,12 @@ test("hidden tab failure delivers private text and click opens the owning Agent/
   const notification = await page.evaluate(
     () => window.__notificationTest.notifications[0]
   )
-  expect(notification.title).toBe("AOS")
-  expect(notification.options.body).toBe("A turn failed")
-  expect(JSON.stringify(notification)).not.toMatch(
-    /Nori|Launch copy|thread-nori|agent-nori/
+  expect(notification.title).toBe("Nori")
+  expect(notification.options.body).toBe(
+    "Turn failed · \u2068Launch copy\u2069"
   )
+  // The OS surface shows names, never the opaque ids behind them.
+  expect(JSON.stringify(notification)).not.toMatch(/thread-nori|agent-nori/)
   await page.evaluate(() =>
     window.__notificationTest.notifications[0].onclick?.()
   )

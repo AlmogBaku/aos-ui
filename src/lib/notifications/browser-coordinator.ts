@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { categoryOf } from "@harness-gw/sdk/protocol"
+import { categoryOf, type PushLocale } from "@harness-gw/sdk/protocol"
 import type { ActivityRecord } from "./activity"
 import type { ActivityStore } from "./store"
 import type { BrowserNotificationPort } from "./browser-port"
@@ -13,7 +13,8 @@ import {
   type BrowserPreferences,
 } from "./policy"
 import { deserializeActivity, serializeActivity } from "./serialization"
-import { notificationTag } from "./tag"
+import { formatNotification } from "./format"
+import { sessionTag } from "./tag"
 
 export interface ActivityBrowserPlatform {
   read(): string | null
@@ -30,7 +31,13 @@ export type BrowserActivityOptions = {
   port: BrowserNotificationPort
   platform: ActivityBrowserPlatform
   context(): ActivityContext
-  copy(): { completion: string; failure: string; input: string }
+  /** The operator's language, which the notification is written in. */
+  locale(): PushLocale
+  /** The names this tab already shows; they reach only the OS surface. */
+  labels(target: { agentId: string; sessionId: string }): {
+    agentName?: string | undefined
+    sessionTitle?: string | undefined
+  }
   now(): number
   open(id: string): Promise<boolean>
   onChange(): void
@@ -379,13 +386,21 @@ export class BrowserActivityCoordinator {
         return false
       const category = categoryOf(record.type)
       if (!category) return false
+      const { title, body } = formatNotification({
+        category,
+        ...this.#options.labels(record),
+        ...(record.type === "attention-requested"
+          ? { requestText: record.requestText, requestMore: record.requestMore }
+          : {}),
+        locale: this.#options.locale(),
+      })
       const notification = port.show(
         {
-          title: "AOS",
-          body: this.#options.copy()[category],
+          title,
+          body,
           icon: "/logo-adaptive.svg",
           timestamp: Date.parse(record.occurredAt),
-          tag: notificationTag(record.agentId, record.sessionId, record.id),
+          tag: sessionTag(record.agentId, record.sessionId),
           renotify: false,
         },
         () => {

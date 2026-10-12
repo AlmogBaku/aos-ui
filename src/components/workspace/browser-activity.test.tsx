@@ -98,11 +98,6 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
         },
         focus,
       },
-      copy: {
-        completion: en.activity.runFinished,
-        failure: en.activity.runFailed,
-        input: en.activity.inputRequested,
-      },
     },
   }
   const { result } = renderHook(useActivityCoordinator, { initialProps: props })
@@ -232,11 +227,6 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
           },
           focus() {},
         },
-        copy: {
-          completion: en.activity.runFinished,
-          failure: en.activity.runFailed,
-          input: en.activity.inputRequested,
-        },
       },
     },
   })
@@ -361,11 +351,6 @@ it("hands this device's push subscription to the policy and the settings", async
           return () => {}
         },
         focus() {},
-      },
-      copy: {
-        completion: en.activity.runFinished,
-        failure: en.activity.runFailed,
-        input: en.activity.inputRequested,
       },
     },
   }
@@ -504,11 +489,6 @@ function subscribedDevice() {
             return () => {}
           },
           focus() {},
-        },
-        copy: {
-          completion: en.activity.runFinished,
-          failure: en.activity.runFailed,
-          input: en.activity.inputRequested,
         },
       },
     },

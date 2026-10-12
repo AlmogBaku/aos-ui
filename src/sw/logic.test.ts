@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
+import { formatNotification } from "@/lib/notifications/format"
+import { sessionTag } from "@/lib/notifications/tag"
 import { OPEN_MESSAGE_TYPE } from "@/sw/open-messages"
 import type { PushMessage } from "@harness-gw/sdk/protocol"
 
@@ -15,15 +17,24 @@ const occurredAt = "2026-09-20T10:11:12.000Z"
 
 function singlePush(overrides: Partial<PushMessage> = {}) {
   return {
-    v: 1,
+    v: 2,
     category: "input",
-    count: 1,
     agentId: "agent one",
     sessionId: "session/one",
     occurredAt,
     locale: "en",
+    agentName: "Travel Planner",
+    sessionTitle: "Lisbon trip in May",
+    requestText: "Which dates work for you?",
     ...overrides,
   }
+}
+
+/** What a notification keeps for its click: the category and the ids. */
+const clickData = {
+  category: "input",
+  agentId: "agent one",
+  sessionId: "session/one",
 }
 
 function createRegistration(openTags: string[] = []) {
@@ -93,41 +104,55 @@ async function pushed(payload: unknown, openTags: string[] = []) {
 }
 
 describe("push notifications", () => {
-  it("shows one notification with the singular body for a single Session", async () => {
-    const { shown } = await pushed(singlePush())
+  it("names the Agent, the Session, and what is asked", async () => {
+    const { shown } = await pushed(singlePush({ requestMore: 2 }))
 
-    expect(shown).toHaveLength(1)
-    expect(shown[0]!.title).toBe("AOS")
-    expect(shown[0]!.options.body).toBe(en.activity.inputRequested)
-    expect(shown[0]!.options.tag).toBe("input")
-    expect(shown[0]!.options.requireInteraction).toBe(true)
-    expect(shown[0]!.options.timestamp).toBe(Date.parse(occurredAt))
+    expect(shown).toEqual([
+      {
+        title: "Travel Planner",
+        options: {
+          body: formatNotification(
+            singlePush({ requestMore: 2 }) as PushMessage
+          ).body,
+          tag: sessionTag("agent one", "session/one"),
+          icon: "/icons/pwa-192x192.png",
+          timestamp: Date.parse(occurredAt),
+          requireInteraction: true,
+          data: clickData,
+        },
+      },
+    ])
   })
 
   it("uses the locale the payload carries", async () => {
     const { shown } = await pushed(
-      singlePush({ category: "completion", locale: "he" })
+      singlePush({
+        category: "completion",
+        locale: "he",
+        requestText: undefined,
+      })
     )
 
-    expect(shown[0]!.options.body).toBe(he.activity.runFinished)
-    expect(shown[0]!.options.tag).toBe("completion")
+    expect(shown[0]!.options.body).toBe(
+      `${he.activity.turnFinished} · \u2068Lisbon trip in May\u2069`
+    )
   })
 
   it("asks for interaction only for input requests", async () => {
     const failure = await pushed(singlePush({ category: "failure" }))
 
-    expect(failure.shown[0]!.options.body).toBe(en.activity.runFailed)
     expect(failure.shown[0]!.options.requireInteraction).toBe(false)
   })
 
-  it("closes the predecessor of the same category before showing", async () => {
-    const registration = await pushed(singlePush(), [
-      "input",
-      "completion",
-      "input",
+  it("closes the predecessor of the same Session before showing", async () => {
+    const same = sessionTag("agent one", "session/one")
+    const registration = await pushed(singlePush({ category: "failure" }), [
+      same,
+      sessionTag("agent one", "session/two"),
+      same,
     ])
 
-    expect(registration.closedBeforeShowing).toEqual(["input", "input"])
+    expect(registration.closedBeforeShowing).toEqual([same, same])
     expect(registration.shown).toHaveLength(1)
   })
 
@@ -144,7 +169,6 @@ describe("push notifications", () => {
     )
 
     expect(registration.shown).toHaveLength(1)
-    expect(registration.shown[0]!.options.tag).toBe("input")
   })
 
   it("ends quietly when a revoked permission refuses the display", async () => {
@@ -161,50 +185,53 @@ describe("push notifications", () => {
     expect(showNotification).toHaveBeenCalledOnce()
   })
 
-  it("counts Sessions without naming them once more than one waits", async () => {
+  it("lets no unknown key reach the notification, and keeps only the ids for its click", async () => {
     const { shown } = await pushed({
-      v: 1,
-      category: "failure",
+      ...singlePush(),
+      image: "https://tracker.example/pixel.png",
+      actions: [{ action: "approve", title: "Approve" }],
+      url: "https://elsewhere.example",
+      badge: "/badge.png",
       count: 3,
-      occurredAt,
-      locale: "he",
     })
 
-    expect(shown).toHaveLength(1)
-    expect(shown[0]!.options.body).toBe(
-      he.activity.runFailedMany.replace("{count}", "3")
+    expect(Object.keys(shown[0]!.options).sort()).toEqual([
+      "body",
+      "data",
+      "icon",
+      "requireInteraction",
+      "tag",
+      "timestamp",
+    ])
+    expect(shown[0]!.options.data).toEqual(clickData)
+    expect(JSON.stringify(shown)).not.toMatch(/tracker|approve|elsewhere|badge/)
+  })
+
+  it("drops a malformed label's line and keeps the rest", async () => {
+    const { shown } = await pushed(
+      singlePush({
+        agentName: "a".repeat(65),
+        requestText: 42 as never,
+        requestMore: -1,
+      })
     )
-    expect(shown[0]!.options.tag).toBe("failure")
-    expect(shown[0]!.options.data).toMatchObject({ count: 3 })
-    expect(shown[0]!.options.data?.agentId).toBeUndefined()
-    expect(shown[0]!.options.data?.sessionId).toBeUndefined()
+
+    expect(shown[0]!.title).toBe("Lisbon trip in May")
+    expect(shown[0]!.options.body).toBe(en.activity.needsInput)
   })
 
   it.each([
     ["no payload", undefined],
     ["unparseable text", "not json"],
     ["a payload that is not an object", "[1, 2]"],
-    ["an unknown version", singlePush({ v: 2 as 1 })],
-    ["a version that is not a number", { ...singlePush(), v: "1" }],
-    ["an unexpected key", { ...singlePush(), agentName: "Research" }],
-    [
-      "an unknown key the OS would understand",
-      { ...singlePush(), badge: "/b" },
-    ],
+    ["the previous version", { ...singlePush(), v: 1 }],
+    ["a version that is not a number", { ...singlePush(), v: "2" }],
     ["an unknown category", singlePush({ category: "attention" as never })],
     [
       "a category named after a prototype member",
       { ...singlePush(), category: "constructor" },
     ],
     ["an unknown locale", singlePush({ locale: "ar" as never })],
-    [
-      "a fractional count",
-      { v: 1, category: "input", count: 1.5, occurredAt, locale: "en" },
-    ],
-    [
-      "a count below one",
-      { v: 1, category: "input", count: 0, occurredAt, locale: "en" },
-    ],
     ["an unreadable date", singlePush({ occurredAt: "soon" })],
     [
       "an id carrying a control character",
@@ -215,26 +242,21 @@ describe("push notifications", () => {
       singlePush({ agentId: "a".repeat(257) }),
     ],
     ["an empty id", singlePush({ agentId: "" })],
-    ["a single Session without ids", { ...singlePush(), agentId: undefined }],
-    ["a count carrying ids", singlePush({ count: 2 })],
+    ["no Agent id", { ...singlePush(), agentId: undefined }],
+    ["no Session id", { ...singlePush(), sessionId: undefined }],
   ])("shows one content-free notification for %s", async (_, payload) => {
     const { shown } = await pushed(payload)
 
-    expect(shown).toHaveLength(1)
-    expect(shown[0]!.title).toBe("AOS")
-    expect(shown[0]!.options.body).toBe(en.activity.pushGeneric)
-    expect(shown[0]!.options.tag).toBe("aos")
-    expect(shown[0]!.options.data).toBeUndefined()
-  })
-
-  it("keeps Agent and Session names off the OS surface", async () => {
-    const { shown } = await pushed(
-      singlePush({ agentId: "agent-1", sessionId: "session-1" })
-    )
-
-    expect(JSON.parse(JSON.stringify(shown[0]!.options.data))).toEqual(
-      singlePush({ agentId: "agent-1", sessionId: "session-1" })
-    )
+    expect(shown).toEqual([
+      {
+        title: "AOS",
+        options: {
+          body: en.activity.pushGeneric,
+          tag: "aos",
+          icon: "/icons/pwa-192x192.png",
+        },
+      },
+    ])
   })
 })
 
@@ -245,7 +267,7 @@ describe("notification clicks", () => {
     const close = vi.fn()
     await click(clients, {
       close,
-      data: singlePush({ agentId: "agent-1", sessionId: "session-1" }),
+      data: { ...clickData, agentId: "agent-1", sessionId: "session-1" },
     })
 
     expect(close).toHaveBeenCalledOnce()
@@ -261,31 +283,13 @@ describe("notification clicks", () => {
     expect(clients.openWindow).not.toHaveBeenCalled()
   })
 
-  it("carries no ids to the tab when a count was notified", async () => {
-    const tab = createTab()
-    await click(createClients(tab), {
-      close: vi.fn(),
-      data: {
-        v: 1,
-        category: "completion",
-        count: 4,
-        occurredAt,
-        locale: "en",
-      },
-    })
-
-    expect(tab.postMessage).toHaveBeenCalledWith({ type: OPEN_MESSAGE_TYPE }, [
-      PORT,
-    ])
-  })
-
   it("opens a window when the tab it was handed never answers", async () => {
     // The browser reports windows it has restored but not loaded, documents it
     // has frozen, and tabs still starting the app. None of them will act on a
     // message, so the click has to end in a window of its own.
     const loading = createTab({ focused: false, visibilityState: "hidden" })
     const clients = createClients(loading)
-    await click(clients, { close: vi.fn(), data: singlePush() }, silent)
+    await click(clients, { close: vi.fn(), data: clickData }, silent)
 
     expect(loading.focus).toHaveBeenCalledOnce()
     expect(clients.openWindow).toHaveBeenCalledWith(
@@ -293,26 +297,23 @@ describe("notification clicks", () => {
     )
   })
 
-  it("opens the workspace when a counted click reaches no running window", async () => {
-    const loading = createTab()
-    const clients = createClients(loading)
-    await click(
-      clients,
-      {
-        close: vi.fn(),
-        data: { v: 1, category: "input", count: 3, occurredAt, locale: "en" },
-      },
-      silent
-    )
+  it("hands no ids to the tab when the data names no Session", async () => {
+    const tab = createTab()
+    await click(createClients(tab), {
+      close: vi.fn(),
+      data: { category: "completion" },
+    })
 
-    expect(clients.openWindow).toHaveBeenCalledWith("/")
+    expect(tab.postMessage).toHaveBeenCalledWith({ type: OPEN_MESSAGE_TYPE }, [
+      PORT,
+    ])
   })
 
   it("opens the Session deep link when no tab is open", async () => {
     const clients = createClients()
     await click(clients, {
       close: vi.fn(),
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(clients.openWindow).toHaveBeenCalledWith(
@@ -320,11 +321,11 @@ describe("notification clicks", () => {
     )
   })
 
-  it("opens the workspace root for a count or unreadable data", async () => {
-    const counted = createClients()
-    await click(counted, {
+  it("opens the workspace root for data that names no Session", async () => {
+    const unnamed = createClients()
+    await click(unnamed, {
       close: vi.fn(),
-      data: { v: 1, category: "input", count: 2, occurredAt, locale: "en" },
+      data: { ...clickData, sessionId: "" },
     })
     const unreadable = createClients()
     await click(unreadable, {
@@ -332,7 +333,7 @@ describe("notification clicks", () => {
       data: undefined,
     })
 
-    expect(counted.openWindow).toHaveBeenCalledWith("/")
+    expect(unnamed.openWindow).toHaveBeenCalledWith("/")
     expect(unreadable.openWindow).toHaveBeenCalledWith("/")
   })
 
@@ -341,7 +342,7 @@ describe("notification clicks", () => {
     const focused = createTab({ focused: true, visibilityState: "visible" })
     await click(createClients(background, focused), {
       close: vi.fn(),
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(focused.focus).toHaveBeenCalledOnce()
@@ -353,7 +354,7 @@ describe("notification clicks", () => {
     const visible = createTab({ focused: false, visibilityState: "visible" })
     await click(createClients(hidden, visible), {
       close: vi.fn(),
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(visible.postMessage).toHaveBeenCalledOnce()
@@ -365,7 +366,7 @@ describe("notification clicks", () => {
     const second = createTab()
     await click(createClients(first, second), {
       close: vi.fn(),
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(first.focus).toHaveBeenCalledOnce()
@@ -378,7 +379,7 @@ describe("notification clicks", () => {
     const clients = createClients(closing)
     await click(clients, {
       close: vi.fn(),
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(clients.openWindow).toHaveBeenCalledWith(
@@ -394,7 +395,7 @@ describe("notification clicks", () => {
     const clients = createClients(unreachable)
     await click(clients, {
       close: vi.fn(),
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(clients.openWindow).toHaveBeenCalledWith(
@@ -411,7 +412,7 @@ describe("notification clicks", () => {
     }
     await click(clients, {
       close: vi.fn(),
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(clients.openWindow).toHaveBeenCalledWith(
@@ -424,7 +425,7 @@ describe("notification clicks", () => {
     clients.openWindow.mockRejectedValueOnce(new Error("cannot open"))
     await click(clients, {
       close: vi.fn(),
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(clients.openWindow.mock.calls).toEqual([
@@ -440,7 +441,7 @@ describe("notification clicks", () => {
     await expect(
       click(clients, {
         close: vi.fn(),
-        data: singlePush(),
+        data: clickData,
       })
     ).resolves.toBeUndefined()
     expect(clients.openWindow).toHaveBeenCalledTimes(2)
@@ -452,7 +453,7 @@ describe("notification clicks", () => {
       close: () => {
         throw new Error("already closed")
       },
-      data: singlePush(),
+      data: clickData,
     })
 
     expect(clients.openWindow).toHaveBeenCalledWith(

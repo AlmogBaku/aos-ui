@@ -620,15 +620,7 @@ function WorkspaceContent({
 
   const activity = useActivityCoordinator({
     workspace,
-    browser: {
-      port: browserNotificationPort,
-      push: bundle.push,
-      copy: {
-        completion: dictionary.activity.runFinished,
-        failure: dictionary.activity.runFailed,
-        input: dictionary.activity.inputRequested,
-      },
-    },
+    browser: { port: browserNotificationPort, push: bundle.push },
     locale,
     agents: displayAgents,
     sessions,

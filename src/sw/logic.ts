@@ -1,16 +1,23 @@
 import { en } from "@/lib/i18n/dictionaries/en"
-import { he } from "@/lib/i18n/dictionaries/he"
+import { formatNotification } from "@/lib/notifications/format"
+import { sessionTag } from "@/lib/notifications/tag"
 import { buildWorkspacePathname } from "@/lib/workspace-routing"
 import type { OPEN_MESSAGE_TYPE as PROTOCOL_OPEN_MESSAGE_TYPE } from "@/sw/open-messages"
 import type {
+  PUSH_TEXT_LIMITS as PROTOCOL_PUSH_TEXT_LIMITS,
   PushCategory,
   PushLocale,
   PushMessage,
 } from "@harness-gw/sdk/protocol"
 
-// A literal typed against the protocol's constant: the worker must not import
+// Literals typed against the protocol's constants: the worker must not import
 // the protocol module at runtime (it would pull zod into the bundle).
 const OPEN_MESSAGE_TYPE: typeof PROTOCOL_OPEN_MESSAGE_TYPE = "aos:open"
+const PUSH_TEXT_LIMITS: typeof PROTOCOL_PUSH_TEXT_LIMITS = {
+  agentName: 64,
+  sessionTitle: 120,
+  requestText: 200,
+}
 
 /**
  * Push handling for the service worker, kept free of worker globals so the
@@ -24,6 +31,12 @@ const OPEN_MESSAGE_TYPE: typeof PROTOCOL_OPEN_MESSAGE_TYPE = "aos:open"
  * schema and must change with it.
  */
 
+/** All a click needs, and all the OS surface keeps: never a name or a text. */
+export type PushNotificationData = Pick<
+  PushMessage,
+  "category" | "agentId" | "sessionId"
+>
+
 /** `NotificationOptions` plus `timestamp`, which the DOM types omit. */
 export type PushNotificationOptions = {
   body: string
@@ -31,7 +44,7 @@ export type PushNotificationOptions = {
   icon: string
   timestamp?: number
   requireInteraction?: boolean
-  data?: PushMessage
+  data?: PushNotificationData
 }
 
 type ClosableNotification = { close(): void }
@@ -80,21 +93,21 @@ const WORKSPACE_ROOT = buildWorkspacePathname({
   sessionId: null,
 })
 
-const bodyKeys = {
-  input: { one: "inputRequested", many: "inputRequestedMany" },
-  failure: { one: "runFailed", many: "runFailedMany" },
-  completion: { one: "runFinished", many: "runFinishedMany" },
-} as const satisfies Record<PushCategory, { one: string; many: string }>
+const categories = {
+  input: true,
+  failure: true,
+  completion: true,
+} satisfies Record<PushCategory, true>
 
-const dictionaries = { en, he } satisfies Record<PushLocale, unknown>
+const locales = { en: true, he: true } satisfies Record<PushLocale, true>
 
 /** Both key sets are exhaustive above, so membership is the value check. */
 function isCategory(value: unknown): value is PushCategory {
-  return typeof value === "string" && Object.hasOwn(bodyKeys, value)
+  return typeof value === "string" && Object.hasOwn(categories, value)
 }
 
 function isLocale(value: unknown): value is PushLocale {
-  return typeof value === "string" && Object.hasOwn(dictionaries, value)
+  return typeof value === "string" && Object.hasOwn(locales, value)
 }
 
 /** Mirrors the protocol's `IdentifierSchema`: 1-256 printable characters. */
@@ -110,36 +123,51 @@ function isIdentifier(value: unknown): value is string {
   )
 }
 
-/** Exported so `logic.parity.test.ts` can hold it against the schema. */
+/** A text field within the protocol's bound, or nothing. */
+function fitted(value: unknown, field: keyof typeof PUSH_TEXT_LIMITS) {
+  return typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= PUSH_TEXT_LIMITS[field]
+    ? value
+    : undefined
+}
+
+/**
+ * Exported so `logic.parity.test.ts` can hold it against the schema. Unlike
+ * the schema, it ignores a key it does not know and drops a malformed label,
+ * so a newer gateway or one bad field still yields this Session's notification.
+ */
 export function readMessage(value: unknown): PushMessage | undefined {
   if (typeof value !== "object" || value === null) return undefined
-  const {
-    v,
-    category,
-    count,
-    occurredAt,
-    locale,
-    agentId,
-    sessionId,
-    ...rest
-  } = value as Record<string, unknown>
-  if (Object.keys(rest).length > 0) return undefined
-  if (v !== 1) return undefined
+  const fields = value as Record<string, unknown>
+  const { v, category, occurredAt, locale, agentId, sessionId } = fields
+  if (v !== 2) return undefined
   if (!isCategory(category) || !isLocale(locale)) return undefined
-  if (typeof count !== "number" || !Number.isInteger(count) || count < 1) {
-    return undefined
-  }
   // Looser than the schema's ISO 8601: a readable date is all a timestamp needs.
   if (typeof occurredAt !== "string" || Number.isNaN(Date.parse(occurredAt))) {
     return undefined
   }
-  const counted: PushMessage = { v: 1, category, count, occurredAt, locale }
-  // A single Session carries both ids; a count carries neither.
-  const identified = agentId !== undefined || sessionId !== undefined
-  if (identified !== (count === 1)) return undefined
-  if (!identified) return counted
   if (!isIdentifier(agentId) || !isIdentifier(sessionId)) return undefined
-  return { ...counted, agentId, sessionId }
+  const agentName = fitted(fields.agentName, "agentName")
+  const sessionTitle = fitted(fields.sessionTitle, "sessionTitle")
+  const requestText = fitted(fields.requestText, "requestText")
+  const { requestMore } = fields
+  return {
+    v,
+    category,
+    agentId,
+    sessionId,
+    occurredAt,
+    locale,
+    ...(agentName ? { agentName } : {}),
+    ...(sessionTitle ? { sessionTitle } : {}),
+    ...(requestText ? { requestText } : {}),
+    ...(typeof requestMore === "number" &&
+    Number.isInteger(requestMore) &&
+    requestMore >= 1
+      ? { requestMore }
+      : {}),
+  }
 }
 
 function readPayload(payload: string | undefined): PushMessage | undefined {
@@ -151,26 +179,29 @@ function readPayload(payload: string | undefined): PushMessage | undefined {
   }
 }
 
-function bodyOf({ category, count, locale }: PushMessage): string {
-  const { activity } = dictionaries[locale]
-  const keys = bodyKeys[category]
-  return count === 1
-    ? activity[keys.one]
-    : activity[keys.many].replace("{count}", String(count))
-}
-
-function optionsOf(message: PushMessage | undefined): PushNotificationOptions {
+function notificationOf(message: PushMessage | undefined): {
+  title: string
+  options: PushNotificationOptions
+} {
   if (!message) {
-    return { body: en.activity.pushGeneric, tag: GENERIC_TAG, icon: ICON }
+    return {
+      title: TITLE,
+      options: { body: en.activity.pushGeneric, tag: GENERIC_TAG, icon: ICON },
+    }
   }
+  const { category, agentId, sessionId } = message
+  const { title, body } = formatNotification(message)
   return {
-    body: bodyOf(message),
-    tag: message.category,
-    icon: ICON,
-    timestamp: Date.parse(message.occurredAt),
-    // Input requests outlive the OS auto-dismissal; outcomes do not.
-    requireInteraction: message.category === "input",
-    data: message,
+    title,
+    options: {
+      body,
+      tag: sessionTag(agentId, sessionId),
+      icon: ICON,
+      timestamp: Date.parse(message.occurredAt),
+      // Input requests outlive the OS auto-dismissal; outcomes do not.
+      requireInteraction: category === "input",
+      data: { category, agentId, sessionId },
+    },
   }
 }
 
@@ -184,21 +215,32 @@ async function closeSameTag(registration: NotificationSurface, tag: string) {
   }
 }
 
-/** Attempts exactly one notification, replacing the category's predecessor. */
+/** Attempts exactly one notification, replacing the Session's predecessor. */
 export async function handlePush(
   registration: NotificationSurface,
   payload: string | undefined
 ): Promise<void> {
-  const options = optionsOf(readPayload(payload))
+  const { title, options } = notificationOf(readPayload(payload))
   await closeSameTag(registration, options.tag)
   try {
-    await registration.showNotification(TITLE, options)
+    await registration.showNotification(title, options)
   } catch {
     // Permission can be revoked between subscribing and this push, and the
     // display then throws. Nothing here can answer that: the worker has no
     // surface left and no open client to tell. The app reconciles on its next
     // focus by unsubscribing and deleting the server registration.
   }
+}
+
+type ClickTarget = { agentId: string; sessionId: string }
+
+/** The Session a notification's data names; anything else opens the workspace. */
+function readTarget(data: unknown): ClickTarget | undefined {
+  if (typeof data !== "object" || data === null) return undefined
+  const { agentId, sessionId } = data as Record<string, unknown>
+  return isIdentifier(agentId) && isIdentifier(sessionId)
+    ? { agentId, sessionId }
+    : undefined
 }
 
 /** The tab the operator is looking at, else one that is at least on screen. */
@@ -233,21 +275,14 @@ async function listTabs(clients: ClientsSurface) {
  */
 async function askOpenTab(
   tab: WindowClientSurface | undefined,
-  message: PushMessage | undefined,
+  target: ClickTarget | undefined,
   acknowledge: () => ClickAcknowledgement
 ): Promise<boolean> {
   if (!tab) return false
   try {
     await tab.focus()
     const { port, answered } = acknowledge()
-    tab.postMessage(
-      {
-        type: OPEN_MESSAGE_TYPE,
-        ...(message?.agentId ? { agentId: message.agentId } : {}),
-        ...(message?.sessionId ? { sessionId: message.sessionId } : {}),
-      },
-      [port]
-    )
+    tab.postMessage({ type: OPEN_MESSAGE_TYPE, ...target }, [port])
     return await answered
   } catch {
     return false
@@ -297,17 +332,17 @@ export async function handleNotificationClick(
   } catch {
     // A notification that will not dismiss still owes the operator a window.
   }
-  const message = readMessage(notification.data)
+  const target = readTarget(notification.data)
   const tabs = await listTabs(clients)
-  if (await askOpenTab(bestTab(tabs), message, acknowledge)) {
+  if (await askOpenTab(bestTab(tabs), target, acknowledge)) {
     trace("focused", tabs.length)
     return
   }
   const opened = await openWindow(
     clients,
     buildWorkspacePathname({
-      agentId: message?.agentId ?? null,
-      sessionId: message?.sessionId ?? null,
+      agentId: target?.agentId ?? null,
+      sessionId: target?.sessionId ?? null,
     })
   )
   trace(opened ? "opened" : "nothing", tabs.length)

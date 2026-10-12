@@ -108,7 +108,6 @@ type Options = {
     sound?: ActivitySoundPort
     /** Present only where a provider can subscribe this device to Web Push. */
     push?: PushSubscriptionManager
-    copy: { completion: string; failure: string; input: string }
   }
 }
 /**
@@ -288,7 +287,12 @@ export function useActivityCoordinator(
           platform: browserOptions.platform ?? createActivityBrowserPlatform(),
           now: () => current.current.readNow().getTime(),
           context,
-          copy: () => current.current.browser!.copy,
+          locale: () => current.current.locale,
+          labels: ({ agentId, sessionId }) => ({
+            agentName: current.current.agents.find(({ id }) => id === agentId)
+              ?.name,
+            sessionTitle: current.current.titles.get(sessionId),
+          }),
           open: (id) => openRef.current(id),
           // A subscribed device leaves the OS alerts to push.
           ...(push ? { push } : {}),

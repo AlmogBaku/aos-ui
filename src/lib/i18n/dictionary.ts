@@ -37,9 +37,9 @@ export type Dictionary = {
     turnFailed: string
     /** A row for an Agent the creator just made; `{name}` is substituted. */
     agentIsReady: string
-    runFinished: string
-    runFailed: string
-    inputRequested: string
+    /** An OS notification's lead, by category; failure reads `turnFailed`. */
+    needsInput: string
+    turnFinished: string
     routineNotice: string
     urgentNotice: string
     dismiss: string
@@ -72,10 +72,6 @@ export type Dictionary = {
     completion: string
     failure: string
     input: string
-    /** OS notification bodies for coalesced pushes; `{count}` is substituted. */
-    inputRequestedMany: string
-    runFailedMany: string
-    runFinishedMany: string
     /** Body when a push payload cannot be read; carries nothing else. */
     pushGeneric: string
   }
