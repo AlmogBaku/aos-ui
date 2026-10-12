@@ -57,7 +57,6 @@ export function ActivityBell({
   const [mountedRing] = useState(ring)
   return (
     <Button
-      className={styles.bell}
       variant="ghost"
       size="icon"
       type="button"
@@ -69,18 +68,22 @@ export function ActivityBell({
       aria-expanded={open}
       onClick={onOpen}
     >
-      {/* A new key restarts the one-shot swing from the start. */}
-      <Bell
-        key={ring}
-        className={ring === mountedRing ? undefined : styles.ringing}
-      />
-      {/* The bell counts and never runs, so it has no running dot. */}
-      {attention.count ? (
-        <AttentionBadge
-          level={attention}
-          runningLabel={dictionary.status.running}
+      {/* The badge rides the glyph, not the button, whose size the pointer sets. */}
+      <span className={styles.glyph}>
+        {/* A new key restarts the one-shot swing from the start. */}
+        <Bell
+          key={ring}
+          className={ring === mountedRing ? undefined : styles.ringing}
         />
-      ) : null}
+        {/* The bell counts and never runs, so it has no running dot. */}
+        {attention.count ? (
+          <AttentionBadge
+            className={styles.bellBadge}
+            level={attention}
+            runningLabel={dictionary.status.running}
+          />
+        ) : null}
+      </span>
     </Button>
   )
 }

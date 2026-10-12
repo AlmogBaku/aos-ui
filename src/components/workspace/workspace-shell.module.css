@@ -689,11 +689,15 @@
   border-inline-start: 1px solid var(--border);
 }
 
-/* Centered in the 3.5rem header band that drawer content draws itself. */
+/* Centered in the 3.5rem header band that drawer content draws itself, at
+   whatever size the pointer gives the button. */
 .drawerHeader {
   position: absolute;
-  inset-block-start: calc(0.875rem + env(safe-area-inset-top));
+  inset-block-start: env(safe-area-inset-top);
   inset-inline-end: 0.75rem;
+  display: flex;
+  block-size: 3.5rem;
+  align-items: center;
 }
 
 .drawerContent {
