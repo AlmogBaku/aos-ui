@@ -20,8 +20,11 @@ export type SessionHistoryLoadMoreCopy = {
  */
 export function SessionHistoryLoadMore({
   copy,
+  paused = false,
 }: {
   copy: SessionHistoryLoadMoreCopy
+  /** Reading on scroll stops while true; the button still reads. */
+  paused?: boolean
 }) {
   const { loadMore, disabled } = useThreadListLoadMore()
   const hasMore = useAuiState((state) => state.threads.hasMore)
@@ -34,7 +37,7 @@ export function SessionHistoryLoadMore({
   // listed more: a failed read waits for the button instead of looping.
   const sentinel = useLoadMoreSentinel({
     load: loadMore,
-    disabled,
+    disabled: disabled || paused,
     loadKey: listed,
   })
 
