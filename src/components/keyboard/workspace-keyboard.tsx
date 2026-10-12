@@ -242,10 +242,6 @@ export function WorkspaceKeyboard({
       selectedAgentId,
     ]
   )
-  const runCommand = React.useEffectEvent((actionId: string) =>
-    execute(actionId)
-  )
-
   React.useEffect(() => {
     const dispatcher = createKeyboardDispatcher({
       catalog: KEYBOARD_UI_CATALOG,
@@ -287,10 +283,19 @@ export function WorkspaceKeyboard({
       id,
       title,
       unavailableReason: reason,
-      onRun: reason ? undefined : () => runCommand(id),
+      onRun: reason ? undefined : () => execute(id),
       binding: actionBinding(id),
     })
-    const result: KeyboardCommand[] = [
+    const sessionsByThreadId = new Map<string, WorkspaceKeyboardSession>()
+    for (const session of [...openSessions, ...olderSessions]) {
+      if (!sessionsByThreadId.has(session.sessionId)) {
+        sessionsByThreadId.set(session.sessionId, session)
+      }
+    }
+    // One literal, not pushes onto an array: the commands' callbacks reach a
+    // ref through execute, and the compiler treats handing such an array to a
+    // method during render as reading the ref.
+    return [
       unavailable(
         "workspace.focusAgents",
         localCopy[locale].focusAgents,
@@ -323,15 +328,9 @@ export function WorkspaceKeyboard({
             : "No active conversation"
       ),
       unavailable("workspace.focusInspector", localCopy[locale].focusInspector),
-      unavailable(
-        "workspace.newAgent",
-        localCopy[locale].newAgent,
-        agentBuilderAvailable
-          ? undefined
-          : locale === "he"
-            ? "בונה הסוכנים אינו זמין"
-            : "Agent Builder is unavailable"
-      ),
+      ...(agentBuilderAvailable
+        ? [unavailable("workspace.newAgent", localCopy[locale].newAgent)]
+        : []),
       unavailable(
         "workspace.newSession",
         localCopy[locale].newSession,
@@ -386,28 +385,17 @@ export function WorkspaceKeyboard({
         "workspace.contextMenu",
         locale === "he" ? "פתיחת תפריט הקשר" : "Open context menu"
       ),
-    ]
-    for (const agent of agents)
-      result.push({
+      ...agents.map((agent) => ({
         id: `agent:${agent.id}`,
         title: `${localCopy[locale].selectAgent}: ${agent.name}`,
         onRun: () => onSelectAgent(agent.id),
-      })
-    const sessionsByThreadId = new Map<string, WorkspaceKeyboardSession>()
-    for (const session of [...openSessions, ...olderSessions]) {
-      if (!sessionsByThreadId.has(session.sessionId)) {
-        sessionsByThreadId.set(session.sessionId, session)
-      }
-    }
-    for (const session of sessionsByThreadId.values())
-      result.push({
+      })),
+      ...Array.from(sessionsByThreadId.values(), (session) => ({
         id: `session:${session.sessionId}`,
         title: `${localCopy[locale].openSession}: ${session.title}`,
         onRun: () => onOpenSession(session.sessionId),
-      })
-    return agentBuilderAvailable
-      ? result
-      : result.filter(({ id }) => id !== "workspace.newAgent")
+      })),
+    ]
   })()
 
   const commandBinding = settings.effectiveBindings.find(
