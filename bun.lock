@@ -14,7 +14,7 @@
         "@dnd-kit/sortable": "^10.0.0",
         "@dnd-kit/utilities": "^3.2.2",
         "@fontsource/michroma": "^5.3.0",
-        "@harness-gw/sdk": "0.2.0",
+        "@harness-gw/sdk": "0.3.0",
         "@modelcontextprotocol/ext-apps": "1.7.5",
         "@modelcontextprotocol/sdk": "1.30.0",
         "@pierre/diffs": "1.4.3",
@@ -362,7 +362,7 @@
 
     "@fontsource/michroma": ["@fontsource/michroma@5.3.0", "", {}, "sha512-9sbGD7ek1hGvq0TmgNPFbuI3k7qwXVdZ+zCDsTHDGRIQqfYrpYWwEYcwH2fzOtvn8uiGqzAoJ72vuFE3v/hDdg=="],
 
-    "@harness-gw/sdk": ["@harness-gw/sdk@0.2.0", "", { "dependencies": { "cockatiel": "4.0.0", "pino": "10.3.1", "xstate": "5.33.2" }, "peerDependencies": { "@agentclientprotocol/sdk": "1.5.0", "@modelcontextprotocol/sdk": "1.30.0", "zod": "4.5.4" } }, "sha512-tcBSYUG/iG9dF01vt4KDjoe1gocgFZxUJphZMkkiuik+fIjc85z5rpo8UKQ9RoP4bvdCAbctwN9cJw8DOgpqLA=="],
+    "@harness-gw/sdk": ["@harness-gw/sdk@0.3.0", "", { "dependencies": { "cockatiel": "4.0.0", "pino": "10.3.1", "xstate": "5.33.2" }, "peerDependencies": { "@agentclientprotocol/sdk": "1.5.0", "@modelcontextprotocol/sdk": "1.30.0", "zod": "4.5.4" } }, "sha512-rPn134pwXpO/8NVxGnjKF0ZmkQHgTjLjJo0Ww1EovCbrqTK6bzPtqFVFhJ7AHKe8vlDERKt78ZZRw8KhobP0Yg=="],
 
     "@hono/node-server": ["@hono/node-server@2.1.1", "", { "peerDependencies": { "hono": "^4" } }, "sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg=="],
 
