@@ -90,7 +90,8 @@ function agentMenuEntries(
 /**
  * A right click or a long press is the whole trigger: an Agent row is a
  * button, so a visible trigger cannot nest inside it without changing the
- * row's layout. The rail and the phone's Agent list share it. A draft owns no
+ * row's layout. The rail and the phone's Agent list share it, and its text is
+ * never selectable, so a long press always means the menu. A draft owns no
  * Session tabs and no details pane, so this is the only place to retire one.
  */
 export function AgentRowContextMenu({
@@ -112,7 +113,11 @@ export function AgentRowContextMenu({
 
   return (
     <ContextMenu.Root {...popup.rootProps}>
-      <ContextMenu.Trigger ref={triggerRef} render={children} />
+      <ContextMenu.Trigger
+        ref={triggerRef}
+        render={children}
+        className="select-none"
+      />
       {popup.mounted ? (
         <MenuPopup
           entries={entries}
