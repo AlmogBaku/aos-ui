@@ -129,7 +129,8 @@ function ReadyAosRuntimeProvider({
   }, [connection])
   const connectionStatus = useConnectionOutage(connection)
   const client = useMemo(
-    () => createAcpWorkspaceClient({ connection, rest }),
+    () =>
+      createAcpWorkspaceClient({ connection, rest, logger: compositionLog() }),
     [connection, rest]
   )
   const mountedClient = useRef<typeof client>(undefined)
