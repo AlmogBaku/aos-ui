@@ -52,7 +52,24 @@ Any intentional visual departure must be called out before it is introduced.
   two-dot rendering was withdrawn because two dots on one row read as a bug.
   The row's accessible name still states every state.
 - **Row Activity count pills removed:** navigation rows no longer carry violet
-  count pills. The bell in the Agents heading shows the sole derived unread count.
+  count pills. Unread counts have returned as tile corner badges (see below), not
+  row-end pills; the bell and tile badges share the priority color rule and both
+  count Sessions whose Agent has a rail row.
+- **Activity as a per-Session inbox:** the bell opens an inbox of Sessions in
+  two groups ("Waiting for you", then "Unread"), not a flat event history. Each
+  row shows the Agent tile, name, relative time, Session title, status dot, and —
+  on waiting rows — the question text. Read Sessions leave the pane; the Session
+  list is the history.
+- **Bell badge in status colors with ring:** the bell badge uses orange (warning)
+  when any counted Session is waiting, else red (destructive) for a failure, else
+  green (success) for unread. Running never colors it. When a Session newly
+  starts waiting, the bell swings once (about 0.7 s) at the in-tab chime moment;
+  it does not ring under reduced motion.
+- **Per-Agent count badge on the tile corner:** each Agent row's tile carries a
+  count badge at its top inline-end corner — that Agent's counted Sessions, capped
+  at 9+, in the same priority color as the bell. A running Agent with nothing
+  counted shows a small breathing blue dot. Session rows keep their existing
+  single dot.
 - **Drawer browsing marks nothing read:** the Activity drawer is browse-only;
   reading a Session there does not change its read state.
 - **Published Artifacts render inline:** audio and video play as native players

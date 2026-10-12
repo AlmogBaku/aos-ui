@@ -167,7 +167,10 @@ Notifications are grouped into three categories: **input requests** (questions a
 
 ### Burst coalescing
 
-Rapid events are coalesced per category into one notification: a 3-second window for input requests, 5 seconds for failures, 20 seconds for completions. The resulting notification carries a count ("3 Agents need input") rather than repeating for each event. Tapping it opens the owning Session when there is exactly one; otherwise it opens the workspace.
+Events are coalesced per category: a 3-second window for input requests,
+5 seconds for failures, 20 seconds for completions. Each window delivers one
+notification per Session; a push older than one already sent for that Session is
+skipped. Each notification is about one Session; tapping it opens that Session.
 
 ### OS notifications without an open tab (Web Push)
 
@@ -181,9 +184,23 @@ If the deployment does not configure Web Push, or if the origin is not HTTPS, no
 
 ### Privacy
 
-Notification payloads and OS text contain no Agent name, Session name, conversation content, tool content, question, permission, or error details — only a category, a count, opaque identifiers, a timestamp, and locale. Multiple tabs elect one delivery tab so no peer repeats an alert. Guest sessions receive no notifications.
+Each notification carries the Agent name, Session title, the state, and — on
+input requests — a credential-masked preview of the question or permission text
+(at most 200 characters). Lock-screen visibility follows the OS Show Previews
+setting; AOS adds no separate toggle. Multiple tabs elect one delivery tab so no
+peer repeats an alert. Guest sessions receive no notifications and no activity
+feed.
 
-Activity history lives in the gateway's in-memory feed; it does not survive a gateway restart by design. Browser and operating-system policies may delay or suppress delivery; Activity remains the place to check.
+The bell opens an inbox of Sessions in two groups, "Waiting for you" then
+"Unread". Each row shows the Agent tile, name, time, Session title, status dot,
+and the question on waiting rows. Tapping a row opens that Session. Mark read
+clears one unread Session; notification settings open from a header button in the
+drawer. The bell badge color reflects the highest state among counted Sessions:
+orange for waiting, red for failed, green for unread.
+
+Activity history lives in the gateway's in-memory feed; it does not survive a
+gateway restart by design. Browser and operating-system policies may delay or
+suppress delivery; Activity remains the place to check.
 
 ## Change language and appearance
 

@@ -354,11 +354,16 @@ mutating routes require a listed origin; endpoints are validated (HTTPS,
 default port, no credentials or query string) and every resolved address must
 be publicly routable — private, loopback, link-local, and carrier-grade-NAT
 ranges such as a tailnet's 100.64/10 block are refused before any outbound
-request; payloads are end-to-end encrypted and content-free; push topics are
-opaque. Accepted residual: anyone who can reach the listener may register,
-delete, or fill the 32 device slots; an invited guest whose prompts cause the
-Agent to ask questions can raise input notifications for the operator at the
-coalescing rate (nothing is dropped; revoke the invitation to stop); a small
+request; payloads are end-to-end encrypted and carry the Agent name, Session
+title, and a masked preview of the request text; the push service sees a stable
+per-Session pseudonym as the topic (a keyed hash), plus TTL and urgency; content
+goes only to devices refreshed within 30 days, and registrations idle for 90 days
+are removed; request text is credential-masked for every runtime; input
+notifications stay in the OS Notification Center until dismissed. Accepted
+residual: anyone who can reach the listener may register, delete, or fill the 32
+device slots; an invited guest whose prompts cause the Agent to ask questions can
+raise one input notification per invited Session per coalescing window, and its
+text can be shaped by the guest (plain text only; it opens only AOS); a small
 DNS check-to-connect window remains.
 
 ## Voice provider key files
