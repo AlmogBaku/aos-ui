@@ -15,6 +15,7 @@ import { ArrowLeft, Bell, SlidersHorizontal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { attentionLabels, type AttentionLevel } from "@/lib/attention-level"
 import type { Inbox, InboxRow } from "@/lib/notifications/inbox"
+import { cn } from "@/lib/utils"
 import { ActivityRow, rowCopy } from "./activity-row"
 import { AttentionBadge } from "./attention-badge"
 import styles from "./activity.module.css"
@@ -73,7 +74,10 @@ export function ActivityBell({
         {/* A new key restarts the one-shot swing from the start. */}
         <Bell
           key={ring}
-          className={ring === mountedRing ? undefined : styles.ringing}
+          className={cn(
+            "size-5",
+            ring === mountedRing ? undefined : styles.ringing
+          )}
         />
         {/* The bell counts and never runs, so it has no running dot. */}
         {attention.count ? (
