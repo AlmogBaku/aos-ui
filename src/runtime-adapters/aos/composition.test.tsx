@@ -278,6 +278,7 @@ function createGatewayAgent() {
           selectable: true,
           editable: true,
           avatarEditable: true,
+          muteEditable: true,
           revision: "revision-1",
         },
       ],

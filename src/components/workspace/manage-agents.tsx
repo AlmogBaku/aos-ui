@@ -82,6 +82,7 @@ export function ManageAgents({
                     selectable: summary.visibility !== "hidden",
                     editable: false,
                     avatarEditable: false,
+                    muteEditable: false,
                   },
                 ]
               : []

@@ -17,7 +17,9 @@ export type { RuntimeMode } from "@shared/runtime-modes"
 export type AgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
 
-type AgentSummaryBase = {
+/** One flat shape, so `client-contract.ts` can hold it against the client's. */
+export type ReadyAgentSummary = {
+  kind: "ready"
   id: string
   name: string
   description?: string
@@ -28,9 +30,9 @@ type AgentSummaryBase = {
   avatar?: string
   visibility?: AgentVisibility
   role?: "creator"
+  /** The operator silenced this Agent's notifications; absent when not. */
+  muted?: true
 }
-
-export type ReadyAgentSummary = AgentSummaryBase & { kind: "ready" }
 
 export type AgentSummary = ReadyAgentSummary
 
@@ -47,12 +49,16 @@ export type AgentCatalogEntry = {
   editable: boolean
   /** Whether the runtime can store this Agent's avatar. */
   avatarEditable: boolean
+  /** Whether the runtime can store a mute for this Agent. */
+  muteEditable: boolean
 }
 
 /** Fields an operator changes on an Agent; `avatar: null` clears it. */
 export type AgentUpdate = {
   visibility?: AgentVisibility
   avatar?: string | null
+  /** Mutes the Agent's notifications, or with `false` unmutes them. */
+  muted?: boolean
 }
 
 // Actionable Agent update refusals; all other failures remain ordinary Errors.

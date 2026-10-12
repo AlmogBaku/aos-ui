@@ -455,6 +455,46 @@ describe("FixtureWorkspace", () => {
     })
   })
 
+  it("ends an answered question's turn as idle once the turn finishes", () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const status = () =>
+      workspace
+        .listAllSessionMetadata()
+        .find(({ sessionId }) => sessionId === "thread-aster-launch")?.status
+    const turn = workspace.beginRunActivity("thread-aster-launch")
+    workspace.publishAttention("thread-aster-launch", "question", "q-1")
+    workspace.publishAttention("thread-aster-launch", "resolved", "q-1")
+    expect(status()).toBe("running")
+
+    workspace.finishRunActivity(turn, "finished")
+
+    expect(status()).toBe("idle")
+  })
+
+  it("stores a mute through its own update, for a hidden Agent too, and reports it editable", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const lumen = async () =>
+      (await workspace.listAgentCatalog()).find(
+        ({ summary }) => summary.id === "agent-lumen"
+      )
+    await workspace.updateAgent("agent-lumen", { visibility: "hidden" })
+    await workspace.updateAgent("agent-lumen", { muted: true })
+    await workspace.updateAgent("agent-lumen", { visibility: "visible" })
+    expect(await lumen()).toMatchObject({
+      muteEditable: true,
+      summary: { muted: true },
+    })
+
+    await workspace.updateAgent("agent-lumen", { muted: false })
+    expect((await lumen())?.summary).not.toHaveProperty("muted")
+    // The creator is the provider's, so its mute is too.
+    expect(
+      (await workspace.listAgentCatalog()).find(
+        ({ summary }) => summary.role === "creator"
+      )
+    ).toMatchObject({ muteEditable: false })
+  })
+
   it("clones activity payloads and isolates throwing listeners until cleanup", () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const observed: WorkspaceActivityEvent[] = []
