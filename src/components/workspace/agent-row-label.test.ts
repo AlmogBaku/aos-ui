@@ -53,6 +53,12 @@ describe("an Agent row's accessible name", () => {
       "New Agent, draft, 1 unread, 1 waiting for you",
     ],
     [
+      "keeps an Agent whose status could not be read saying so",
+      { ...agent, status: "unknown", attention: attentionLevel([]) },
+      false,
+      "Travel Planner, Trip planning, Status unavailable",
+    ],
+    [
       "says nothing more for an Agent with nothing to report",
       { ...agent, attention: attentionLevel([{ status: "idle" }]) },
       false,

@@ -63,8 +63,20 @@ describe("attentionLevel", () => {
         top: null,
       },
     ],
-  ])("%s", (_rule, sessions, expected) => {
-    expect(attentionLevel(sessions)).toEqual(expected)
+    [
+      "an Agent's own activity names a level no Session runs in",
+      [session("i", "a", "idle")],
+      { count: 0, waiting: 0, failed: 0, top: "running" },
+      true,
+    ],
+    [
+      "and never outranks a count",
+      [session("u", "a", "idle", true)],
+      { count: 1, waiting: 0, failed: 0, top: "unread" },
+      true,
+    ],
+  ])("%s", (_rule, sessions, expected, running?: boolean) => {
+    expect(attentionLevel(sessions, running)).toEqual(expected)
   })
 })
 

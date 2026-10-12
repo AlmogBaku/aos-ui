@@ -20,15 +20,19 @@ export type AttentionLevel = {
   top: AttentionTop | null
 }
 
+/**
+ * `running` defaults to whether a Session runs; an Agent passes its own
+ * status, which also knows its native activity.
+ */
 export function attentionLevel(
-  sessions: readonly Pick<SessionMetadata, "status" | "unread">[]
+  sessions: readonly Pick<SessionMetadata, "status" | "unread">[],
+  running = sessions.some(({ status }) => status === "running")
 ): AttentionLevel {
   const counted = sessions.filter(isSessionUnread)
   const waiting = counted.filter(
     ({ status }) => status === "waiting-for-input"
   ).length
   const failed = counted.filter(({ status }) => status === "failed").length
-  const running = sessions.some(({ status }) => status === "running")
   const top = waiting
     ? "waiting"
     : failed

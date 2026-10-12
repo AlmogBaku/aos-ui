@@ -1089,15 +1089,20 @@ export function useWorkspaceNavigation({
   const todos = todoSnapshotIsCurrent ? todoSnapshot.todos : emptyTodos
   const todoError = todoSnapshotIsCurrent ? todoSnapshot.error : null
 
-  const displayAgents = navigableAgents.map((agent) => ({
-    ...agent,
-    avatar: agentIcons.get(agent.id)?.token,
-    status: agentStatusFromSessions(agent, sessions),
-    unread: agentUnreadFromSessions(agent, sessions),
-    attention: attentionLevel(
-      sessions.filter(({ agentId }) => agentId === agent.id)
-    ),
-  }))
+  const displayAgents = navigableAgents.map((agent) => {
+    const status = agentStatusFromSessions(agent, sessions)
+    return {
+      ...agent,
+      avatar: agentIcons.get(agent.id)?.token,
+      status,
+      unread: agentUnreadFromSessions(agent, sessions),
+      // The Agent's own status knows its native activity too.
+      attention: attentionLevel(
+        sessions.filter(({ agentId }) => agentId === agent.id),
+        status === "running" || status === "active"
+      ),
+    }
+  })
   const selectedAgent =
     displayAgents.find((agent) => agent.id === selectedAgentId) ?? null
   const selectedDismissedTabs = new Set(
