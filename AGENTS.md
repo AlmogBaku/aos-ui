@@ -266,7 +266,7 @@ each step below leaves evidence a reviewer can check.
 
 - **Name the rule, then find its cover.** Write the rule in one sentence, then
   grep the tests for it and the helpers for its setup: `test/support/`
-  (`fake-clock`, `production-sources`, `log-capture`),
+  (`fake-clock`, `production-sources`),
   `src/runtime-adapters/aos/acp/test-socket.ts`, the `*.test-helpers.ts(x)`
   files beside the component, and
   the fixture scenarios under `src/runtime-adapters/fixture/`. Extend the
