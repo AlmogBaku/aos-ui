@@ -5,7 +5,7 @@ import type { ArtifactMessage } from "@/artifacts/artifacts"
 import type {
   CallToolResult,
   ReadResourceResult,
-} from "@modelcontextprotocol/sdk/types.js"
+} from "@harness-gw/sdk/protocol"
 import type {
   McpAppFiles,
   McpAppView,

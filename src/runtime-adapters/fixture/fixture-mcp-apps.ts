@@ -1,4 +1,4 @@
-import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js"
+import type { ReadResourceResult } from "@harness-gw/sdk/protocol"
 
 import { viewerFileResult, type McpAppView } from "@harness-gw/sdk/protocol"
 import {
