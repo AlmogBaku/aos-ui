@@ -633,8 +633,9 @@ export function useActivityCoordinator(
       else markSessionsRead([row.sessionId])
     },
     markAllRead() {
+      // As the bell counts: a hidden Agent's Session is never touched.
       markSessionsRead(
-        current.current.sessions
+        railSessions(current.current.agents, current.current.sessions)
           .filter(isSessionUnread)
           .map(({ sessionId }) => sessionId)
       )

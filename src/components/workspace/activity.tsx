@@ -118,14 +118,19 @@ export function ActivityPanel({
   }, [view])
   const inbox = activity?.inbox ?? emptyInbox
   const now = activity?.readNow() ?? new Date()
-  // A row already waiting when the drawer opened is not news; one that
-  // arrives while it is open is announced, once.
-  const [shownWaiting] = useState(
-    () => new Set(inbox.waiting.map(({ sessionId }) => sessionId))
-  )
-  const arrival = inbox.waiting.find(
-    ({ sessionId }) => !shownWaiting.has(sessionId)
-  )
+  // A row already waiting when the drawer opened is not news; each one that
+  // arrives while it is open is announced, once. Adjusting state from the
+  // previous render keeps the rows already announced.
+  const [announced, setAnnounced] = useState(() => ({
+    seen: new Set(inbox.waiting.map(({ key }) => key)),
+    text: "",
+  }))
+  const arrivals = inbox.waiting.filter(({ key }) => !announced.seen.has(key))
+  if (arrivals.length)
+    setAnnounced({
+      seen: new Set([...announced.seen, ...arrivals.map(({ key }) => key)]),
+      text: arrivals.map((row) => rowCopy(row, dictionary).summary).join(". "),
+    })
   const groups = [
     { title: copy.waitingGroup, rows: inbox.waiting },
     { title: copy.unreadGroup, rows: inbox.unread },
@@ -149,7 +154,11 @@ export function ActivityPanel({
     const index = rows.findIndex(
       (element) => element.dataset.activityRow === row.key
     )
-    ;(rows[index + 1] ?? panel?.querySelector<HTMLElement>("h2"))?.focus()
+    ;(
+      rows[index + 1] ??
+      rows[index - 1] ??
+      panel?.querySelector<HTMLElement>("h2")
+    )?.focus()
     activity?.markRowRead(row)
   }
 
@@ -196,7 +205,7 @@ export function ActivityPanel({
       <div className={styles.body}>
         {/* Mounted empty, so the arrival is what gets announced. */}
         <p role="status" className="sr-only">
-          {arrival ? rowCopy(arrival, dictionary).summary : null}
+          {announced.text}
         </p>
         {view.settings ? (
           <div className={styles.settings}>

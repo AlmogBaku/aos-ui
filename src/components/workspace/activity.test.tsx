@@ -648,17 +648,30 @@ describe("the Activity inbox", () => {
       updatedAt: minutesAgo(60),
       unread: true,
     },
+    // A hidden Agent's Session counts nowhere, so no action reaches it.
+    {
+      sessionId: "hidden",
+      agentId: "h",
+      status: "idle",
+      updatedAt: minutesAgo(5),
+      unread: true,
+    },
   ]
   /** The panel over a live coordinator; `update` is the provider's next read. */
   function renderInbox() {
     const provider = source()
     const props = {
       ...options(provider.workspace),
+      agents: [
+        ...agents,
+        { id: "h", name: "Hidden", visibility: "hidden" as const },
+      ],
       titles: new Map([
         ["one", "First"],
         ["two", "Second"],
         ["three", "Third"],
         ["four", "Fourth"],
+        ["five", "Fifth"],
       ]),
     }
     const onOpened = vi.fn()
@@ -729,7 +742,7 @@ describe("the Activity inbox", () => {
     expect(provider.markSessionRead).toHaveBeenCalledExactlyOnceWith("one")
   })
 
-  it("marks one row read without opening it, and moves focus to the next row, then the heading", async () => {
+  it("marks one row read without opening it, and moves focus to the next row, else the previous, else the heading", async () => {
     const user = userEvent.setup()
     const { provider, props, update } = renderInbox()
     // Only answering clears a waiting Session, so it offers no Mark read.
@@ -755,6 +768,13 @@ describe("the Activity inbox", () => {
     await user.click(
       screen.getByRole("button", { name: "Mark read: Aster, Third" })
     )
+    expect(screen.getByRole("button", { name: /^Mica, Second,/ })).toHaveFocus()
+
+    // Second is answered and read; Third is the last row left.
+    update([inboxSessions[2]!])
+    await user.click(
+      screen.getByRole("button", { name: "Mark read: Aster, Third" })
+    )
     expect(screen.getByRole("heading", { name: "Activity" })).toHaveFocus()
   })
 
@@ -771,7 +791,7 @@ describe("the Activity inbox", () => {
     expect(markAll).toBeDisabled()
   })
 
-  it("announces a waiting row that arrives while the drawer is open, and only that one", () => {
+  it("announces each waiting row that arrives while the drawer is open, once", () => {
     const { update } = renderInbox()
     const live = screen.getByRole("status")
     expect(live).toBeEmptyDOMElement()
@@ -783,8 +803,16 @@ describe("the Activity inbox", () => {
     }
     update([...inboxSessions, arrival])
     expect(live).toHaveTextContent(/^Aster, Fourth, waiting for your input$/)
-    update([...inboxSessions.slice(1), arrival])
-    expect(live).toHaveTextContent(/^Aster, Fourth, waiting for your input$/)
+    // A later arrival is announced even when it lists below the first.
+    const older = {
+      ...arrival,
+      sessionId: "five",
+      updatedAt: minutesAgo(10),
+    }
+    update([...inboxSessions, arrival, older])
+    expect(live).toHaveTextContent(/^Aster, Fifth, waiting for your input$/)
+    update([...inboxSessions.slice(1), arrival, older])
+    expect(live).toHaveTextContent(/^Aster, Fifth, waiting for your input$/)
   })
 
   it("shows one calm message while nothing needs the operator", () => {
