@@ -1,8 +1,17 @@
-import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
+import type {
+  CompactionUpdate,
+  SessionUpdate,
+  StateUpdate,
+  ToolCallContent,
+} from "@agentclientprotocol/sdk/experimental/v2"
 import type { ToolCallMessagePart } from "@assistant-ui/core"
 import { describe, expect, it } from "vitest"
 
-import { HGW_PLAN_ID, HGW_STOP_REASONS } from "@harness-gw/sdk/protocol"
+import {
+  type Built,
+  HGW_PLAN_ID,
+  HGW_STOP_REASONS,
+} from "@harness-gw/sdk/protocol"
 import type { AcpApproval } from "@harness-gw/sdk"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
@@ -36,7 +45,7 @@ import {
 const TURN_META = { sequence: 0, turnId: "run-1" }
 const TOOL_META = { ...TURN_META, messageId: "a1" }
 
-type Entry = readonly [SessionUpdate, unknown?]
+type Entry = readonly [Built<SessionUpdate>, unknown?]
 
 const fold = (entries: readonly Entry[], from = initialProjectorState) =>
   entries.reduce<ProjectorState>(
@@ -77,7 +86,7 @@ const toolCall = (patch: Record<string, unknown>, meta: unknown): Entry => [
 ]
 
 const stateUpdate = (
-  patch: Record<string, unknown>,
+  patch: Built<StateUpdate>,
   meta: unknown = TURN_META
 ): Entry => [{ sessionUpdate: "state_update", ...patch }, meta]
 
@@ -323,7 +332,7 @@ describe("applyUpdate messages", () => {
   it("ignores an update kind it does not project", () => {
     const streamed = fold([agentChunk("a1", "draft")])
     expect(
-      applyUpdate(streamed, { sessionUpdate: "terminal_update" }, TURN_META)
+      applyUpdate(streamed, { sessionUpdate: "_unprojected" }, TURN_META)
     ).toBe(streamed)
   })
 
@@ -1094,8 +1103,8 @@ describe("applyUpdate turn timing", () => {
 })
 
 describe("applyUpdate Session metadata", () => {
-  const plan = (planId: string) => ({
-    sessionUpdate: "plan_update" as const,
+  const plan = (planId: string): Built<SessionUpdate> => ({
+    sessionUpdate: "plan_update",
     plan: {
       type: "items",
       planId,
@@ -1131,7 +1140,7 @@ describe("applyUpdate Session metadata", () => {
               type: "select",
               configId: "model",
               name: "Model",
-              value: "sonnet",
+              currentValue: "sonnet",
               options: [],
             },
           ],
@@ -1150,7 +1159,7 @@ describe("applyUpdate Session metadata", () => {
         type: "select",
         configId: "model",
         name: "Model",
-        value: "sonnet",
+        currentValue: "sonnet",
         options: [],
       },
     ])
@@ -1168,18 +1177,6 @@ describe("applyUpdate Session metadata", () => {
       named
     )
     expect(cleared.title).toBeUndefined()
-  })
-
-  it("ignores config options it cannot read", () => {
-    const projected = fold([
-      [
-        {
-          sessionUpdate: "config_option_update",
-          configOptions: [{ type: "select" }],
-        },
-      ],
-    ])
-    expect(projected.configOptions).toBeUndefined()
   })
 })
 
@@ -1589,7 +1586,10 @@ const terminalChunk = (bytes: string | readonly number[]): Entry => [
   TURN_META,
 ]
 
-const toolContent = (content: unknown, toolCallId = "t1"): Entry => [
+const toolContent = (
+  content: Built<ToolCallContent>,
+  toolCallId = "t1"
+): Entry => [
   { sessionUpdate: "tool_call_content_chunk", toolCallId, content },
   { ...TOOL_META },
 ]
@@ -2007,7 +2007,7 @@ describe("applyUpdate stop reasons", () => {
     ["max_tokens", { type: "incomplete", reason: "length" }],
     ["refusal", { type: "incomplete", reason: "content-filter" }],
     ["max_turn_requests", { type: "incomplete", reason: "other" }],
-  ])("settles a turn that stopped on %s", (stopReason, status) => {
+  ] as const)("settles a turn that stopped on %s", (stopReason, status) => {
     const settled = fold(
       [stateUpdate({ state: "idle", stopReason })],
       answering
@@ -2018,7 +2018,9 @@ describe("applyUpdate stop reasons", () => {
 })
 
 describe("applyUpdate compaction", () => {
-  const compaction = (patch: Record<string, unknown>): Entry => [
+  const compaction = (
+    patch: Omit<Built<CompactionUpdate>, "compactionId">
+  ): Entry => [
     { sessionUpdate: "compaction_update", compactionId: "c1", ...patch },
     TURN_META,
   ]

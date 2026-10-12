@@ -32,6 +32,7 @@ import {
 } from "./shared/presentation/views.ts"
 import {
   buildGrammars,
+  buildMaplibre,
   buildPdfjs,
   buildViews,
 } from "./packages/tools-mcp/views/build.ts"
@@ -191,12 +192,15 @@ function mcpAppSandboxPlugin(): Plugin {
 
 /** The real `aos-ui` server's answers, as JSON, from views built right now. */
 async function recordToolsServer() {
-  const [views, pdfjs, grammars] = await Promise.all([
+  const [views, pdfjs, grammars, maplibre] = await Promise.all([
     buildViews(),
     buildPdfjs(),
     buildGrammars(),
+    buildMaplibre(),
   ])
-  return JSON.stringify(await snapshotToolsServer({ views, pdfjs, grammars }))
+  return JSON.stringify(
+    await snapshotToolsServer({ views, pdfjs, grammars, maplibre })
+  )
 }
 
 /**

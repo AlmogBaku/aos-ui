@@ -114,7 +114,7 @@ const GuestRuntimeContextSchema = z.object({
     .strictObject({
       lang: z.enum(["en", "he"]).optional(),
       name: z.string().max(128).optional(),
-      logoUrl: z.string().url().max(512).optional(),
+      logoUrl: z.url().max(512).optional(),
       accent: z
         .string()
         .regex(/^#[0-9a-fA-F]{6}$/u)

@@ -1,9 +1,9 @@
-import type {
-  AvailableCommand,
-  ContentBlock,
-  SessionConfigOption,
+import {
+  type AvailableCommand,
+  type ContentBlock,
+  type SessionConfigOption,
   SessionUpdate,
-  ToolCallLocation,
+  type ToolCallLocation,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { MessageStatus, ThreadMessageLike } from "@assistant-ui/core"
 import type { z } from "zod"
@@ -161,12 +161,6 @@ const listOf = <T>(
 
 const blockPatch = (value: unknown) =>
   value === null ? null : listOf(value, isContentBlock)
-
-const isConfigOption = (value: unknown): value is SessionConfigOption =>
-  isRecord(value) &&
-  typeof value.type === "string" &&
-  typeof value.configId === "string" &&
-  typeof value.name === "string"
 
 const isCommand = (value: unknown): value is AvailableCommand =>
   isRecord(value) &&
@@ -1122,10 +1116,10 @@ function applyKind(
     // Usage belongs to the composer's Session projection, not the transcript.
     case "session_info_update":
       return applyTitle(state, update)
-    case "config_option_update": {
-      const configOptions = listOf(update.configOptions, isConfigOption)
-      return configOptions ? { ...state, configOptions } : state
-    }
+    case "config_option_update":
+      return SessionUpdate.isConfigOptionUpdate(update)
+        ? { ...state, configOptions: update.configOptions }
+        : state
     case "available_commands_update": {
       const commands = listOf(update.availableCommands, isCommand)
       return commands ? { ...state, commands } : state

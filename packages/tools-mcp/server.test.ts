@@ -1,7 +1,6 @@
 // @vitest-environment node
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { createToolsServer } from "./server"
@@ -24,11 +23,16 @@ const pdfjs = new Map([
 const grammars = new Map([
   ["go.json", new TextEncoder().encode('{"name":"go"}')],
 ])
+const maplibre = new Map([
+  ["maplibre-gl-worker.mjs", new TextEncoder().encode("export {}")],
+])
 
 beforeAll(async () => {
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()
-  await createToolsServer({ views, pdfjs, grammars }).connect(serverTransport)
+  await createToolsServer({ views, pdfjs, grammars, maplibre }).connect(
+    serverTransport
+  )
   await client.connect(clientTransport)
 })
 
@@ -150,12 +154,16 @@ describe("MCP App views", () => {
 })
 
 describe("view files", () => {
-  // The artifact view's sandbox fetches nothing, so it reads pdf.js's worker,
-  // data, and decoders by name; "lists one App resource per view" keeps them
-  // out of the resource list the fixture snapshot reads.
-  it("serves the worker as script text, other files as bytes, and nothing else", async () => {
+  // The views' sandboxes fetch nothing, so the artifact view reads pdf.js's
+  // worker, data, and decoders by name, and the map view MapLibre's worker;
+  // "lists one App resource per view" keeps them out of the resource list the
+  // fixture snapshot reads.
+  it("serves each worker as script text, other files as bytes, and nothing else", async () => {
     const worker = await client.readResource({
       uri: "ui://aos-ui/pdfjs/pdf.worker.js",
+    })
+    const mapWorker = await client.readResource({
+      uri: "ui://aos-ui/maplibre/maplibre-gl-worker.mjs",
     })
     const decoder = await client.readResource({
       uri: "ui://aos-ui/pdfjs/wasm/jbig2.wasm",
@@ -166,6 +174,13 @@ describe("view files", () => {
         uri: "ui://aos-ui/pdfjs/pdf.worker.js",
         mimeType: "text/javascript",
         text: "self.onmessage = null",
+      },
+    ])
+    expect(mapWorker.contents).toEqual([
+      {
+        uri: "ui://aos-ui/maplibre/maplibre-gl-worker.mjs",
+        mimeType: "text/javascript",
+        text: "export {}",
       },
     ])
     expect(decoder.contents).toEqual([
@@ -358,16 +373,24 @@ describe("present_artifact", () => {
   })
 
   it.each([
-    ["a relative path", { path: "out/report.pdf" }, /absolute at path/u],
+    [
+      "a relative path",
+      { path: "out/report.pdf" },
+      /path: Path must be absolute/u,
+    ],
     ["the root directory", { path: "/" }, /name a file/u],
-    ["an empty path", { path: "" }, /at path/u],
+    ["an empty path", { path: "" }, /path: Too small/u],
     [
       "a path with a control character",
       { path: "/workspace/a\u0000b" },
-      /control characters at path/u,
+      /path: Path must not contain control characters/u,
     ],
-    ["an overlong title", { path: "/a", title: "t".repeat(161) }, /at title/u],
-    ["a malformed mimeType", { path: "/a", mimeType: "text" }, /at mimeType/u],
+    [
+      "an overlong title",
+      { path: "/a", title: "t".repeat(161) },
+      /title: Too big/u,
+    ],
+    ["a malformed mimeType", { path: "/a", mimeType: "text" }, /mimeType: /u],
     [
       "an extra key",
       { path: "/a", url: "https://example.com" },

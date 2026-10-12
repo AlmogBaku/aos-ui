@@ -6,13 +6,11 @@ import {
 } from "@modelcontextprotocol/ext-apps/server"
 import {
   McpServer,
+  ProtocolError,
+  ProtocolErrorCode,
   ResourceTemplate,
-} from "@modelcontextprotocol/sdk/server/mcp.js"
-import {
-  ErrorCode,
-  McpError,
   type CallToolResult,
-} from "@modelcontextprotocol/sdk/types.js"
+} from "@modelcontextprotocol/server"
 import { z } from "zod"
 
 import {
@@ -23,6 +21,7 @@ import {
 } from "../../shared/presentation/tools"
 import {
   GRAMMAR_RESOURCE_URI,
+  MAPLIBRE_RESOURCE_URI,
   PDFJS_RESOURCE_URI,
   PDFJS_WORKER_FILE,
   PRESENTATION_VIEW_MIME_TYPE,
@@ -38,13 +37,14 @@ export type PresentationViewDocuments = Record<PresentationViewName, string>
 export type ViewFiles = ReadonlyMap<string, Uint8Array>
 
 /**
- * What the server serves: the built views, and the pdf.js files and code
- * grammars the artifact view reads beside them.
+ * What the server serves: the built views, the pdf.js files and code grammars
+ * the artifact view reads beside them, and the map view's MapLibre worker.
  */
 export type ToolsServerFiles = {
   views: PresentationViewDocuments
   pdfjs?: ViewFiles
   grammars?: ViewFiles
+  maplibre?: ViewFiles
 }
 
 const SAFE_OUTPUT =
@@ -170,8 +170,8 @@ function registerFiles(
       const path = String(variables.path)
       const bytes = files.get(path)
       if (!bytes)
-        throw new McpError(
-          ErrorCode.InvalidParams,
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
           `No ${name} at ${address.href}`
         )
       const mimeType = textType(path)
@@ -206,6 +206,7 @@ export function createToolsServer({
   views,
   pdfjs = new Map(),
   grammars = new Map(),
+  maplibre = new Map(),
 }: ToolsServerFiles): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
@@ -221,6 +222,13 @@ export function createToolsServer({
     GRAMMAR_RESOURCE_URI,
     grammars,
     () => "application/json"
+  )
+  registerFiles(
+    server,
+    "MapLibre file",
+    MAPLIBRE_RESOURCE_URI,
+    maplibre,
+    () => "text/javascript"
   )
 
   for (const [name, definition] of Object.entries(

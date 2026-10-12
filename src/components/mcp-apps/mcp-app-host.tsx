@@ -1,6 +1,6 @@
 "use client"
 
-import type { CallToolResult } from "@harness-gw/sdk/protocol"
+import type { CallToolResult } from "@modelcontextprotocol/client"
 import {
   createContext,
   useCallback,

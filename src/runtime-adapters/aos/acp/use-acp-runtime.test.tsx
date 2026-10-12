@@ -26,6 +26,7 @@ import {
   HGW_PLAN_ID,
   HGW_STOP_REASONS,
   type HgwHistoryCursor,
+  type Built,
   type HgwInitializeMeta,
 } from "@harness-gw/sdk/protocol"
 import {
@@ -251,14 +252,17 @@ const textUpdate = (
   sessionUpdate: "user_message" | "agent_message",
   messageId: string,
   text: string
-): SessionUpdate => ({
+): Built<SessionUpdate> => ({
   sessionUpdate,
   messageId,
   content: [{ type: "text", text }],
 })
 
 /** A streamed part, which a transcript the replay did not drop would double. */
-const chunkUpdate = (messageId: string, text: string): SessionUpdate => ({
+const chunkUpdate = (
+  messageId: string,
+  text: string
+): Built<SessionUpdate> => ({
   sessionUpdate: "agent_message_chunk",
   messageId,
   content: { type: "text", text },

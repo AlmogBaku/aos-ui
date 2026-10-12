@@ -8,16 +8,17 @@ import {
   type McpUiHostContext,
   type McpUiStyles,
 } from "@modelcontextprotocol/ext-apps/app-bridge"
-import type { CallToolResult as BridgeToolResult } from "@modelcontextprotocol/sdk/types.js"
+import type {
+  CallToolResult,
+  ReadResourceResult,
+} from "@modelcontextprotocol/client"
 import { useTheme } from "next-themes"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import {
   McpAppResourceReadRequestSchema,
   McpAppToolCallRequestSchema,
-  type CallToolResult,
   type McpAppView,
-  type ReadResourceResult,
 } from "@harness-gw/sdk/protocol"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 import { cn } from "@/lib/utils"
@@ -46,14 +47,6 @@ import { useAppFiles, type AppConnectionStatus } from "./use-app-files"
 import { ViewHeader } from "./view-header"
 
 const HOST_INFO = { name: "AOS", version: "1.0.0" }
-
-/**
- * The App bridge still speaks the v1 MCP SDK's types, while the gateway SDK
- * types the same results with `@modelcontextprotocol/core`, which reads
- * `structuredContent` as unknown where v1 wants an object. They are the
- * gateway's own validated results, so only the type changes at the bridge.
- */
-const toBridgeResult = (result: CallToolResult) => result as BridgeToolResult
 
 /** Each adapter's shared resource reads, which every view it hosts reuses. */
 const resourceReads = new WeakMap<
@@ -417,7 +410,7 @@ export default function McpAppFrame({
         name: params.name,
         arguments: params.arguments ?? {},
       })
-      return toBridgeResult(await adapter.callTool({ ...target, ...request }))
+      return adapter.callTool({ ...target, ...request })
     }
     bridge.onreadresource = async (params) => {
       if (!admit()) refuse()
@@ -560,7 +553,7 @@ export default function McpAppFrame({
     const settled = sent.current.result || sent.current.cancelled
     if (result !== undefined && sent.current.input && !settled) {
       sent.current.result = true
-      void bridge.sendToolResult(toBridgeResult(result))
+      void bridge.sendToolResult(result)
     } else if (cancelled !== undefined && result === undefined && !settled) {
       sent.current.cancelled = true
       void bridge.sendToolCancelled({ reason: cancelled })

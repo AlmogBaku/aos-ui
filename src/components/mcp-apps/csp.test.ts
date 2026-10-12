@@ -71,7 +71,9 @@ describe("MCP App CSP", () => {
       "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'"
     )
     expect(directive(policy, "connect-src")).toBe("connect-src 'none'")
-    expect(directive(policy, "worker-src")).toBe("worker-src 'self' blob:")
+    expect(directive(policy, "worker-src")).toBe(
+      "worker-src 'self' blob: data:"
+    )
     expect(directive(policy, "frame-src")).toBe("frame-src 'none'")
     expect(directive(policy, "base-uri")).toBe("base-uri 'none'")
     expect(directive(policy, "object-src")).toBe("object-src 'none'")

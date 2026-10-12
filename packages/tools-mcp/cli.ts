@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { parseArgs } from "node:util"
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server"
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
 
 import {
+  MAPLIBRE_WORKER_FILE,
   PDFJS_WORKER_FILE,
   presentationViewNames,
 } from "../../shared/presentation/views"
@@ -115,8 +116,14 @@ if (import.meta.main) {
     loadViews(directory),
     loadFolder(directory, "pdfjs", PDFJS_WORKER_FILE),
     loadFolder(directory, "grammars", "typescript.json"),
+    loadFolder(directory, "maplibre", MAPLIBRE_WORKER_FILE),
   ]).then(
-    ([views, pdfjs, grammars]) => ({ views, pdfjs, grammars }),
+    ([views, pdfjs, grammars, maplibre]) => ({
+      views,
+      pdfjs,
+      grammars,
+      maplibre,
+    }),
     (error: Error) => {
       console.error(error.message)
       process.exit(1)

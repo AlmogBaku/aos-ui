@@ -1,12 +1,14 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import type {
-  ReadResourceResult,
-  Tool,
-} from "@modelcontextprotocol/sdk/types.js"
+import {
+  Client,
+  InMemoryTransport,
+  type ReadResourceResult,
+  type Tool,
+} from "@modelcontextprotocol/client"
 
 import {
   GRAMMAR_RESOURCE_URI,
+  MAPLIBRE_RESOURCE_URI,
+  MAPLIBRE_WORKER_FILE,
   PDFJS_RESOURCE_URI,
   PDFJS_WORKER_FILE,
 } from "../../shared/presentation/views"
@@ -42,10 +44,15 @@ const FIXTURE_GRAMMAR_URIS = [
   "javascript",
 ].map((name) => `${GRAMMAR_RESOURCE_URI}${name}.json`)
 
+/** The worker every map view reads before it draws. */
+const FIXTURE_MAPLIBRE_URIS = [
+  `${MAPLIBRE_RESOURCE_URI}${MAPLIBRE_WORKER_FILE}`,
+]
+
 /**
- * Asks a real server for its `tools/list`, every view's `resources/read`, and
- * the pdf.js resources and grammars the artifact view needs for the fixture
- * files.
+ * Asks a real server for its `tools/list`, every view's `resources/read`, the
+ * pdf.js resources and grammars the artifact view needs for the fixture
+ * files, and the map view's worker.
  */
 export async function snapshotToolsServer(
   files: ToolsServerFiles
@@ -61,7 +68,11 @@ export async function snapshotToolsServer(
     const resources: Record<string, ReadResourceResult> = {}
     for (const { uri } of (await client.listResources()).resources)
       resources[uri] = await client.readResource({ uri })
-    for (const uri of [...FIXTURE_PDFJS_URIS, ...FIXTURE_GRAMMAR_URIS])
+    for (const uri of [
+      ...FIXTURE_PDFJS_URIS,
+      ...FIXTURE_GRAMMAR_URIS,
+      ...FIXTURE_MAPLIBRE_URIS,
+    ])
       resources[uri] = await client.readResource({ uri })
     return { tools, resources }
   } finally {

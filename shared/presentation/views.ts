@@ -53,6 +53,16 @@ export const PDFJS_RESOURCE_URI = "ui://aos-ui/pdfjs/"
 export const PDFJS_WORKER_FILE = "pdf.worker.js"
 
 /**
+ * Where the map view reads MapLibre's worker from the `aos-ui` server. Inlined,
+ * the worker would carry the view past the 2 MiB a gateway accepts for one
+ * App document.
+ */
+export const MAPLIBRE_RESOURCE_URI = "ui://aos-ui/maplibre/"
+
+/** MapLibre's worker, the module the package ships, which starts itself. */
+export const MAPLIBRE_WORKER_FILE = "maplibre-gl-worker.mjs"
+
+/**
  * Where the artifact view reads the grammar it highlights code in, one Shiki
  * grammar per `<name>.json`, so the view carries none of them itself.
  */

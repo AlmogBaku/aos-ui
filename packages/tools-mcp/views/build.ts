@@ -8,6 +8,7 @@ import { build, type Rolldown } from "vite"
 
 import { SYNTAX_LANGUAGES } from "../../../shared/syntax-language"
 import {
+  MAPLIBRE_WORKER_FILE,
   PDFJS_WORKER_FILE,
   presentationViewNames,
   type PresentationViewName,
@@ -16,6 +17,9 @@ import {
 const VIEWS_DIRECTORY = import.meta.dirname
 const PDFJS_DIRECTORY = path.dirname(
   createRequire(import.meta.url).resolve("pdfjs-dist/package.json")
+)
+const MAPLIBRE_WORKER = createRequire(import.meta.url).resolve(
+  `maplibre-gl/dist/${MAPLIBRE_WORKER_FILE}`
 )
 /** Where `bun run tools-mcp:build` writes the views the server loads. */
 export const VIEWS_OUTPUT_DIRECTORY = path.resolve(
@@ -185,6 +189,42 @@ export async function buildPdfjs(): Promise<Map<string, Uint8Array>> {
   for (const name of names)
     files.set(name, await readFile(path.join(PDFJS_DIRECTORY, name)))
   return files
+}
+
+/**
+ * MapLibre's worker, by name. The package ships it as a module; the map view
+ * can start a worker it authored only as a classic script, so the same bundler
+ * rewrites it as one, as it does pdf.js's.
+ */
+export async function buildMaplibre(): Promise<Map<string, Uint8Array>> {
+  const files = outputFiles(
+    await build({
+      configFile: false,
+      logLevel: "warn",
+      root: VIEWS_DIRECTORY,
+      mode: "production",
+      build: {
+        write: false,
+        emptyOutDir: false,
+        minify: true,
+        reportCompressedSize: false,
+        lib: {
+          entry: MAPLIBRE_WORKER,
+          formats: ["iife"],
+          name: "maplibreWorker",
+        },
+        rolldownOptions: { output: { codeSplitting: false } },
+      },
+    })
+  )
+  const [worker] = files
+  if (files.length !== 1 || worker?.type !== "chunk")
+    throw new Error(
+      `The MapLibre worker did not build into one script: ${files.map((file) => file.fileName).join(", ")}`
+    )
+  return new Map([
+    [MAPLIBRE_WORKER_FILE, new TextEncoder().encode(worker.code)],
+  ])
 }
 
 /**
