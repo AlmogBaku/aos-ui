@@ -373,6 +373,11 @@ export function useWorkspaceNavigation({
   const selectedProviderAgentId = selectedAgentIsDraft
     ? agentCreator?.id
     : selectedAgentId
+  // On a runtime that pages one Agent's catalog at a time, only that Agent's
+  // History has a further page to read (see scopeSessionCatalog below).
+  const pagedAgentId = workspace.scopeSessionCatalog
+    ? (selectedProviderAgentId ?? undefined)
+    : undefined
 
   const runtimeThreads = useMemo(() => {
     // Archived threads carry Session metadata and titles too, so the archived
@@ -1632,6 +1637,7 @@ export function useWorkspaceNavigation({
     sessionView,
     navigationCatalog,
     selectedAgentId,
+    pagedAgentId,
     visibleThreadId,
     conversationThreadId,
     selectedAgent,

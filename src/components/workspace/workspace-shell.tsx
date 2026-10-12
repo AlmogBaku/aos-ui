@@ -130,6 +130,11 @@ export type WorkspaceShellProps = {
   olderSessions: readonly WorkspaceSession[]
   navigationCatalog?: ReadonlyMap<string, AgentSessionNavigation>
   threadListRuntime?: ThreadListRuntime
+  /**
+   * The Agent whose catalog the thread list pages, on a runtime that pages one
+   * Agent at a time; only that Agent's History offers "Load more".
+   */
+  pagedAgentId?: string
   selectedAgentId: string | null
   activeThreadId: string | null
   environmentLabel?: string
@@ -916,6 +921,7 @@ type InspectorPanelProps = Pick<
   | "onCreateSession"
   | "onActionError"
   | "threadListRuntime"
+  | "pagedAgentId"
   | "sessionActions"
   | "onSearchSessions"
 > & {
@@ -933,6 +939,7 @@ function InspectorPanel({
   onCreateSession,
   onActionError,
   threadListRuntime,
+  pagedAgentId,
   sessionActions,
   sessionMenu,
   agent,
@@ -993,6 +1000,7 @@ function InspectorPanel({
             availability={sessionActions}
             sessionMenu={sessionMenu}
             threadListRuntime={threadListRuntime}
+            pagedAgentId={pagedAgentId}
             onActionError={onActionError}
             onSearch={onSearchSessions}
           />
@@ -1153,6 +1161,7 @@ export function WorkspaceShell({
   olderSessions,
   navigationCatalog = noNavigation,
   threadListRuntime,
+  pagedAgentId,
   selectedAgentId,
   activeThreadId,
   environmentLabel,
@@ -1495,6 +1504,7 @@ export function WorkspaceShell({
     dictionary,
     navigation: selectedNavigation,
     threadListRuntime,
+    pagedAgentId,
     activeThreadId,
     onOpenSession,
     onCreateSession,
@@ -1791,6 +1801,7 @@ export function WorkspaceShell({
             <MobileNavigator
               state={mobileNavigator}
               threadListRuntime={threadListRuntime}
+              pagedAgentId={pagedAgentId}
               agents={rosterAgents}
               selectedAgentId={selectedAgentId}
               activeThreadId={activeThreadId}

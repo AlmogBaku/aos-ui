@@ -89,6 +89,14 @@ export type AgentSessionHistoryProps = {
   availability?: SessionActionCapabilities | null
   sessionMenu?: SessionRowMenuHandlers
   threadListRuntime?: ThreadListRuntime
+  /**
+   * The Agent whose catalog the thread list pages, when the runtime pages one
+   * Agent at a time. Only that Agent's History offers "Load more": a further
+   * page lists none of another Agent's Sessions, so a sentinel under another
+   * Agent's list would stay in view and read page after page. Absent, the
+   * thread list spans every Agent and any History may read on.
+   */
+  pagedAgentId?: string
   onActionError?: (error: unknown) => void
   /**
    * The provider's Session search. Without it the search box filters the
@@ -459,9 +467,12 @@ export function AgentSessionHistory({
   availability,
   sessionMenu,
   threadListRuntime,
+  pagedAgentId,
   onActionError,
   onSearch,
 }: AgentSessionHistoryProps) {
+  const pagesThisAgent =
+    pagedAgentId === undefined || pagedAgentId === navigation.agentId
   const normalizedQuery = normalizeSearch(query, locale)
   const { matches, searching } = useProviderSessionSearch(
     onSearch,
@@ -586,7 +597,9 @@ export function AgentSessionHistory({
             ) : null}
           </div>
         ) : null}
-        {threadListRuntime ? <SessionHistoryLoadMore copy={copy} /> : null}
+        {threadListRuntime && pagesThisAgent ? (
+          <SessionHistoryLoadMore copy={copy} />
+        ) : null}
         {navigation.archivedSessions.length ? (
           <ArchivedSection
             {...sharedRow}

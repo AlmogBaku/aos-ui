@@ -109,6 +109,7 @@ export type MobileNavigatorProps = {
   activeThreadId: string | null
   sessionsByAgentId: readonly MobileAgentSessionCatalog[]
   threadListRuntime?: ThreadListRuntime
+  pagedAgentId?: AgentSessionHistoryProps["pagedAgentId"]
   /** True while any other roster Agent holds an unread Session. */
   otherAgentsUnread?: boolean
   locale: "en" | "he"
@@ -270,6 +271,7 @@ export function MobileNavigator({
   activeThreadId,
   sessionsByAgentId,
   threadListRuntime,
+  pagedAgentId,
   otherAgentsUnread = false,
   locale,
   copy,
@@ -478,6 +480,7 @@ export function MobileNavigator({
         <SessionsView
           agent={browsedAgent!}
           threadListRuntime={threadListRuntime}
+          pagedAgentId={pagedAgentId}
           activeThreadId={activeThreadId}
           lastSelectedThreadId={catalog!.lastSelectedThreadId}
           openSessions={stableSections.openSessions}
@@ -530,6 +533,7 @@ export function MobileNavigator({
 type SessionsViewProps = {
   agent: WorkspaceAgent
   threadListRuntime?: ThreadListRuntime
+  pagedAgentId?: AgentSessionHistoryProps["pagedAgentId"]
   activeThreadId: string | null
   lastSelectedThreadId: string | null
   openSessions: readonly WorkspaceSession[]
@@ -556,6 +560,7 @@ type SessionsViewProps = {
 function SessionsView({
   agent,
   threadListRuntime,
+  pagedAgentId,
   activeThreadId,
   lastSelectedThreadId,
   openSessions,
@@ -653,6 +658,7 @@ function SessionsView({
             : undefined
         }
         threadListRuntime={threadListRuntime}
+        pagedAgentId={pagedAgentId}
         onActionError={onActionError}
         onSearch={onSearchSessions}
       />

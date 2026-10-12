@@ -580,4 +580,48 @@ describe("paged Session History", () => {
     )
     expect(loadMoreButton()).toBeNull()
   })
+
+  // Full mount: on a runtime that scopes the catalog, the thread list's cursor
+  // belongs to the selected Agent, so a browsed Agent's History must not read
+  // it: each page would list none of that Agent's Sessions and its sentinel
+  // would stay in view, reading page after page.
+  it("offers Load more only in the History of the Agent the thread list pages", async () => {
+    const user = userEvent.setup()
+    renderWorkspace(() => {
+      const bundle = useControlledWorkspace({
+        initialThreadId: "thread-aster-0",
+        workspace: { sessions: pagedSessions, sessionTitles },
+      })
+      // The fixture lists every Agent at once; scoping, as the aos runtime
+      // declares it, makes the thread list page the selected Agent alone.
+      bundle.workspace.scopeSessionCatalog ??= () => {}
+      return bundle
+    })
+    await waitFor(() => expect(loadMoreButton()).not.toBeNull())
+
+    await user.click(
+      screen.getByRole("button", { name: en.actions.openAgents })
+    )
+    let drawer = screen.getByRole("dialog", { name: en.workspace.sessions })
+    expect(
+      within(drawer).getByRole("button", {
+        name: en.mobileNavigation.loadMoreSessions,
+      })
+    ).toBeVisible()
+
+    await user.click(
+      within(drawer).getByRole("button", {
+        name: en.mobileNavigation.backToAgents,
+      })
+    )
+    drawer = screen.getByRole("dialog", { name: en.workspace.agents })
+    await user.click(within(drawer).getByRole("button", { name: "Mica" }))
+    drawer = screen.getByRole("dialog", { name: en.workspace.sessions })
+    expect(within(drawer).getByRole("heading", { name: "Mica" })).toBeVisible()
+    expect(
+      within(drawer).queryByRole("button", {
+        name: en.mobileNavigation.loadMoreSessions,
+      })
+    ).toBeNull()
+  })
 })
