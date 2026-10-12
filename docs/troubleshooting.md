@@ -211,7 +211,7 @@ Voice requires either the relevant native runtime STT/TTS configuration or a `vo
   Session. A turn that fails because that enable patch failed usually means
   the gateway's device lacks `operator.admin`; re-pair it with that scope. Run
   `openclaw mcp reload` after changing `openclaw.json`.
-- OpenCode: at the pinned 1.18.29 the v2 session engine AOS drives does not
+- OpenCode: at the pinned 1.19.0 the v2 session engine AOS drives does not
   expose MCP tools, so the tools are not callable through AOS. This is an
   upstream limit, not a configuration error.
 
