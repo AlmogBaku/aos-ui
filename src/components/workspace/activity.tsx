@@ -117,7 +117,9 @@ export function ActivityPanel({
       (view.settings ? settingsHeading : settingsButton).current?.focus()
   }, [view])
   const inbox = activity?.inbox ?? emptyInbox
-  const now = activity?.readNow() ?? new Date()
+  // The inbox's times are relative to the clock that comes with it; with no
+  // activity there are no rows to date.
+  const now = activity?.readNow()
   // A row already waiting when the drawer opened is not news; each one that
   // arrives while it is open is announced, once. Adjusting state from the
   // previous render keeps the rows already announced.
@@ -226,7 +228,7 @@ export function ActivityPanel({
             {activity && !activity.supported ? (
               <p className={styles.explanation}>{copy.activityUnavailable}</p>
             ) : null}
-            {groups.length ? (
+            {now && groups.length ? (
               groups.map((group, index) => (
                 <section
                   className={styles.group}
