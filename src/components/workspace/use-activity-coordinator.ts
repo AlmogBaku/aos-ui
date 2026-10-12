@@ -385,7 +385,11 @@ export function useActivityCoordinator(
       setError(false)
       setUnavailableIds(new Set())
     })
-    let queue = Promise.resolve()
+    /**
+     * One chain per Session keeps its events in arrival order, so an owner
+     * lookup that never settles holds back only its own Session's Activity.
+     */
+    const queues = new Map<string, Promise<void>>()
     let unsubscribe: (() => void) | undefined
     /** Only the creator's own Session, or a draft of it, reports creations. */
     const createdBy = (owner: string | undefined) =>
@@ -406,7 +410,7 @@ export function useActivityCoordinator(
       const parsed = activityEventSchema.safeParse(input)
       if (!parsed.success) return
       const event = parsed.data
-      queue = queue
+      const queued = (queues.get(event.sessionId) ?? Promise.resolve())
         .then(async () => {
           if (!active) return
           const validatedOwner = await validateOwner(event.sessionId)
@@ -455,6 +459,12 @@ export function useActivityCoordinator(
         .catch(() => {
           if (active) setError(true)
         })
+      queues.set(event.sessionId, queued)
+      // A drained chain leaves nothing behind.
+      void queued.then(() => {
+        if (queues.get(event.sessionId) === queued)
+          queues.delete(event.sessionId)
+      })
     }
     // Outside `try`: React Compiler cannot compile optional chaining there.
     const subscribe = () =>

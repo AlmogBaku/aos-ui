@@ -428,6 +428,25 @@ describe("Activity coordinator", () => {
     await waitFor(() => expect(result.current.items).toHaveLength(1))
     expect(result.current.error).toBe(false)
   })
+  it("holds back only the Session whose owner lookup never settles", async () => {
+    const provider = source()
+    // "one" is unknown locally, so its owner is asked of a provider that
+    // never answers; "two" is known.
+    provider.workspace.getSessionMetadata = () => new Promise(() => {})
+    const { result } = renderHook(useActivityCoordinator, {
+      initialProps: {
+        ...options(provider.workspace),
+        sessions: [sessions[1]!],
+      },
+    })
+    act(() => {
+      provider.emit("stuck", "one")
+      provider.emit("lands", "two")
+    })
+    await waitFor(() =>
+      expect(result.current.items.map(({ id }) => id)).toEqual(["lands"])
+    )
+  })
   it("resolves labels from current data and never navigates to deleted targets", async () => {
     const provider = source()
     const props = options(provider.workspace)
