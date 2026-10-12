@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { resolve } from "node:path"
-import { format } from "prettier"
+import { format } from "oxfmt"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
 
@@ -24,16 +24,12 @@ for (const [source, target, name] of [
   ],
 ] as const) {
   const content = await readFile(resolve(root, source), "utf8")
-  await writeFile(
-    resolve(root, target),
-    await format(
-      `// Generated from ${source} by scripts/build-integrations.ts.\nexport const ${name} = ${JSON.stringify(content)}\n`,
-      {
-        parser: "typescript",
-        semi: false,
-        trailingComma: "es5",
-        printWidth: 80,
-      }
-    )
+  const { code, errors } = await format(
+    target,
+    `// Generated from ${source} by scripts/build-integrations.ts.\nexport const ${name} = ${JSON.stringify(content)}\n`,
+    { semi: false, trailingComma: "es5", printWidth: 80 }
   )
+  if (errors.length)
+    throw new Error(errors.map(({ message }) => message).join("\n"))
+  await writeFile(resolve(root, target), code)
 }
