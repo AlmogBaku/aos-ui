@@ -134,8 +134,11 @@ export function extractArtifactOccurrences(
   return occurrences
 }
 
-/** A file an MCP App view shows: its display name and declared type. */
-export type ShownFile = { filename: string; mimeType?: string }
+/**
+ * A file an MCP App view shows: its display name and declared type, and the
+ * identity its tool gives it across calls, when it gives one.
+ */
+export type ShownFile = { filename: string; mimeType?: string; fileId?: string }
 
 const parsedRecord = (value: unknown) => {
   if (typeof value !== "string") return isRecord(value) ? value : undefined
@@ -157,11 +160,12 @@ export function shownFileOf(result: unknown): ShownFile | undefined {
   if (!isRecord(structured)) return undefined
   for (const candidate of [structured, structured.value]) {
     if (!isRecord(candidate)) continue
-    const { filename, mimeType } = candidate
+    const { filename, mimeType, fileId } = candidate
     if (typeof filename !== "string" || filename.trim().length === 0) continue
     return {
       filename,
       ...(typeof mimeType === "string" ? { mimeType } : {}),
+      ...(typeof fileId === "string" && fileId.length > 0 ? { fileId } : {}),
     }
   }
   return undefined
@@ -181,11 +185,16 @@ export type SessionOutput =
       file: ShownFile
     }
 
-/** Every file the conversation published, in the order it did. */
+/**
+ * Every file the conversation published, in the order it did. A file its tool
+ * identifies across calls appears once, at its latest publication, since each
+ * call for one file refreshes the same Artifact rather than adding another.
+ */
 export function extractSessionOutputs(
   messages: readonly ArtifactMessage[]
 ): SessionOutput[] {
-  const outputs: SessionOutput[] = []
+  const outputs: Array<SessionOutput | undefined> = []
+  const latestByFile = new Map<string, number>()
   const artifacts = new Map(
     extractArtifactOccurrences(messages).map((occurrence) => [
       occurrence.key,
@@ -210,6 +219,11 @@ export function extractSessionOutputs(
         return
       const file = shownFileOf(part.result)
       if (!file) return
+      if (file.fileId !== undefined) {
+        const earlier = latestByFile.get(file.fileId)
+        if (earlier !== undefined) outputs[earlier] = undefined
+        latestByFile.set(file.fileId, outputs.length)
+      }
       outputs.push({
         key,
         kind: "app",
@@ -221,5 +235,19 @@ export function extractSessionOutputs(
       })
     })
   }
-  return outputs
+  return outputs.filter((output) => output !== undefined)
+}
+
+/**
+ * The call that last showed each identified file, by the file's id: the
+ * revision of the file a view of any earlier call follows.
+ */
+export function latestCallsByFile(
+  messages: readonly ArtifactMessage[]
+): ReadonlyMap<string, string> {
+  const latest = new Map<string, string>()
+  for (const output of extractSessionOutputs(messages))
+    if (output.kind === "app" && output.file.fileId !== undefined)
+      latest.set(output.file.fileId, output.toolCallId)
+  return latest
 }

@@ -4,19 +4,25 @@ import { loadFile, type FileState, type PreviewLimits } from "./file"
 
 const LOADING: FileState = { status: "loading" }
 
-/** One read of the file; each is its own object, so Refresh reads again. */
-type Request = { address: string }
+/**
+ * One read of the file; each is its own object, so Refresh reads again. It
+ * remembers the file's revision it read, so a new revision reads again.
+ */
+type Request = { address: string; revision: string | undefined }
 
 /**
- * The file at `address`, read once it is known, again on `refresh`, and again
- * when a renewed address follows one that could not reach it. A renewal never
- * reloads a preview that already shows.
+ * The file at `address`, read once it is known, again on `refresh`, again
+ * when the page reports a new `revision` of it, since a later call showed the
+ * file and it may have changed, and again when a renewed address follows one
+ * that could not reach it. A renewal alone never reloads a preview that
+ * already shows.
  */
 export function useFile(
   address: string | undefined,
   filename: string,
   mimeType: string | undefined,
-  limits: PreviewLimits
+  limits: PreviewLimits,
+  revision?: string
 ) {
   const [request, setRequest] = useState<Request>()
   const [outcome, setOutcome] = useState<{
@@ -30,9 +36,10 @@ export function useFile(
   if (
     address !== undefined &&
     (request === undefined ||
+      request.revision !== revision ||
       (state.status === "unreachable" && request.address !== address))
   )
-    setRequest({ address })
+    setRequest({ address, revision })
 
   useEffect(() => {
     if (!request) return
@@ -51,7 +58,7 @@ export function useFile(
   return {
     state,
     refresh: () => {
-      if (address !== undefined) setRequest({ address })
+      if (address !== undefined) setRequest({ address, revision })
     },
   }
 }

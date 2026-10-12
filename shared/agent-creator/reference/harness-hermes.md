@@ -27,6 +27,17 @@ as `'\''`.
 
    Never pass `--clone`, `--clone-all`, or `--clone-from`.
 
+   Give it the AOS UI tools, which a profile never inherits, at the address your
+   own profile uses:
+
+   ```bash
+   hermes -p <id> config set mcp_servers.aos-ui.url "$(hermes config get mcp_servers.aos-ui.url)"
+   hermes -p <id> mcp test aos-ui    # must list present_artifact
+   ```
+
+   If your own profile has no `aos-ui`, skip this and tell the operator the new
+   Agent will have no charts, maps, stats, or Artifacts.
+
 4. Write the confirmed instructions to `~/.hermes/profiles/<id>/SOUL.md`,
    replacing the seeded default. Persona and instructions belong there; Hermes
    reads no other persona file.

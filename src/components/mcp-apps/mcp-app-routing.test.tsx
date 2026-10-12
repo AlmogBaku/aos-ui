@@ -17,7 +17,7 @@ import {
   type RichToolPart,
 } from "@/components/tool-ui"
 import { MenuPopup } from "@/components/ui/menu-popup"
-import type { McpAppAdapter } from "@/runtime-adapters/contracts"
+import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { McpAppPipPanel } from "./mcp-app-card"
@@ -126,6 +126,55 @@ describe("MCP App routing", () => {
     expect(
       await screen.findByLabelText("report.pdf", { selector: "iframe" })
     ).toBeInTheDocument()
+  })
+
+  it("hands each view the call that last showed its file, so an earlier view follows the latest", async () => {
+    const results: Record<string, unknown> = {
+      "call-1": { filename: "Report.pdf", fileId: "report" },
+      "call-2": { filename: "Report v2.pdf", fileId: "report" },
+      "call-3": { filename: "notes.txt" },
+    }
+    const toolResult = (toolCallId: string) => ({
+      content: [],
+      structuredContent: { value: results[toolCallId] },
+    })
+    const parts = Object.keys(results).map((toolCallId) =>
+      toolPart({
+        toolName: "present_artifact",
+        toolCallId,
+        artifact: MCP_APP_TOOL_ARTIFACT,
+        result: toolResult(toolCallId),
+      })
+    )
+    const callOf = (target: McpAppTarget) =>
+      "toolCallId" in target ? target.toolCallId : ""
+    render(
+      <McpAppHostProvider
+        adapter={adapter(async (target) => ({
+          html: "<p>app</p>",
+          toolResult: toolResult(callOf(target)),
+        }))}
+        agentId="researcher"
+        sessionId="session-1"
+        messages={parts.map((part) => ({
+          id: `message-${part.toolCallId}`,
+          role: "assistant",
+          content: [part],
+        }))}
+      >
+        {parts.map((part) => (
+          <AosToolPresentation key={part.toolCallId} {...part} />
+        ))}
+      </McpAppHostProvider>
+    )
+    await screen.findByLabelText("notes.txt", { selector: "iframe" })
+
+    const revision = (toolCallId: string) =>
+      frames.findLast((frame) => callOf(frame.target) === toolCallId)
+        ?.filesRevision
+    expect(revision("call-1")).toBe("call-2")
+    expect(revision("call-2")).toBe("call-2")
+    expect(revision("call-3")).toBeUndefined()
   })
 
   it("hosts a settled call that carries neither input nor result", async () => {

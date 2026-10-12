@@ -60,6 +60,12 @@ const PdfPreview = lazy(() =>
  */
 const filesSchema = z.object({ path: z.url({ protocol: /^https?$/u }) })
 
+/**
+ * The page's `aos/filesRevision`: an opaque token for the file's revision,
+ * which changes once a later call shows the file again.
+ */
+const revisionSchema = z.string().min(1)
+
 type ArtifactLabels = ViewLabels["artifact"]
 
 function ignore() {}
@@ -436,6 +442,7 @@ export function ArtifactView({
 }: ViewProps<PresentArtifactResult> & { previewLimits?: PreviewLimits }) {
   const artifact = labels.artifact
   const address = filesSchema.safeParse(context?.["aos/files"]).data?.path
+  const revision = revisionSchema.safeParse(context?.["aos/filesRevision"]).data
   const mode = context?.displayMode
   const pip = mode === "pip"
   const fullscreen = mode === "fullscreen"
@@ -449,7 +456,8 @@ export function ArtifactView({
     media === undefined && (expanded || kind === "image") ? address : undefined,
     value.filename,
     value.mimeType,
-    previewLimits
+    previewLimits,
+    revision
   )
   const root = useRef<HTMLDivElement>(null)
   const compact = useCompact(root)
