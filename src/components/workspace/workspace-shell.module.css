@@ -10,6 +10,9 @@
   --workspace-status-attention: var(--warning);
   --workspace-status-unread: var(--success);
   --workspace-status-idle: oklch(0.67 0 0);
+  /* One pane motion: the inspector and the tab strip trade places in step. */
+  --workspace-pane-duration: 240ms;
+  --workspace-pane-ease: cubic-bezier(0.2, 0, 0, 1);
   position: relative;
   display: grid;
   height: 100svh;
@@ -356,6 +359,7 @@
 }
 
 .conversationColumn {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -385,7 +389,6 @@
 .tabTrack {
   position: relative;
   display: grid;
-  width: max-content;
   height: 100%;
   grid-template-columns: repeat(
     var(--workspace-session-count),
@@ -427,7 +430,6 @@
   position: relative;
   display: block;
   min-width: 0;
-  max-width: 14rem;
   border: 0;
   background: transparent;
   color: var(--muted-foreground);
@@ -465,7 +467,6 @@
 .tabCloseSlot {
   position: relative;
   min-width: 0;
-  max-width: 14rem;
   pointer-events: none;
 }
 
@@ -544,8 +545,6 @@
 
 .desktopInspectorToggle {
   display: none;
-  align-self: center;
-  flex: none;
   color: var(--muted-foreground);
 }
 
@@ -699,16 +698,25 @@
 
 @container workspace (min-width: 64rem) {
   .shell {
+    --workspace-inspector-width: 17rem;
     height: calc(100svh - var(--workspace-shell-gutter) * 2);
-    grid-template-columns: 15.5rem minmax(20rem, 1fr) 17rem;
+    grid-template-columns:
+      15.5rem minmax(20rem, 1fr)
+      var(--workspace-inspector-width);
     grid-template-rows: minmax(0, 1fr);
+    transition: grid-template-columns var(--workspace-pane-duration)
+      var(--workspace-pane-ease);
     border: var(--workspace-shell-border-width) solid var(--border);
     border-radius: var(--workspace-shell-radius);
     box-shadow: var(--workspace-shell-shadow);
   }
 
   .shell[data-inspector-open="false"] {
-    grid-template-columns: 15.5rem minmax(20rem, 1fr);
+    grid-template-columns: 15.5rem minmax(20rem, 1fr) 0rem;
+  }
+
+  .shell[data-artifact-resizing="true"] {
+    transition: none;
   }
 
   .shell[data-artifact-viewer-open="true"] {
@@ -790,18 +798,63 @@
     background: var(--workspace-accent);
   }
 
-  .desktopInspector[hidden] {
-    display: none;
+  /* A collapsed inspector keeps its track so the width can animate to zero;
+     its content stays full width and slides out past the shell's edge. */
+  .desktopInspector[data-collapsed="true"] {
+    visibility: hidden;
+    transition: visibility 0s var(--workspace-pane-duration);
   }
 
+  .desktopInspector > .inspectorPanel {
+    inline-size: calc(var(--workspace-inspector-width) - 1px);
+  }
+
+  /* Pinned to the conversation's top-end corner: inside the strip's reserved
+     end slot while the tabs show, beside the inspector's edge while they hide. */
   .desktopInspectorToggle {
+    position: absolute;
+    z-index: 3;
+    inset-block-start: 0.25rem;
+    inset-inline-end: 0.5rem;
     display: inline-flex;
+    background: var(--background);
+  }
+
+  /* Banners at the top of the conversation leave the toggle's corner clear
+     while the strip is hidden; 3.25rem also clears the coarse-pointer size. */
+  .shell[data-tabs-replaced="true"] .conversationNotice {
+    padding-inline-end: 3.25rem;
+  }
+
+  /* The conversation search bar floats where the strip used to hold it,
+     below the toggle's row, instead of over the toggle. */
+  .shell[data-tabs-replaced="true"] .conversation [role="search"] {
+    top: 2.75rem;
   }
 
   .tabBar {
     display: flex;
-    min-height: 2.5rem;
-    padding-inline: 0.5rem;
+    flex: none;
+    block-size: 2.5rem;
+    min-height: 0;
+    padding-inline: 0.5rem 2.5rem;
+    transition:
+      margin-block-start var(--workspace-pane-duration)
+        var(--workspace-pane-ease),
+      opacity 160ms ease-out,
+      visibility 0s;
+  }
+
+  /* The strip slides up behind the shell's edge while the inspector arrives. */
+  .shell[data-tabs-replaced="true"] .tabBar {
+    margin-block-start: calc(-2.5rem - 1px);
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      margin-block-start var(--workspace-pane-duration)
+        var(--workspace-pane-ease),
+      opacity 160ms ease-out,
+      visibility 0s var(--workspace-pane-duration);
   }
 
   .tabTrack {
@@ -809,11 +862,6 @@
       var(--workspace-session-count),
       minmax(6.5rem, max-content)
     );
-  }
-
-  .tab,
-  .tabCloseSlot {
-    max-width: 12rem;
   }
 
   .tab {
@@ -849,11 +897,14 @@
 
 @container workspace (min-width: 80rem) {
   .shell {
-    grid-template-columns: 17.5rem minmax(28rem, 1fr) 19rem;
+    --workspace-inspector-width: 19rem;
+    grid-template-columns:
+      17.5rem minmax(28rem, 1fr)
+      var(--workspace-inspector-width);
   }
 
   .shell[data-inspector-open="false"] {
-    grid-template-columns: 17.5rem minmax(28rem, 1fr);
+    grid-template-columns: 17.5rem minmax(28rem, 1fr) 0rem;
   }
 
   .shell[data-artifact-viewer-open="true"] {
@@ -885,11 +936,14 @@
 
 @container workspace (min-width: 90rem) {
   .shell {
-    grid-template-columns: 19.5rem minmax(36rem, 1fr) 21rem;
+    --workspace-inspector-width: 21rem;
+    grid-template-columns:
+      19.5rem minmax(36rem, 1fr)
+      var(--workspace-inspector-width);
   }
 
   .shell[data-inspector-open="false"] {
-    grid-template-columns: 19.5rem minmax(36rem, 1fr);
+    grid-template-columns: 19.5rem minmax(36rem, 1fr) 0rem;
   }
 
   .shell[data-artifact-viewer-open="true"] {
@@ -934,6 +988,15 @@
   }
 
   .artifactResizeHandle::after {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell,
+  .tabBar,
+  .shell[data-tabs-replaced="true"] .tabBar,
+  .desktopInspector[data-collapsed="true"] {
     transition: none;
   }
 }

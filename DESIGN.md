@@ -180,9 +180,12 @@ The inset shell's border, radius, and ambient shadow only apply inside
 `--workspace-shell-radius` (1.375rem), and `--workspace-shell-shadow` in
 `src/app/globals.css`. An installed window drops all four: see
 `display-mode` below.
-Sessions are real tabs with an active underline; supporting panels hold agent
-identity, status, description, and sessions rather than dashboard cards or
-extra navigation.
+Sessions switch in the inspector's Open sessions list while the inspector is
+open, and as real tabs with an active underline while it is collapsed. The
+strip and the inspector trade places in one 240 ms motion that reduced motion
+removes, and one toggle rides the conversation's top-end edge. Supporting
+panels hold agent identity, status, description, and sessions rather than
+dashboard cards or extra navigation.
 
 At narrow capacity (below 64rem) the workspace is edge-to-edge, viewport-
 filling, with compact system-style chrome. Mobile has its own two-level drawer
@@ -294,8 +297,10 @@ standard component cannot express and record that reason.
 
 **Character:** stable, pane-oriented, and progressively disclosed.
 
-- **Sessions:** render as tabs with a clear active underline, never pills or
-  badges.
+- **Sessions:** switch in the inspector's Open sessions list while it is
+  open, and render as tabs with a clear active underline while it is
+  collapsed, never pills or badges. A tab takes its title's width; tabs shrink
+  together only when the row is full.
 - **Agents:** retain a persistent distinctive icon plus a separate status
   indicator; status must not be conveyed by icon color alone. The icon is a
   generated robot tile from `src/components/agent-icons`: one of 34 flat
