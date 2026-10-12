@@ -67,7 +67,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.0",
+    "@babel/core": "^8.0.7",
     "@eslint/js": "10",
     "@playwright/test": "^1.64.0",
     "@rolldown/plugin-babel": "^0.2.4",
