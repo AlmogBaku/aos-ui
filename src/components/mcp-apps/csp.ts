@@ -73,7 +73,9 @@ export function buildMcpAppCsp(
     `font-src ${sources(["'self'", "data:"], resource)}`,
     `media-src ${sources(["'self'", "data:"], [...resource, ...fileLocations])}`,
     `connect-src ${sources([], connect)}`,
-    "worker-src 'self' blob:",
+    // A view authors its own workers as blob or data URLs, since the sandbox
+    // fetches no script by address; both carry only text the view already ran.
+    "worker-src 'self' blob: data:",
     `frame-src ${sources([], frame)}`,
     `base-uri ${sources([], baseUri)}`,
     "object-src 'none'",

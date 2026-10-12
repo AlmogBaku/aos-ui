@@ -44,11 +44,17 @@ function writePdfjs(directory: string) {
   writeFileSync(join(directory, "pdfjs/wasm/jbig2.wasm"), Uint8Array.of(0, 97))
 }
 
+function writeGrammars(directory: string) {
+  mkdirSync(join(directory, "grammars"))
+  writeFileSync(join(directory, "grammars/typescript.json"), "{}")
+}
+
 beforeAll(async () => {
   writeViews(views)
   writePdfjs(views)
-  mkdirSync(join(views, "grammars"))
-  writeFileSync(join(views, "grammars/typescript.json"), "{}")
+  writeGrammars(views)
+  mkdirSync(join(views, "maplibre"))
+  writeFileSync(join(views, "maplibre/maplibre-gl-worker.mjs"), "export {}")
   child = start(views)
   const lines = createInterface({ input: child.stdout! })
   const [line] = (await Promise.race([
@@ -108,6 +114,14 @@ describe("tools-mcp HTTP entry", () => {
       (directory: string) => {
         writeViews(directory)
         writePdfjs(directory)
+      },
+    ],
+    [
+      "MapLibre's worker",
+      (directory: string) => {
+        writeViews(directory)
+        writePdfjs(directory)
+        writeGrammars(directory)
       },
     ],
   ])("refuses to start without %s", async (_missing, prepare) => {

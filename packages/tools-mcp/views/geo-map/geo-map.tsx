@@ -1,11 +1,14 @@
-import maplibregl, {
-  type LayerSpecification,
-  type StyleSpecification,
-} from "maplibre-gl"
+import * as maplibregl from "maplibre-gl"
+import type { LayerSpecification, StyleSpecification } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 
+import {
+  MAPLIBRE_RESOURCE_URI,
+  MAPLIBRE_WORKER_FILE,
+} from "../../../../shared/presentation/views"
 import type { ViewLocale } from "../locale"
+import type { ViewApp } from "../view"
 import styles from "./geo-map-theme.module.css"
 
 export type GeoMapLocation = {
@@ -136,6 +139,35 @@ function settleAttribution(map: maplibregl.Map, element: HTMLElement) {
   }
 }
 
+type Read = ViewApp["readServerResource"]
+
+let worker: Promise<void> | undefined
+
+/**
+ * Points MapLibre at its worker, once, before the first map starts it. The
+ * sandbox loads no script by address, so the view reads the worker's text from
+ * the server and hands MapLibre a URL of that text. MapLibre starts a module
+ * worker unless the URL's path ends in `.cjs`, and the sandbox's opaque origin
+ * runs a worker it authored only as a classic one, so the text travels as a
+ * `data:` URL that ends in a `.cjs` comment: the worker ships self-contained
+ * and runs the same either way.
+ */
+function loadWorker(read: Read) {
+  worker ??= read({ uri: `${MAPLIBRE_RESOURCE_URI}${MAPLIBRE_WORKER_FILE}` })
+    .then(({ contents: [content] }) => {
+      if (!content || !("text" in content))
+        throw new Error("No MapLibre worker came back")
+      maplibregl.setWorkerUrl(
+        `data:text/javascript,${encodeURIComponent(`${content.text}\n//.cjs`)}`
+      )
+    })
+    .catch((error: unknown) => {
+      worker = undefined
+      throw error
+    })
+  return worker
+}
+
 function markerElement(label: string) {
   const element = document.createElement("div")
   element.className = MARKER_CLASS
@@ -178,11 +210,13 @@ export function GeoMap({
   locations,
   locale,
   loadingLabel,
+  read,
 }: {
   title: string
   locations: readonly GeoMapLocation[]
   locale: ViewLocale
   loadingLabel: string
+  read: Read
 }) {
   const container = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
@@ -196,46 +230,60 @@ export function GeoMap({
     const element = container.current
     if (!element) return
     const current: readonly GeoMapLocation[] = JSON.parse(locationsKey)
-    let map: maplibregl.Map
-    try {
-      map = new maplibregl.Map({
-        container: element,
-        attributionControl: { compact: true },
-        locale: CONTROL_LABELS[localeRef.current],
-        dragRotate: false,
-        pitchWithRotate: false,
-        touchPitch: false,
+    let active = true
+    let release = () => {}
+    const draw = () => {
+      if (!active) return
+      let map: maplibregl.Map
+      try {
+        map = new maplibregl.Map({
+          container: element,
+          attributionControl: { compact: true },
+          locale: CONTROL_LABELS[localeRef.current],
+          dragRotate: false,
+          pitchWithRotate: false,
+          touchPitch: false,
+        })
+      } catch {
+        // No WebGL2: the location list remains the way to read the map.
+        return
+      }
+      map.setStyle(STYLE_URLS[themeRef.current], {
+        transformStyle: latinLabels,
       })
-    } catch {
-      // No WebGL: the location list remains the way to read the map.
-      return
-    }
-    map.setStyle(STYLE_URLS[themeRef.current], { transformStyle: latinLabels })
-    map.touchZoomRotate.disableRotation()
-    map.addControl(
-      new maplibregl.NavigationControl({ showCompass: false }),
-      "top-right"
-    )
-    const releaseAttribution = settleAttribution(map, element)
-    for (const location of current) {
-      new maplibregl.Marker({ element: markerElement(location.label) })
-        .setLngLat([location.longitude, location.latitude])
-        .setPopup(
-          new maplibregl.Popup({ offset: 12, maxWidth: "18rem" }).setDOMContent(
-            popupContent(location.label)
+      map.touchZoomRotate.disableRotation()
+      map.addControl(
+        new maplibregl.NavigationControl({ showCompass: false }),
+        "top-right"
+      )
+      const releaseAttribution = settleAttribution(map, element)
+      for (const location of current) {
+        new maplibregl.Marker({ element: markerElement(location.label) })
+          .setLngLat([location.longitude, location.latitude])
+          .setPopup(
+            new maplibregl.Popup({
+              offset: 12,
+              maxWidth: "18rem",
+            }).setDOMContent(popupContent(location.label))
           )
-        )
-        .addTo(map)
+          .addTo(map)
+      }
+      frame(map, current)
+      map.once("load", () => setReady(true))
+      mapRef.current = map
+      release = () => {
+        mapRef.current = null
+        releaseAttribution()
+        map.remove()
+      }
     }
-    frame(map, current)
-    map.once("load", () => setReady(true))
-    mapRef.current = map
+    // Without its worker the map cannot draw; the location list remains.
+    loadWorker(read).then(draw, () => {})
     return () => {
-      mapRef.current = null
-      releaseAttribution()
-      map.remove()
+      active = false
+      release()
     }
-  }, [locationsKey])
+  }, [locationsKey, read])
 
   useEffect(() => {
     localeRef.current = locale

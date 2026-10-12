@@ -9,6 +9,7 @@ export function MapView({
   value: map,
   labels,
   locale,
+  app,
 }: ViewProps<z.infer<typeof render_mapSchema>>) {
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -17,6 +18,7 @@ export function MapView({
         locations={map.locations}
         locale={locale}
         loadingLabel={labels.map.loading}
+        read={app.readServerResource}
       />
       <Disclosure
         show={labels.map.showLocations}
