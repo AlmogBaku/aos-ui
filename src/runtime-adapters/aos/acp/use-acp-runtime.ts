@@ -768,7 +768,7 @@ const warnedTurns = new Set<string | undefined>()
  * `fromArray` would hand Assistant UI a fresh copy of every turn instead. A
  * turn left out hands its place in the chain to the next turn kept.
  */
-function toRepository(
+export function toRepository(
   messages: readonly ThreadMessageLike[]
 ): ExportedMessageRepository {
   let parentId: string | null = null
@@ -789,7 +789,7 @@ function toRepository(
 
 /**
  * One turn as Assistant UI's message. Assistant UI refuses a turn carrying
- * what its role cannot, such as a user turn a thought landed on, and throws
+ * what its role cannot, such as a user turn carrying a thought, and throws
  * here, in the runtime hook and outside every render boundary, so one turn's
  * malformed parts would otherwise blank the whole app. A refused turn warns
  * once and stays as the parts its role accepts, under its own id and role, so

@@ -192,6 +192,36 @@ describe("applyUpdate messages", () => {
       ],
     },
     {
+      name: "assistant content naming a user message opens that message's reply",
+      entries: [
+        userChunk("u1", "Hi"),
+        thoughtChunk("u1", "Weigh it"),
+        toolCall(
+          { title: "grep", status: "in_progress" },
+          { ...TURN_META, messageId: "u1" }
+        ),
+        agentChunk("a1", "Done."),
+      ],
+      expected: [
+        { id: "u1", role: "user", content: [{ type: "text", text: "Hi" }] },
+        {
+          id: "aos-reply-u1",
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "Weigh it" },
+            {
+              type: "tool-call",
+              toolCallId: "t1",
+              toolName: "grep",
+              args: {},
+              isError: false,
+            },
+            { type: "text", text: "Done." },
+          ],
+        },
+      ],
+    },
+    {
       name: "a whole thought upsert and a whole message upsert compose",
       entries: [
         [

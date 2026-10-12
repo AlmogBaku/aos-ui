@@ -17,7 +17,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ExportedMessageRepository } from "@assistant-ui/core"
-import type { CompleteAttachment } from "@assistant-ui/core"
+import type { CompleteAttachment, ThreadMessageLike } from "@assistant-ui/core"
 
 import {
   HGW_ATTACHMENT_URI_SCHEME,
@@ -48,6 +48,7 @@ import { threadHistoryExtras } from "@/runtime-adapters/thread-history"
 
 import {
   acpExtras,
+  toRepository,
   useAcpRuntime,
   type UseAcpRuntimeOptions,
 } from "./use-acp-runtime"
@@ -352,6 +353,48 @@ const queue = async (
   })
 }
 
+describe("toRepository", () => {
+  // The projector gives a user turn no reasoning, so the turn is hand-built:
+  // this is the backstop for one that still reaches Assistant UI.
+  it("keeps a turn Assistant UI cannot convert as the parts its role accepts, warning once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const transcript = (thought: string): ThreadMessageLike[] => [
+      { id: "u1", role: "user", content: [{ type: "text", text: "Ship it" }] },
+      {
+        id: "u2",
+        role: "user",
+        content: [
+          { type: "text", text: "And the docs" },
+          { type: "image", image: "data:image/png;base64,AAA" },
+          { type: "reasoning", text: thought },
+        ],
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: [{ type: "text", text: "On it" }],
+      },
+    ]
+
+    const { messages } = toRepository(transcript("Planning"))
+    // In order, so the reply still answers the turn it followed.
+    expect(
+      messages.map(({ parentId, message }) => [parentId, message.id])
+    ).toEqual([
+      [null, "u1"],
+      ["u1", "u2"],
+      ["u2", "a2"],
+    ])
+    expect(messages[1]!.message.content.map(({ type }) => type)).toEqual([
+      "text",
+      "image",
+    ])
+
+    toRepository(transcript("Planning further"))
+    expect(warn).toHaveBeenCalledOnce()
+  })
+})
+
 describe("useAcpRuntime", () => {
   it("replays the Session on mount and projects its turns", async () => {
     const fake = createFakeConnection()
@@ -365,45 +408,6 @@ describe("useAcpRuntime", () => {
       { id: "u1", role: "user", text: "Ship it" },
       { id: "a1", role: "assistant", text: "On it" },
     ])
-  })
-
-  it("keeps a turn Assistant UI cannot convert as the parts its role accepts", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    // A thought naming the user turn lands on it, and a user turn cannot
-    // carry reasoning.
-    const thought = (text: string): Built<SessionUpdate> => ({
-      sessionUpdate: "agent_thought_chunk",
-      messageId: "u2",
-      content: { type: "text", text },
-    })
-    act(() => {
-      fake.emit(textUpdate("user_message", "u1", "Ship it"))
-      fake.emit({
-        sessionUpdate: "user_message",
-        messageId: "u2",
-        content: [
-          { type: "text", text: "And the docs" },
-          { type: "image", data: "AAA", mimeType: "image/png" },
-        ],
-      })
-      fake.emit(thought("Planning"))
-      fake.emit(textUpdate("agent_message", "a2", "On it"))
-    })
-    // In order, so the reply still answers the turn it followed.
-    expect(visible(result.current)).toEqual([
-      { id: "u1", role: "user", text: "Ship it" },
-      { id: "u2", role: "user", text: "And the docs" },
-      { id: "a2", role: "assistant", text: "On it" },
-    ])
-    const [, refused] = result.current.thread.getState().messages
-    expect(refused?.content.map(({ type }) => type)).toEqual(["text", "image"])
-
-    act(() => {
-      fake.emit(thought(" further"))
-    })
-    expect(warn).toHaveBeenCalledOnce()
   })
 
   it("tells its listeners once for a replay, however many updates it carries", async () => {
