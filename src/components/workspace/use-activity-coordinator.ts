@@ -398,8 +398,8 @@ export function useActivityCoordinator(
           if (arrival) {
             const preferences =
               browser?.settings().preferences ?? defaultBrowserPreferences
-            // In-app notice excludes the Session on screen, so the bell never
-            // rings for the wait the operator is already looking at.
+            // In-app notice excludes the Session on screen and anything re-sent
+            // on connect, so the bell never rings for a wait already seen.
             if (
               getActivityPolicy(arrival, state, preferences, "unsupported")
                 .inAppNotice
@@ -409,13 +409,9 @@ export function useActivityCoordinator(
                   categoryOf(arrival.type) !== "completion" ||
                   !!previous?.urgent,
               }))
-              if (arrival.type === "attention-requested" && !arrival.replayed)
-                ringBell()
+              if (arrival.type === "attention-requested") ringBell()
             }
-            // What the gateway re-sends on connect already happened: it is
-            // listed, but never announced again with sound or motion.
-            if (!arrival.replayed && shouldChime(arrival, state, preferences))
-              sound?.play()
+            if (shouldChime(arrival, state, preferences)) sound?.play()
           }
         })
         .catch(() => {

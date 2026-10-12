@@ -246,21 +246,6 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
   expect(result.current.browserSettings.ask).toBe(true)
   expect(sound.play).not.toHaveBeenCalled()
 
-  // A request the gateway re-sends on connect is listed, never chimed again.
-  await act(async () =>
-    emit({
-      id: "replayed-input",
-      agentId: "b",
-      sessionId: "other",
-      type: "attention-requested",
-      attentionKind: "question",
-      requestId: "request-0",
-      occurredAt: watched.updatedAt,
-      replayed: true,
-    })
-  )
-  expect(sound.play).not.toHaveBeenCalled()
-
   await act(async () =>
     emit({
       id: "input",

@@ -65,7 +65,9 @@ export function getActivityPolicy(
     isSelectionExposed(context) &&
     context.selection?.agentId === event.agentId &&
     context.selection?.sessionId === event.sessionId
-  const eligible = !event.read && !event.resolved
+  // Activity the gateway re-sends on connect already happened: it is listed,
+  // never alerted again.
+  const eligible = !event.read && !event.resolved && !event.replayed
   const category = categoryOf(event.type)
   return {
     markRead,

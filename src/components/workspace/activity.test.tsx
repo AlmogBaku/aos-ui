@@ -103,7 +103,7 @@ function source() {
     id: string,
     sessionId = "two",
     type: "attention-requested" | "agent-ready" = "agent-ready",
-    extra: { replayed?: true; requestText?: string; requestMore?: number } = {}
+    extra: { requestText?: string; requestMore?: number } = {}
   ) =>
     receive({
       id,
@@ -452,7 +452,7 @@ describe("Activity coordinator", () => {
       available: false,
     })
   })
-  it("rings once per burst of Sessions newly waiting elsewhere, never for the one on screen or a replay", async () => {
+  it("rings once per burst of Sessions newly waiting elsewhere, never for the one on screen", async () => {
     const clock = useFakeClock()
     const provider = source()
     const waiting = sessions.map((session) => ({
@@ -464,12 +464,6 @@ describe("Activity coordinator", () => {
     })
     await act(async () =>
       provider.emit("on-screen", "one", "attention-requested")
-    )
-    // What the gateway re-sends on connect already happened.
-    await act(async () =>
-      provider.emit("replayed", "two", "attention-requested", {
-        replayed: true,
-      })
     )
     expect(result.current.ring).toBe(0)
     await act(async () => provider.emit("first", "two", "attention-requested"))

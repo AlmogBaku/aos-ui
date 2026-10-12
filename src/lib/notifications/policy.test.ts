@@ -57,15 +57,19 @@ describe("selection exposure", () => {
 
 describe("activity visibility and delivery", () => {
   it.each([
-    [true, true, "agent-1", "thread-1", true, false, false],
-    [true, true, "agent-2", "thread-1", false, true, false],
-    [true, true, "agent-1", "thread-2", false, true, false],
-    [true, false, "agent-1", "thread-1", false, false, true],
-    [false, true, "agent-1", "thread-1", false, false, true],
-    [false, false, "agent-1", "thread-1", false, false, true],
+    [false, true, true, "agent-1", "thread-1", true, false, false],
+    [false, true, true, "agent-2", "thread-1", false, true, false],
+    [false, true, true, "agent-1", "thread-2", false, true, false],
+    [false, true, false, "agent-1", "thread-1", false, false, true],
+    [false, false, true, "agent-1", "thread-1", false, false, true],
+    [false, false, false, "agent-1", "thread-1", false, false, true],
+    // What the gateway re-sends on connect already happened: never alerted.
+    [true, true, true, "agent-2", "thread-1", false, false, false],
+    [true, false, false, "agent-1", "thread-1", false, false, false],
   ])(
-    "scopes read state and delivery: visible=%s focused=%s selected=%s/%s",
+    "scopes read state and delivery: replayed=%s visible=%s focused=%s selected=%s/%s",
     (
+      replayed,
       pageVisible,
       pageFocused,
       agentId,
@@ -76,7 +80,7 @@ describe("activity visibility and delivery", () => {
     ) => {
       expect(
         getActivityPolicy(
-          event,
+          replayed ? { ...event, replayed: true as const } : event,
           {
             pageVisible,
             pageFocused,
