@@ -1176,7 +1176,10 @@ describe("WorkspaceShell", () => {
     )
 
     expect(onSelectAgent).not.toHaveBeenCalled()
-    expect(onOpenSession).toHaveBeenCalledWith("thread-mica-draft")
+    expect(onOpenSession).toHaveBeenCalledWith(
+      "thread-mica-draft",
+      "agent-mica"
+    )
     expect(screen.queryByRole("dialog", { name: "Sessions" })).toBeNull()
     await waitFor(() => expect(trigger).toHaveFocus())
   })

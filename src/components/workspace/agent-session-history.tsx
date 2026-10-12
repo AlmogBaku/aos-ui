@@ -93,7 +93,7 @@ export type AgentSessionHistoryProps = {
   /**
    * The provider's Session search. Without it the search box filters the
    * loaded titles alone; with it, a pause in typing also adds the Sessions the
-   * provider matched.
+   * provider matched, including ones History has not loaded yet.
    */
   onSearch?: (
     query: string,
@@ -107,7 +107,7 @@ export const SESSION_SEARCH_DEBOUNCE_MS = 300
 type ProviderMatches = {
   agentId: string
   query: string
-  sessionIds: ReadonlySet<string>
+  results: readonly SessionSearchResult[]
 }
 
 /**
@@ -129,14 +129,14 @@ function useProviderSessionSearch(
   useEffect(() => {
     if (!enabled || !query) return
     let current = true
-    const settle = (sessionIds: ReadonlySet<string>) => {
-      if (current) setMatches({ agentId, query, sessionIds })
+    const settle = (results: readonly SessionSearchResult[]) => {
+      if (current) setMatches({ agentId, query, results })
     }
     const timer = setTimeout(() => {
       search(query, agentId).then(
-        (results) => settle(new Set(results.map((row) => row.sessionId))),
+        settle,
         // A failed search leaves the loaded titles to answer alone.
-        () => settle(new Set())
+        () => settle([])
       )
     }, SESSION_SEARCH_DEBOUNCE_MS)
     return () => {
@@ -147,10 +147,10 @@ function useProviderSessionSearch(
 
   const answered =
     matches && matches.agentId === agentId && matches.query === query
-      ? matches.sessionIds
+      ? matches.results
       : null
   return {
-    matchedIds: answered,
+    matches: answered,
     searching: enabled && Boolean(query) && !answered,
   }
 }
@@ -320,10 +320,13 @@ type SessionSectionProps = Omit<SessionRowProps, "session" | "dateFormatter">
 function SessionSection({
   heading,
   sessions,
+  searchOnly = [],
   ...row
 }: SessionSectionProps & {
   heading: string
   sessions: readonly WorkspaceSession[]
+  /** Provider matches not yet in the thread list, listed after `sessions`. */
+  searchOnly?: readonly WorkspaceSession[]
 }) {
   const dateFormatter = sessionDateFormatter(row.locale)
 
@@ -337,6 +340,17 @@ function SessionSection({
             key={session.sessionId}
             session={session}
             dateFormatter={dateFormatter}
+          />
+        ))}
+        {searchOnly.map((session) => (
+          // Opened through its Agent; its menu arrives once it is loaded.
+          <SessionRow
+            {...row}
+            key={session.sessionId}
+            session={session}
+            dateFormatter={dateFormatter}
+            threadListRuntime={undefined}
+            handlers={{}}
           />
         ))}
       </div>
@@ -388,6 +402,35 @@ function ArchivedSection({
 
 const sessionDateFormatters = new Map<Locale, Intl.DateTimeFormat>()
 
+/**
+ * The provider's matches History has not loaded yet, as rows of their own,
+ * newest first: a page not yet loaded would otherwise hide every older match.
+ */
+function unloadedMatches(
+  matches: readonly SessionSearchResult[],
+  navigation: AgentSessionNavigation
+): WorkspaceSession[] {
+  const loaded = new Set(
+    [
+      ...navigation.openSessions,
+      ...navigation.historySessions,
+      ...navigation.archivedSessions,
+    ].map((session) => session.sessionId)
+  )
+  return matches
+    .filter(
+      (match) =>
+        match.agentId === navigation.agentId && !loaded.has(match.sessionId)
+    )
+    .map(({ sessionId, title, updatedAt }) => ({
+      sessionId,
+      title,
+      updatedAt,
+      status: "idle" as const,
+    }))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
 /** One formatter per locale: building an `Intl.DateTimeFormat` is costly. */
 function sessionDateFormatter(locale: Locale) {
   let formatter = sessionDateFormatters.get(locale)
@@ -420,18 +463,20 @@ export function AgentSessionHistory({
   onSearch,
 }: AgentSessionHistoryProps) {
   const normalizedQuery = normalizeSearch(query, locale)
-  const { matchedIds, searching } = useProviderSessionSearch(
+  const { matches, searching } = useProviderSessionSearch(
     onSearch,
     query.trim(),
     navigation.agentId
   )
+  const matchedIds = new Set(matches?.map((match) => match.sessionId))
+  const searchOnly = matches ? unloadedMatches(matches, navigation) : []
   const openIds = new Set(
     navigation.openSessions.map((session) => session.sessionId)
   )
   const filter = (session: WorkspaceSession) =>
     !normalizedQuery ||
     normalizeSearch(session.title, locale).includes(normalizedQuery) ||
-    Boolean(matchedIds?.has(session.sessionId))
+    matchedIds.has(session.sessionId)
   const historySessions = navigation.historySessions.filter(
     (session) => !openIds.has(session.sessionId)
   )
@@ -444,7 +489,11 @@ export function AgentSessionHistory({
       navigation.archivedSessions.length >
     0
   const hasResults =
-    visibleOpen.length + visibleHistory.length + visibleArchived.length > 0
+    visibleOpen.length +
+      visibleHistory.length +
+      searchOnly.length +
+      visibleArchived.length >
+    0
   const sharedRow = {
     navigation,
     activeThreadId,
@@ -513,11 +562,12 @@ export function AgentSessionHistory({
             handlers={openHandlers}
           />
         ) : null}
-        {visibleHistory.length ? (
+        {visibleHistory.length || searchOnly.length ? (
           <SessionSection
             {...sharedRow}
             heading={copy.history}
             sessions={visibleHistory}
+            searchOnly={searchOnly}
             openable
             handlers={sessionMenu ?? {}}
           />
