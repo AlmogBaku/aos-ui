@@ -753,7 +753,8 @@ function createAcpController({
   }
 }
 
-const threadMessages = new WeakMap<ThreadMessageLike, ThreadMessage>()
+/** Each projected turn's conversion; `null` for one Assistant UI refused. */
+const threadMessages = new WeakMap<ThreadMessageLike, ThreadMessage | null>()
 
 /**
  * The linear repository of a projected transcript. Each turn converts once per
@@ -765,17 +766,34 @@ function toRepository(
 ): ExportedMessageRepository {
   let parentId: string | null = null
   return {
-    messages: messages.map((like) => {
+    messages: messages.flatMap((like) => {
       let message = threadMessages.get(like)
-      if (!message) {
-        message = ExportedMessageRepository.fromArray([like]).messages[0]!
-          .message
+      if (message === undefined) {
+        message = convertTurn(like)
         threadMessages.set(like, message)
       }
+      if (!message) return []
       const item = { parentId, message }
       parentId = message.id
-      return item
+      return [item]
     }),
+  }
+}
+
+/**
+ * One turn as Assistant UI's message, or `null` when Assistant UI refuses its
+ * parts. The refusal throws here, in the runtime hook and outside every render
+ * boundary, so one turn's malformed parts would otherwise blank the whole app.
+ */
+function convertTurn(like: ThreadMessageLike): ThreadMessage | null {
+  try {
+    return ExportedMessageRepository.fromArray([like]).messages[0]!.message
+  } catch {
+    runtimeLog().warn(
+      { messageId: like.id, role: like.role },
+      "acp.message.unconvertible"
+    )
+    return null
   }
 }
 

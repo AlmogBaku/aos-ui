@@ -367,6 +367,28 @@ describe("useAcpRuntime", () => {
     ])
   })
 
+  it("leaves out only the turn Assistant UI cannot convert", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit(textUpdate("user_message", "u1", "Ship it"))
+      fake.emit(textUpdate("user_message", "u2", "And the docs"))
+      // A thought naming the user turn lands on it, and a user turn cannot
+      // carry reasoning.
+      fake.emit({
+        sessionUpdate: "agent_thought_chunk",
+        messageId: "u2",
+        content: { type: "text", text: "Planning" },
+      })
+      fake.emit(textUpdate("agent_message", "a2", "On it"))
+    })
+    expect(visible(result.current)).toEqual([
+      { id: "u1", role: "user", text: "Ship it" },
+      { id: "a2", role: "assistant", text: "On it" },
+    ])
+  })
+
   it("tells its listeners once for a replay, however many updates it carries", async () => {
     const fake = createFakeConnection()
     const onStateChange = vi.fn()
