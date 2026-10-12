@@ -208,6 +208,8 @@ export function useWorkspaceNavigation({
   const [manuallyOpened, setManuallyOpened] = useState<
     Record<string, string[]>
   >({})
+  // The phone lists one Agent's Sessions without selecting it.
+  const [browsedAgentId, setBrowsedAgentId] = useState<string | null>(null)
   const [dismissedTabs, setDismissedTabs] = useState<Record<string, string[]>>(
     {}
   )
@@ -375,10 +377,13 @@ export function useWorkspaceNavigation({
   const selectedProviderAgentId = selectedAgentIsDraft
     ? agentCreator?.id
     : selectedAgentId
-  // On a runtime that pages one Agent's catalog at a time, only that Agent's
-  // History has a further page to read (see scopeSessionCatalog below).
+  // The Agent whose History is on screen: the one the phone browses, or else
+  // the selected one. On a runtime that pages one Agent's catalog at a time,
+  // only that Agent's History has a further page to read (see
+  // scopeSessionCatalog below).
+  const historyAgentId = browsedAgentId ?? selectedProviderAgentId
   const pagedAgentId = workspace.scopeSessionCatalog
-    ? (selectedProviderAgentId ?? undefined)
+    ? (historyAgentId ?? undefined)
     : undefined
 
   const runtimeThreads = useMemo(() => {
@@ -778,8 +783,8 @@ export function useWorkspaceNavigation({
   )
 
   useEffect(() => {
-    if (selectedProviderAgentId) scopeSessionCatalog(selectedProviderAgentId)
-  }, [scopeSessionCatalog, selectedProviderAgentId])
+    if (historyAgentId) scopeSessionCatalog(historyAgentId)
+  }, [historyAgentId, scopeSessionCatalog])
 
   useEffect(() => {
     if (readBrowserPathname() !== pathname) return
@@ -1658,6 +1663,7 @@ export function useWorkspaceNavigation({
     navigationCatalog,
     selectedAgentId,
     pagedAgentId,
+    browseAgent: setBrowsedAgentId,
     visibleThreadId,
     conversationThreadId,
     selectedAgent,

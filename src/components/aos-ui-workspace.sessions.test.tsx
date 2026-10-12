@@ -621,22 +621,27 @@ describe("paged Session History", () => {
   })
 
   // Full mount: on a runtime that scopes the catalog, the thread list's cursor
-  // belongs to the selected Agent, so a browsed Agent's History must not read
-  // it: each page would list none of that Agent's Sessions and its sentinel
-  // would stay in view, reading page after page.
-  it("offers Load more only in the History of the Agent the thread list pages", async () => {
+  // belongs to one Agent, and only that Agent's History may read it: another's
+  // pages would list none of its Sessions, so its sentinel would stay in view,
+  // reading page after page. The phone browses an Agent's History without
+  // selecting it, so the browsed Agent is the one paged while it is on screen.
+  it("pages the History on screen: the phone's browsed Agent, then the selected one again", async () => {
     const user = userEvent.setup()
+    const scopes: string[] = []
     renderWorkspace(() => {
       const bundle = useControlledWorkspace({
         initialThreadId: "thread-aster-0",
         workspace: { sessions: pagedSessions, sessionTitles },
       })
       // The fixture lists every Agent at once; scoping, as the aos runtime
-      // declares it, makes the thread list page the selected Agent alone.
-      bundle.workspace.scopeSessionCatalog ??= () => {}
+      // declares it, makes the thread list page one Agent alone.
+      bundle.workspace.scopeSessionCatalog ??= (agentId) => {
+        scopes.push(agentId)
+      }
       return bundle
     })
     await waitFor(() => expect(loadMoreButton()).not.toBeNull())
+    expect(scopes).toEqual(["agent-aster"])
 
     await user.click(
       screen.getByRole("button", { name: en.actions.openAgents })
@@ -658,9 +663,17 @@ describe("paged Session History", () => {
     drawer = screen.getByRole("dialog", { name: en.workspace.sessions })
     expect(within(drawer).getByRole("heading", { name: "Mica" })).toBeVisible()
     expect(
-      within(drawer).queryByRole("button", {
+      await within(drawer).findByRole("button", {
         name: en.mobileNavigation.loadMoreSessions,
       })
-    ).toBeNull()
+    ).toBeVisible()
+    expect(scopes).toEqual(["agent-aster", "agent-mica"])
+
+    await user.click(
+      within(drawer).getByRole("button", { name: en.actions.closePanel })
+    )
+    await waitFor(() =>
+      expect(scopes).toEqual(["agent-aster", "agent-mica", "agent-aster"])
+    )
   })
 })

@@ -517,6 +517,7 @@ function WorkspaceContent({
     navigationCatalog,
     selectedAgentId,
     pagedAgentId,
+    browseAgent,
     visibleThreadId,
     conversationThreadId,
     selectedAgent,
@@ -689,6 +690,7 @@ function WorkspaceContent({
         threadListRuntime={runtime.threads}
         selectedAgentId={selectedAgentId}
         pagedAgentId={pagedAgentId}
+        onBrowseAgent={browseAgent}
         activeThreadId={visibleThreadId}
         environmentLabel={environmentLabel}
         agentBuilderAvailable={Boolean(agentCreator)}

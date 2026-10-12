@@ -157,6 +157,8 @@ export type WorkspaceShellProps = {
    * Agent at a time; only that Agent's History offers "Load more".
    */
   pagedAgentId?: string
+  /** The Agent the phone navigator lists Sessions for, or `null` once it lists none. */
+  onBrowseAgent?: (agentId: string | null) => void
   selectedAgentId: string | null
   activeThreadId: string | null
   environmentLabel?: string
@@ -1138,6 +1140,7 @@ export function WorkspaceShell({
   navigationCatalog = noNavigation,
   threadListRuntime,
   pagedAgentId,
+  onBrowseAgent,
   selectedAgentId,
   activeThreadId,
   environmentLabel,
@@ -1209,6 +1212,11 @@ export function WorkspaceShell({
     : sidePanelOpen
   const agentDrawerTriggerRef = useRef<HTMLButtonElement>(null)
   const mobileNavigatorOpen = mobileNavigator.view !== "closed"
+  const browsedAgentId =
+    mobileNavigator.view === "sessions" ? mobileNavigator.agentId : null
+  useEffect(() => {
+    onBrowseAgent?.(browsedAgentId)
+  }, [browsedAgentId, onBrowseAgent])
   const artifactDrawerOpen = sidePanelOpen && !desktopLayout
   // While the inspector lists the Agent's Sessions, it stands in for the tab
   // strip on desktop; an App view in its place brings the tabs back.
