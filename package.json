@@ -16,6 +16,7 @@
     "integrations:build": "bun run scripts/build-integrations.ts",
     "lint": "oxlint --report-unused-disable-directives-severity=warn",
     "format": "oxfmt \"**/*.{ts,tsx}\"",
+    "format:check": "oxfmt --check \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.shared.json --noEmit && tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.tools.json --noEmit && tsc -p tsconfig.tools-mcp.json --noEmit && tsc -p tsconfig.tools-mcp-views.json --noEmit",
     "test": "vitest run --project !gate",
     "test:gate": "vitest run --project gate",

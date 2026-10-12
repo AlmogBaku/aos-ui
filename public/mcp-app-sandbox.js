@@ -3,6 +3,8 @@
 // forwards messages between the host and that frame alone. The host names the
 // frame's `allow` features in this page's query. The page follows the host
 // context's theme, so neither frame paints an opaque canvas behind the view.
+"use strict"
+
 ;(() => {
   const host = window.parent
   const allow = new URLSearchParams(location.search).get("allow")
