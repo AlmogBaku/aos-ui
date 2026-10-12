@@ -367,7 +367,7 @@ describe("useAcpRuntime", () => {
     ])
   })
 
-  it("leaves out only the turn Assistant UI cannot convert", async () => {
+  it("keeps a turn Assistant UI cannot convert as its text alone", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined)
     const fake = createFakeConnection()
     const { result } = await mount(fake)
@@ -383,8 +383,10 @@ describe("useAcpRuntime", () => {
       })
       fake.emit(textUpdate("agent_message", "a2", "On it"))
     })
+    // In order, so the reply still answers the turn it followed.
     expect(visible(result.current)).toEqual([
       { id: "u1", role: "user", text: "Ship it" },
+      { id: "u2", role: "user", text: "And the docs" },
       { id: "a2", role: "assistant", text: "On it" },
     ])
   })

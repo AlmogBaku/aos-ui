@@ -753,13 +753,17 @@ function createAcpController({
   }
 }
 
-/** Each projected turn's conversion; `null` for one Assistant UI refused. */
+/**
+ * Each projected revision of a turn, converted; `null` for a turn Assistant UI
+ * refused even as its text alone.
+ */
 const threadMessages = new WeakMap<ThreadMessageLike, ThreadMessage | null>()
 
 /**
  * The linear repository of a projected transcript. Each turn converts once per
  * projected revision, so a live update re-renders only the turns it changed:
- * `fromArray` would hand Assistant UI a fresh copy of every turn instead.
+ * `fromArray` would hand Assistant UI a fresh copy of every turn instead. A
+ * turn left out hands its place in the chain to the next turn kept.
  */
 function toRepository(
   messages: readonly ThreadMessageLike[]
@@ -781,18 +785,32 @@ function toRepository(
 }
 
 /**
- * One turn as Assistant UI's message, or `null` when Assistant UI refuses its
- * parts. The refusal throws here, in the runtime hook and outside every render
- * boundary, so one turn's malformed parts would otherwise blank the whole app.
+ * One turn as Assistant UI's message. Assistant UI refuses a turn carrying a
+ * part its role cannot, such as a user turn a thought landed on, and throws
+ * here, in the runtime hook and outside every render boundary, so one turn's
+ * malformed parts would otherwise blank the whole app. A refused turn warns and
+ * stays as its text alone, under its own id and role, so the chain, Retry, and
+ * Edit still name it; only a turn refused even then is left out (`null`). Each
+ * projected revision of a refused turn converts, and warns, again.
  */
 function convertTurn(like: ThreadMessageLike): ThreadMessage | null {
+  const convert = (turn: ThreadMessageLike) =>
+    ExportedMessageRepository.fromArray([turn]).messages[0]!.message
   try {
-    return ExportedMessageRepository.fromArray([like]).messages[0]!.message
+    return convert(like)
   } catch {
     runtimeLog().warn(
       { messageId: like.id, role: like.role },
       "acp.message.unconvertible"
     )
+  }
+  const content =
+    typeof like.content === "string"
+      ? like.content
+      : like.content.filter((part) => part.type === "text")
+  try {
+    return convert({ ...like, content })
+  } catch {
     return null
   }
 }
