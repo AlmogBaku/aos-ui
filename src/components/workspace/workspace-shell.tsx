@@ -142,7 +142,8 @@ export type WorkspaceShellProps = {
   /** Absent when the runtime cannot change Agent visibility. */
   onHideAgent?: (agentId: string) => WorkspaceActionResult
   onDiscardDraft?: (agentId: string) => WorkspaceActionResult
-  onOpenSession: (sessionId: string) => WorkspaceActionResult
+  /** `agentId` names the owner of a Session the catalog has not loaded. */
+  onOpenSession: (sessionId: string, agentId?: string) => WorkspaceActionResult
   onCloseSession: (sessionId: string, agentId?: string) => WorkspaceActionResult
   onCreateSession: (agentId: string) => WorkspaceActionResult
   onRenameSession?: (sessionId: string, title: string) => WorkspaceActionResult
@@ -985,7 +986,9 @@ function InspectorPanel({
             copy={mobileNavigatorCopy(dictionary)}
             query={query}
             onQueryChange={setQuery}
-            onOpenSession={(_agentId, sessionId) => onOpenSession(sessionId)}
+            onOpenSession={(agentId, sessionId) =>
+              onOpenSession(sessionId, agentId)
+            }
             onCreateSession={onCreateSession}
             availability={sessionActions}
             sessionMenu={sessionMenu}
@@ -1811,8 +1814,11 @@ export function WorkspaceShell({
               onActionError={onActionError}
               onSearchSessions={onSearchSessions}
               onStateChange={dispatchMobileNavigator}
-              onOpenSession={(_agentId, sessionId) =>
-                runAction(() => onOpenSession(sessionId), onActionError)
+              onOpenSession={(agentId, sessionId) =>
+                runAction(
+                  () => onOpenSession(sessionId, agentId),
+                  onActionError
+                )
               }
               onCreateSession={(agentId) =>
                 runAction(() => onCreateSession(agentId), onActionError)

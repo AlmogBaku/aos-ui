@@ -225,8 +225,14 @@ describe("AgentSessionHistory", () => {
 
   it("adds the provider's matches to the title filter once typing pauses", async () => {
     const clock = useFakeClock()
-    const onSearch = vi.fn(async () => [searchResult("history-match")])
-    renderHistory({ query: " research ", onSearch })
+    const onOpenSession = vi.fn()
+    const onSearch = vi.fn(async () => [
+      searchResult("history-match"),
+      // History has not loaded this page yet.
+      { ...searchResult("older-match"), title: "Archived notes" },
+      { ...searchResult("foreign-match"), agentId: "agent-b" },
+    ])
+    renderHistory({ query: " research ", onSearch, onOpenSession })
 
     // The title filter answers at once while the provider search waits.
     expect(screen.getByText("Shared research")).toBeVisible()
@@ -240,6 +246,19 @@ describe("AgentSessionHistory", () => {
     expect(screen.getByText("Shared research")).toBeVisible()
     expect(screen.getByText("Shared findings")).toBeVisible()
     expect(screen.queryByRole("status")).toBeNull()
+
+    // A match not yet loaded is listed in History and opens through its Agent.
+    const history = screen.getByRole("region", { name: "History" })
+    fireEvent.click(
+      within(history).getByRole("button", {
+        name: "Open Session: Archived notes",
+      })
+    )
+    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(
+      "agent-a",
+      "older-match"
+    )
+    expect(screen.queryByText("foreign-match")).toBeNull()
   })
 
   it("keeps the title filter when the provider search fails", async () => {
