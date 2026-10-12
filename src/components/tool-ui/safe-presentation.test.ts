@@ -1,22 +1,8 @@
 import { describe, expect, it } from "vitest"
 
-import { safeJsonStringify } from "./common"
 import { safeToolDisplayValue, safeToolPresentation } from "./safe-presentation"
 
 describe("safe tool presentation", () => {
-  it("redacts credential fields before exposing provider payloads", () => {
-    const presentation = safeJsonStringify({
-      authorization: "Bearer provider-secret",
-      nested: { apiToken: "private-token" },
-      title: "Deployment complete",
-    })
-
-    expect(presentation).toContain('"authorization": "[REDACTED]"')
-    expect(presentation).toContain('"apiToken": "[REDACTED]"')
-    expect(presentation).not.toContain("provider-secret")
-    expect(presentation).not.toContain("private-token")
-  })
-
   it("keeps cyclic, hostile, and oversized provider values inspectable within bounds", () => {
     const cyclic: { self?: unknown; items?: unknown[] } = {}
     cyclic.self = cyclic
@@ -32,27 +18,14 @@ describe("safe tool presentation", () => {
       title: "Provider response\nnever a second title line",
       cyclic,
       hostile,
-      bearer: "Bearer raw-provider-secret",
       veryLong: "x".repeat(30_000),
     })
 
     expect(presentation.text).toContain("[Circular]")
     expect(presentation.text).toContain("[Unserializable value]")
     expect(presentation.text).toContain("[Truncated]")
-    expect(presentation.text).toContain("[REDACTED]")
-    expect(presentation.text).not.toContain("raw-provider-secret")
     expect(presentation.text.length).toBeLessThanOrEqual(24_000)
     expect(presentation.title).toBe("Provider response")
-  })
-
-  it("redacts credential-shaped string values without relying on a field name", () => {
-    const presentation = safeToolPresentation(
-      "Provider returned access_token=raw-secret-value"
-    )
-
-    expect(presentation.text).toContain("[REDACTED]")
-    expect(presentation.text).not.toContain("raw-secret-value")
-    expect(presentation.title).toBe("Provider returned access_token=[REDACTED]")
   })
 
   it("derives timeline labels from sanitized provider values", () => {
@@ -63,9 +36,6 @@ describe("safe tool presentation", () => {
       },
     })
 
-    expect(
-      safeToolDisplayValue({ query: "api_key=raw-secret" }, ["query"], "tool")
-    ).toBe("api_key=[REDACTED]")
     expect(safeToolDisplayValue(hostile, ["query"], "tool")).toBe(
       "[Unserializable value]"
     )

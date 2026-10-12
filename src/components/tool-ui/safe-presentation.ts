@@ -1,5 +1,3 @@
-import { REDACTED, redactCredentials } from "@shared/credentials"
-
 const UNAVAILABLE = "[Unserializable value]"
 const TRUNCATED = "[Truncated]"
 const CIRCULAR = "[Circular]"
@@ -10,9 +8,6 @@ const MAX_STRING_LENGTH = 4_000
 const MAX_BYTES = 24_000
 const MAX_TITLE_LENGTH = 160
 const textEncoder = new TextEncoder()
-
-const sensitiveKey =
-  /(?:api[-_]?key|auth(?:orization)?|credential|cookie|password|passwd|private[-_]?key|secret|set[-_]?cookie|token)/i
 
 export type SafeToolPresentation = {
   text: string
@@ -26,12 +21,12 @@ export function safeToolPresentation(value: unknown): SafeToolPresentation {
   return { text, title: titleFrom(sanitized) }
 }
 
-/** Redacted, bounded text shown as it reads, never re-encoded as JSON. */
+/** Bounded text shown as it reads, never re-encoded as JSON. */
 export function safeToolText(value: string): string {
   return safeString(value)
 }
 
-/** Returns a redacted, bounded primitive from an object without reading raw args. */
+/** Returns a bounded primitive from an object without reading raw args. */
 export function safeToolDisplayValue(
   value: unknown,
   keys: readonly string[],
@@ -95,9 +90,7 @@ function sanitize(
   }
 
   for (const key of keys.slice(0, MAX_ENTRIES)) {
-    result[key] = sensitiveKey.test(key)
-      ? REDACTED
-      : sanitize(readProperty(value, key), seen, depth + 1)
+    result[key] = sanitize(readProperty(value, key), seen, depth + 1)
   }
   if (keys.length > MAX_ENTRIES) result[TRUNCATED] = TRUNCATED
   return result
@@ -120,10 +113,9 @@ function readProperty(value: object, key: string): unknown {
 }
 
 function safeString(value: string) {
-  const redacted = redactCredentials(value)
-  return redacted.length > MAX_STRING_LENGTH
-    ? `${redacted.slice(0, MAX_STRING_LENGTH)}${TRUNCATED}`
-    : redacted
+  return value.length > MAX_STRING_LENGTH
+    ? `${value.slice(0, MAX_STRING_LENGTH)}${TRUNCATED}`
+    : value
 }
 
 function boundedJson(value: unknown) {
@@ -157,8 +149,7 @@ function titleFrom(value: unknown) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     for (const key of ["title", "name", "action", "toolName"]) {
       const candidate = (value as Record<string, unknown>)[key]
-      if (typeof candidate === "string" && candidate !== REDACTED)
-        return titleText(candidate)
+      if (typeof candidate === "string") return titleText(candidate)
     }
   }
   return "Tool output"

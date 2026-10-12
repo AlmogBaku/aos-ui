@@ -36,19 +36,6 @@ describe("createToolTimelineModel", () => {
     expect(model.requiresAttention).toBe(true)
   })
 
-  it("does not expose sensitive provider args in timeline chips", () => {
-    const model = createToolTimelineModel([
-      {
-        toolCallId: "one",
-        toolName: "search",
-        args: { query: "api_key=raw-secret" },
-        status: { type: "complete" },
-      },
-    ])
-
-    expect(model.steps[0]?.chip).toBe("api_key=[REDACTED]")
-  })
-
   it("leaves semantic UI out of the command timeline", () => {
     const select = createToolPartSelector()
     const parts = select([

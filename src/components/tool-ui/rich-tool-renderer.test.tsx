@@ -182,7 +182,7 @@ describe("AosToolFallback", () => {
           {...toolPart({
             toolName,
             status,
-            args: { question: "Continue?", token: "secret=never-show" },
+            args: { question: "Continue?", detail: "kept until expanded" },
             result: "Provider result",
           })}
         />
@@ -192,13 +192,13 @@ describe("AosToolFallback", () => {
       expect(trigger).toHaveAttribute("aria-expanded", "false")
       expect(within(trigger).getByText("Used")).toBeVisible()
       expect(within(trigger).getByText(toolName)).toBeVisible()
-      expect(screen.queryByText("[REDACTED]", { exact: false })).toBeNull()
+      expect(screen.queryByText(/kept until expanded/)).toBeNull()
       expect(screen.queryByText(/Provider result/)).toBeNull()
 
       await user.click(trigger)
       expect(trigger).toHaveAttribute("aria-expanded", "true")
       expect(screen.getAllByText(/Continue?/).at(-1)).toBeVisible()
-      expect(screen.getByText("[REDACTED]", { exact: false })).toBeVisible()
+      expect(screen.getByText(/kept until expanded/)).toBeVisible()
       expect(screen.getByText(/Provider result/)).toBeVisible()
     }
   )
