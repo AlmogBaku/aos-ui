@@ -416,6 +416,36 @@ describe("FixtureWorkspace", () => {
     )
   })
 
+  it("moves a published scenario's Session as a provider would, leaving the exposed one read", () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    workspace.reportFocus("thread-aster-market")
+    for (const scenario of [
+      "turn-completed",
+      "delayed-non-selected",
+      "permission",
+      "resolution",
+    ] as const)
+      workspace.publishActivityScenario(scenario)
+
+    const state = (sessionId: string) => {
+      const session = workspace
+        .listAllSessionMetadata()
+        .find((item) => item.sessionId === sessionId)
+      return `${session?.status} ${session?.unread === true ? "unread" : "read"}`
+    }
+    expect({
+      exposed: state("thread-aster-market"),
+      finished: state("thread-mica-quarterly"),
+      waiting: state("thread-aster-launch"),
+      answered: state("thread-lumen-roadmap"),
+    }).toEqual({
+      exposed: "idle read",
+      finished: "idle unread",
+      waiting: "waiting-for-input unread",
+      answered: "idle unread",
+    })
+  })
+
   it("clones activity payloads and isolates throwing listeners until cleanup", () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const observed: WorkspaceActivityEvent[] = []

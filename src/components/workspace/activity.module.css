@@ -35,12 +35,13 @@
   flex: none;
   min-block-size: 3.5rem;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.25rem;
   border-block-end: 1px solid var(--border);
   padding-inline: 1rem 3.25rem;
 }
 .heading h2 {
+  flex: 1;
+  min-inline-size: 0;
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.015em;
@@ -75,89 +76,6 @@
   list-style: none;
   padding-inline: 0.5rem;
 }
-/* One control opens the row; Mark read sits beside it, never inside. */
-.row {
-  display: flex;
-  align-items: center;
-  border-radius: var(--radius-md);
-}
-.row:hover {
-  background: var(--muted);
-}
-.open {
-  display: flex;
-  flex: 1;
-  min-inline-size: 0;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.625rem 0.5rem;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-  color: inherit;
-  text-align: start;
-}
-.open:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
-}
-.rowText {
-  display: grid;
-  flex: 1;
-  min-inline-size: 0;
-  gap: 0.125rem;
-}
-.rowLead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.rowName,
-.rowTitle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rowName {
-  font-size: 0.875rem;
-  font-weight: 550;
-}
-.rowLead time {
-  flex: none;
-  color: var(--muted-foreground);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-}
-.rowTitle {
-  color: var(--muted-foreground);
-  font-size: 0.8125rem;
-}
-.rowFailed {
-  color: var(--destructive);
-  font-size: 0.75rem;
-  font-weight: 550;
-}
-.markRead {
-  flex: none;
-  margin-inline-end: 0.25rem;
-}
-/* A mouse reveals Mark read on hover or focus; touch always shows it. */
-@media (hover: hover) and (pointer: fine) {
-  .markRead {
-    opacity: 0;
-  }
-  .row:hover .markRead,
-  .row:focus-within .markRead {
-    opacity: 1;
-  }
-}
-@media (pointer: coarse) {
-  .markRead {
-    min-inline-size: 2.75rem;
-    min-block-size: 2.75rem;
-  }
-}
 .empty {
   display: grid;
   gap: 0.25rem;
@@ -170,16 +88,14 @@
   font-size: 0.8125rem;
   line-height: 1.55;
 }
-.settings {
-  margin: 1.25rem 1rem 0;
-  border-block-start: 1px solid var(--border);
-  padding-block-start: 0.75rem;
+.back {
+  margin-inline-start: -0.5rem;
 }
-.settings summary {
-  cursor: pointer;
-  font-size: 0.875rem;
-  font-weight: 550;
-  padding-block: 0.5rem;
+[dir="rtl"] .back svg {
+  transform: scaleX(-1);
+}
+.settings {
+  padding-inline: 1rem;
 }
 .settingsBody {
   display: grid;
@@ -201,7 +117,6 @@
 .setting:has(input:disabled) {
   color: var(--muted-foreground);
 }
-.settings summary:focus-visible,
 .setting input:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 3px;

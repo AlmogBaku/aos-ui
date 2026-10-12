@@ -42,6 +42,7 @@ export const he = {
     urgentNotice: "פעילות חדשה דורשת תשומת לב",
     dismiss: "סגירת ההודעה",
     settings: "הגדרות התראות",
+    backToActivity: "חזרה לפעילות",
     browserNotifications: "התראות במכשיר הזה",
     notConfigured: "התראות דפדפן עדיין לא הוגדרו. אפשר לעיין בפעילות כאן.",
     permissionGranted: "ניתנה הרשאה להתראות בדפדפן.",

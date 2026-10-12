@@ -50,38 +50,51 @@ describe("AosUiApp fixture composition", () => {
       const view = renderWorkspace(useFixtureBundle, fixtureClock)
       const provider = () => view.runtime.workspace
       await screen.findByRole("tab", { name: "Market brief" })
+      // The focused Session's turn is seen, so the bell still counts only the
+      // fixture's two unread Sessions.
       act(() => provider().publishActivityScenario("turn-completed"))
-      // The bell counts the two unread fixture Sessions, not arrivals.
       const everyUnread = "Activity, 2 unread, 1 waiting for you, 1 failed"
       const bell = (
         await screen.findAllByRole("button", { name: everyUnread })
       )[0]!
       await user.click(bell)
-      // The inbox lists the unread Sessions; the focused one's turn is seen.
-      const dialog = screen.getByRole("dialog", { name: "Activity" })
+      let dialog = screen.getByRole("dialog", { name: "Activity" })
       expect(
         within(dialog).getByRole("button", { name: /^Lumen, Roadmap review,/ })
       ).toBeVisible()
       expect(
         within(dialog).queryByRole("button", { name: /^Aster, Market brief,/ })
       ).toBeNull()
+      await user.keyboard("{Escape}")
 
-      // Opening a row opens its own Agent's Session and acknowledges it.
-      await user.click(
-        within(dialog).getByRole("button", { name: /^Nori, Launch copy,/ })
-      )
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+      // Another Agent's finished turn joins the bell and the inbox.
+      act(() => provider().publishActivityScenario("delayed-non-selected"))
       expect(
-        screen.getByRole("button", { name: /Nori.*Selected Agent/ })
-      ).toBeVisible()
-      expect(screen.getByRole("tab", { name: /^Launch copy/ })).toHaveAttribute(
+        await screen.findAllByRole("button", {
+          name: "Activity, 3 unread, 1 waiting for you, 1 failed",
+        })
+      ).toHaveLength(2)
+      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
         "aria-selected",
         "true"
       )
-      expect(
-        await screen.findAllByRole("button", {
-          name: "Activity, 1 unread, 1 waiting for you",
+      await user.click(bell)
+      dialog = screen.getByRole("dialog", { name: "Activity" })
+      // Its row opens its own Agent's Session, which acknowledges it.
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: /^Mica, Quarterly synthesis,/,
         })
+      )
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+      expect(
+        screen.getByRole("button", { name: /Mica.*Selected Agent/ })
+      ).toBeVisible()
+      expect(
+        screen.getByRole("tab", { name: "Quarterly synthesis" })
+      ).toHaveAttribute("aria-selected", "true")
+      expect(
+        await screen.findAllByRole("button", { name: everyUnread })
       ).toHaveLength(2)
     } finally {
       focus.mockRestore()

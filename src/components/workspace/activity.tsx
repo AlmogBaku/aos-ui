@@ -10,14 +10,13 @@ import type {
   ActivityNoticeState,
   ActivityView,
 } from "./use-activity-coordinator"
-import { useId, useState } from "react"
-import { Bell, Check, X } from "lucide-react"
+import { useId, useLayoutEffect, useRef, useState } from "react"
+import { ArrowLeft, Bell, SlidersHorizontal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { attentionLabels, type AttentionLevel } from "@/lib/attention-level"
 import type { Inbox, InboxRow } from "@/lib/notifications/inbox"
-import { relativeTime } from "@/lib/relative-time"
+import { ActivityRow, rowCopy } from "./activity-row"
 import { AttentionBadge } from "./attention-badge"
-import { WorkspaceAgentTile } from "./workspace-agent-tile"
 import styles from "./activity.module.css"
 
 export type BrowserSettingsView = {
@@ -88,87 +87,10 @@ export function ActivityBell({
 
 const emptyInbox: Inbox = { waiting: [], unread: [] }
 
-/** What a row says, before its time: its lead, its Session, and its state. */
-function rowCopy(row: InboxRow, dictionary: Dictionary) {
-  const copy = dictionary.activity
-  const [before = "", after = ""] =
-    row.state === "ready" ? copy.agentIsReady.split("{name}") : []
-  const title = row.title ?? copy.sessionFallback
-  const state = {
-    waiting: copy.waitingForInput,
-    failed: copy.turnFailed,
-    unread: dictionary.status.unread,
-    // "<name> is ready" already says it.
-    ready: null,
-  }[row.state]
-  const summary = [`${before}${row.agent.name}${after}`, title, state]
-  return { before, after, title, summary: summary.filter(Boolean).join(", ") }
-}
-
-function ActivityRow({
-  row,
-  dictionary,
-  locale,
-  now,
-  onOpen,
-  onMarkRead,
-}: {
-  row: InboxRow
-  dictionary: Dictionary
-  locale: Locale
-  now: Date
-  onOpen: () => void
-  /** Receives Mark read itself, so focus can move on from where it was. */
-  onMarkRead: (from: HTMLElement) => void
-}) {
-  const copy = dictionary.activity
-  const { before, after, title, summary } = rowCopy(row, dictionary)
-  return (
-    <li className={styles.row}>
-      <button
-        className={styles.open}
-        type="button"
-        data-activity-row={row.sessionId}
-        aria-label={`${summary}, ${relativeTime(row.time, now, locale, "long")}`}
-        onClick={onOpen}
-      >
-        <WorkspaceAgentTile agent={row.agent} size={32} />
-        <span className={styles.rowText}>
-          <span className={styles.rowLead}>
-            <span className={styles.rowName}>
-              {before}
-              <bdi>{row.agent.name}</bdi>
-              {after}
-            </span>
-            <time dateTime={row.time}>
-              {relativeTime(row.time, now, locale)}
-            </time>
-          </span>
-          <span className={styles.rowTitle}>
-            <bdi>{title}</bdi>
-          </span>
-          {row.state === "failed" ? (
-            <span className={styles.rowFailed}>{copy.turnFailed}</span>
-          ) : null}
-        </span>
-      </button>
-      {/* Reading a Session never answers it, so a waiting row has no Mark read. */}
-      {row.state === "waiting" ? null : (
-        <Button
-          className={styles.markRead}
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`${copy.markRead}: ${row.agent.name}, ${title}`}
-          onClick={(event) => onMarkRead(event.currentTarget)}
-        >
-          <Check />
-        </Button>
-      )}
-    </li>
-  )
-}
-
-/** The Sessions that need the operator, one row each, waiting ones first. */
+/**
+ * The Sessions that need the operator, one row each, waiting ones first. The
+ * notification settings take the drawer's body in its place, behind Back.
+ */
 export function ActivityPanel({
   activity,
   locale,
@@ -185,6 +107,15 @@ export function ActivityPanel({
   const copy = dictionary.activity
   const prefix = useId()
   const [opening, setOpening] = useState(false)
+  // Each step in or out moves focus, as the phone drawer's levels do: to the
+  // settings heading, then back to the button that opened them.
+  const [view, setView] = useState({ settings: false, moved: false })
+  const settingsButton = useRef<HTMLButtonElement>(null)
+  const settingsHeading = useRef<HTMLHeadingElement>(null)
+  useLayoutEffect(() => {
+    if (view.moved)
+      (view.settings ? settingsHeading : settingsButton).current?.focus()
+  }, [view])
   const inbox = activity?.inbox ?? emptyInbox
   const now = activity?.readNow() ?? new Date()
   // A row already waiting when the drawer opened is not news; one that
@@ -224,67 +155,99 @@ export function ActivityPanel({
 
   return (
     <div className={styles.panel} data-activity-panel>
-      <div className={styles.heading}>
-        <h2 tabIndex={-1}>{copy.title}</h2>
-        {/* Only answering clears a waiting Session, so only unread rows enable it. */}
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!inbox.unread.length}
-          onClick={() => activity?.markAllRead()}
-        >
-          {copy.markAllRead}
-        </Button>
-      </div>
+      {view.settings ? (
+        <div className={styles.heading}>
+          <Button
+            className={styles.back}
+            variant="ghost"
+            size="icon-sm"
+            aria-label={copy.backToActivity}
+            onClick={() => setView({ settings: false, moved: true })}
+          >
+            <ArrowLeft />
+          </Button>
+          <h2 ref={settingsHeading} tabIndex={-1}>
+            {copy.settings}
+          </h2>
+        </div>
+      ) : (
+        <div className={styles.heading}>
+          <h2 tabIndex={-1}>{copy.title}</h2>
+          {/* Only answering clears a waiting Session, so only unread rows enable it. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!inbox.unread.length}
+            onClick={() => activity?.markAllRead()}
+          >
+            {copy.markAllRead}
+          </Button>
+          <Button
+            ref={settingsButton}
+            variant="ghost"
+            size="icon-sm"
+            aria-label={copy.settings}
+            onClick={() => setView({ settings: true, moved: true })}
+          >
+            <SlidersHorizontal />
+          </Button>
+        </div>
+      )}
       <div className={styles.body}>
-        {activity?.error ? (
-          <p role="status" className={styles.explanation}>
-            {copy.connectionError}
-          </p>
-        ) : null}
-        {activity && !activity.supported ? (
-          <p className={styles.explanation}>{copy.activityUnavailable}</p>
-        ) : null}
         {/* Mounted empty, so the arrival is what gets announced. */}
         <p role="status" className="sr-only">
           {arrival ? rowCopy(arrival, dictionary).summary : null}
         </p>
-        {groups.length ? (
-          groups.map((group, index) => (
-            <section
-              className={styles.group}
-              key={group.title}
-              aria-labelledby={`${prefix}-${index}`}
-            >
-              <h3 id={`${prefix}-${index}`}>
-                {group.title}{" "}
-                <span className={styles.groupCount}>{group.rows.length}</span>
-              </h3>
-              <ul className={styles.rows}>
-                {group.rows.map((row) => (
-                  <ActivityRow
-                    key={row.sessionId}
-                    row={row}
-                    dictionary={dictionary}
-                    locale={locale}
-                    now={now}
-                    onOpen={() => open(row)}
-                    onMarkRead={(from) => markRead(row, from)}
-                  />
-                ))}
-              </ul>
-            </section>
-          ))
-        ) : (
-          <div className={styles.empty}>
-            <p>{copy.emptyTitle}</p>
-            <p className={styles.explanation}>{copy.emptyDetail}</p>
+        {view.settings ? (
+          <div className={styles.settings}>
+            <ActivitySettings dictionary={dictionary} settings={settings} />
           </div>
+        ) : (
+          <>
+            {activity?.error ? (
+              <p role="status" className={styles.explanation}>
+                {copy.connectionError}
+              </p>
+            ) : null}
+            {activity && !activity.supported ? (
+              <p className={styles.explanation}>{copy.activityUnavailable}</p>
+            ) : null}
+            {groups.length ? (
+              groups.map((group, index) => (
+                <section
+                  className={styles.group}
+                  key={group.title}
+                  aria-labelledby={`${prefix}-${index}`}
+                >
+                  <h3 id={`${prefix}-${index}`}>
+                    {group.title}{" "}
+                    <span className={styles.groupCount}>
+                      {group.rows.length}
+                    </span>
+                  </h3>
+                  <ul className={styles.rows}>
+                    {group.rows.map((row) => (
+                      <ActivityRow
+                        key={row.sessionId}
+                        row={row}
+                        dictionary={dictionary}
+                        locale={locale}
+                        now={now}
+                        onOpen={() => open(row)}
+                        onMarkRead={(from) => markRead(row, from)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ))
+            ) : (
+              <div className={styles.empty}>
+                <p>{copy.emptyTitle}</p>
+                <p className={styles.explanation}>{copy.emptyDetail}</p>
+              </div>
+            )}
+          </>
         )}
-        <details className={styles.settings}>
-          <summary>{copy.settings}</summary>
-          <ActivitySettings dictionary={dictionary} settings={settings} />
-        </details>
       </div>
     </div>
   )

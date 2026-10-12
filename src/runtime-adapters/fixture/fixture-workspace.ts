@@ -7,6 +7,7 @@ import type {
   AgentUpdate,
   SessionCreationOptions,
   SessionMetadata,
+  SessionStatus,
   TodoItem,
   WorkspaceActivityEvent,
   WorkspaceAdapter,
@@ -187,6 +188,20 @@ type ActivitySubscription = {
   onError?: (error: Error) => void
 }
 
+/** The status a published Activity event leaves its Session in. */
+const activityStatuses: Record<
+  WorkspaceActivityEvent["type"],
+  SessionStatus | null
+> = {
+  "turn-started": "running",
+  "turn-finished": "idle",
+  "turn-failed": "failed",
+  "attention-requested": "waiting-for-input",
+  "attention-resolved": "idle",
+  "agent-ready": null,
+  "agent-activation-failed": null,
+}
+
 type FixtureTurnActivity = {
   agentId: string
   sessionId: string
@@ -215,6 +230,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }>()
   readonly #sessionTitles: Map<string, string>
   #sessionSequence = 0
+  #exposedSessionId: string | null = null
 
   constructor({
     clock = () => new Date(),
@@ -361,8 +377,13 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     return { rename: true, archive: true, delete: true, pin: true }
   }
 
-  /** Native runtimes debounce exposure; the preview has no read-state clock. */
-  reportFocus() {}
+  /**
+   * Native runtimes debounce exposure; the preview has no read-state clock, so
+   * it only keeps the exposed Session from becoming unread.
+   */
+  reportFocus(sessionId: string | null) {
+    this.#exposedSessionId = sessionId
+  }
 
   async createSession(agentId: string, options?: SessionCreationOptions) {
     const agent =
@@ -432,6 +453,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   publishActivityScenario(name: FixtureActivityScenarioName) {
     for (const event of buildFixtureActivityScenario(name)) {
+      this.#reflectActivity(event)
       this.#publishActivity(event)
     }
   }
@@ -489,20 +511,17 @@ export class FixtureWorkspace implements WorkspaceAdapter {
       sessionId,
       occurredAt: this.#clock().toISOString(),
     }
-    this.#publishActivity(
+    const event: WorkspaceActivityEvent =
       kind === "resolved"
-        ? {
-            ...eventBase,
-            type: "attention-resolved",
-            requestId,
-          }
+        ? { ...eventBase, type: "attention-resolved", requestId }
         : {
             ...eventBase,
             type: "attention-requested",
             attentionKind: kind,
             requestId,
           }
-    )
+    this.#reflectActivity(event)
+    this.#publishActivity(event)
   }
 
   subscribeAgentCatalog(listener: () => void) {
@@ -560,6 +579,26 @@ export class FixtureWorkspace implements WorkspaceAdapter {
       occurredAt: this.#clock().toISOString(),
       type,
     })
+  }
+
+  /**
+   * A published event moves its Session as a provider would: to the status
+   * the event leaves, and unread unless it is the Session being looked at.
+   */
+  #reflectActivity(event: WorkspaceActivityEvent) {
+    const session = this.#sessions.find(
+      ({ sessionId, agentId }) =>
+        sessionId === event.sessionId && agentId === event.agentId
+    )
+    if (!session) return
+    session.status = activityStatuses[event.type] ?? session.status
+    if (
+      event.type !== "turn-started" &&
+      event.type !== "attention-resolved" &&
+      session.sessionId !== this.#exposedSessionId
+    )
+      session.unread = true
+    this.#publishSessions()
   }
 
   #projectSessions(requested: ReadonlySet<string>) {

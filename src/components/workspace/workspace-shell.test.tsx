@@ -547,7 +547,7 @@ describe("WorkspaceShell", () => {
     expect(within(drawer).getByText(he.activity.emptyTitle)).toBeVisible()
   })
 
-  it("opens Activity from either header, hides the background from assistive technology, and restores keyboard focus", async () => {
+  it("opens Activity from either header, steps into its settings and back, and restores keyboard focus", async () => {
     const user = userEvent.setup()
     renderShell()
     const triggers = screen.getAllByRole("button", {
@@ -562,8 +562,24 @@ describe("WorkspaceShell", () => {
       screen.getByText("Assistant UI conversation").closest("[inert]")
     ).toHaveAttribute("aria-hidden", "true")
     expect(within(drawer).getByText(en.activity.emptyTitle)).toBeVisible()
+    // Focus stays trapped: back from Close wraps to the header's last control.
     await user.tab({ shift: true })
-    expect(within(drawer).getByText("Notification settings")).toHaveFocus()
+    const settings = () =>
+      within(drawer).getByRole("button", { name: en.activity.settings })
+    expect(settings()).toHaveFocus()
+    await user.keyboard("{Enter}")
+    expect(
+      within(drawer).getByRole("heading", { name: en.activity.settings })
+    ).toHaveFocus()
+    expect(
+      within(drawer).getByRole("checkbox", {
+        name: en.activity.browserNotifications,
+      })
+    ).toBeVisible()
+    await user.click(
+      within(drawer).getByRole("button", { name: en.activity.backToActivity })
+    )
+    expect(settings()).toHaveFocus()
     await user.tab()
     expect(close).toHaveFocus()
     await user.keyboard("{Escape}")

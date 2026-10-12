@@ -42,6 +42,7 @@ export const en = {
     urgentNotice: "New activity needs your attention",
     dismiss: "Dismiss notice",
     settings: "Notification settings",
+    backToActivity: "Back to Activity",
     browserNotifications: "Notifications on this device",
     notConfigured:
       "Browser notifications are not configured yet. Activity is available here.",

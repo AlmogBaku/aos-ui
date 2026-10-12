@@ -33,6 +33,7 @@ export const english = {
   askTitle: "Get told when Agents finish or need you",
   askAccept: "Turn on",
   settings: "Notification settings",
+  backToActivity: "Back to Activity",
   device: "Notifications on this device",
   messageInput: "Message input",
   sendMessage: "Send message",
@@ -135,13 +136,15 @@ export function permissionRequests(page: Page) {
   return page.evaluate(() => window.__notificationTest.requests)
 }
 
-/** Opens the Activity drawer and expands the notification settings inside it. */
+/** Opens the Activity drawer, then its notification settings behind the header button. */
 export async function openSettings(page: Page) {
   await page.getByRole("button", { name: english.activityBell }).click()
-  await expect(page.getByRole("dialog")).toBeVisible()
-  const summary = page.getByText(english.settings, { exact: true })
-  await summary.click()
-  return page.getByRole("dialog")
+  const dialog = page.getByRole("dialog")
+  await expect(dialog).toBeVisible()
+  await dialog
+    .getByRole("button", { name: english.settings, exact: true })
+    .click()
+  return dialog
 }
 
 export function deviceCheckbox(page: Page) {

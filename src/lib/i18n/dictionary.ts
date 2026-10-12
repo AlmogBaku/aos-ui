@@ -42,6 +42,7 @@ export type Dictionary = {
     urgentNotice: string
     dismiss: string
     settings: string
+    backToActivity: string
     browserNotifications: string
     notConfigured: string
     permissionGranted: string

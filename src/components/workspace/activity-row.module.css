@@ -1,0 +1,85 @@
+/* One control opens the row; Mark read sits beside it, never inside. Every
+   row keeps its slot, so times line up whether or not it offers Mark read. */
+.row {
+  --mark-read-size: 1.75rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--mark-read-size);
+  align-items: center;
+  padding-inline-end: 0.25rem;
+  border-radius: var(--radius-md);
+}
+.row:hover {
+  background: var(--muted);
+}
+.open {
+  display: flex;
+  min-inline-size: 0;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.625rem 0.5rem;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+}
+.open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.rowText {
+  display: grid;
+  flex: 1;
+  min-inline-size: 0;
+  gap: 0.125rem;
+}
+.rowLead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.rowName,
+.rowTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rowName {
+  font-size: 0.875rem;
+  font-weight: 550;
+}
+.rowLead time {
+  flex: none;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.rowTitle {
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+.rowFailed {
+  color: var(--destructive);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+.markRead {
+  inline-size: var(--mark-read-size);
+  block-size: var(--mark-read-size);
+}
+/* A mouse reveals Mark read on hover or focus; touch always shows it. */
+@media (hover: hover) and (pointer: fine) {
+  .markRead {
+    opacity: 0;
+  }
+  .row:hover .markRead,
+  .row:focus-within .markRead {
+    opacity: 1;
+  }
+}
+@media (pointer: coarse) {
+  .row {
+    --mark-read-size: 2.75rem;
+  }
+}

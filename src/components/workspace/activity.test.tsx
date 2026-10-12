@@ -744,8 +744,7 @@ describe("the Activity inbox", () => {
 
   it("announces a waiting row that arrives while the drawer is open, and only that one", () => {
     const { update } = renderInbox()
-    // The settings below the rows hold a status line of their own.
-    const live = screen.getAllByRole("status")[0]!
+    const live = screen.getByRole("status")
     expect(live).toBeEmptyDOMElement()
     const arrival: SessionMetadata = {
       sessionId: "four",
