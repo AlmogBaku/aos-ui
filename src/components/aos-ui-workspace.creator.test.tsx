@@ -430,6 +430,22 @@ describe("AosUiApp fixture composition", () => {
     expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
   })
 
+  it("opens the interview even when the catalog cannot be refreshed, and the catalog reports its own failure", async () => {
+    const view = renderNavigation(() => useCreatedAgentRuntime(), fixtureClock)
+    view.runtime.handle.failNextRefresh()
+
+    const interview = await openInterview(view, () => view.runtime.provider)
+
+    await waitFor(() =>
+      expect(threadTexts(view.runtime)).toContain(en.creator.kickoff)
+    )
+    expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
+    await waitFor(() =>
+      expect(view.nav.agentError?.message).toBe("Agent catalog refresh failed")
+    )
+    expect(view.nav.actionError).toBeNull()
+  })
+
   it("retires the draft and explains an Agent that still needs operator setup", async () => {
     const view = renderNavigation(creatorFixture(), fixtureClock)
     const provider = () => view.runtime.workspace as FixtureWorkspace

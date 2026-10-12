@@ -1509,16 +1509,15 @@ export function useWorkspaceNavigation({
       title: dictionary.actions.newAgent,
     })
     await runtime.threads.reload()
-    const [nextAgents, metadata] = await Promise.all([
-      workspace.refreshAgents(),
-      workspace.getSessionMetadata([sessionId]),
-    ])
+    const metadata = await workspace.getSessionMetadata([sessionId])
     if (metadata[0]?.agentId !== creator.id) {
       throw new Error(
         "Agent creation did not confirm creator Session ownership"
       )
     }
-    setAgents(nextAgents)
+    // The roster refreshes on its own: a catalog that cannot be read reports
+    // its own error and never costs the interview.
+    reloadCatalog()
     // The operator only ever sees the interview as its own draft Agent.
     const draftId = draftAgentId(sessionId)
     setPreferredAgentId(draftId)
