@@ -124,6 +124,52 @@ describe("buildInbox", () => {
     }).toEqual(expected)
   })
 
+  it("gives a waiting row the question its newest request asks, and only a waiting row", () => {
+    const asked = (
+      id: string,
+      sessionId: string,
+      occurredAt: string,
+      preview: { requestText?: string; requestMore?: number }
+    ) =>
+      ({
+        ...record(id, sessionId, "travel", "turn-finished", occurredAt),
+        type: "attention-requested",
+        attentionKind: "question",
+        requestId: id,
+        ...preview,
+      }) as ActivityRecord
+    const inbox = buildInbox({
+      sessions: [
+        session(
+          "lisbon",
+          "travel",
+          "waiting-for-input",
+          "2026-09-05T09:00:00Z"
+        ),
+        session("hotels", "travel", "idle", "2026-09-05T09:00:00Z"),
+      ],
+      records: [
+        asked("dates", "lisbon", "2026-09-05T10:00:00Z", {
+          requestText: "Which dates work for you?",
+        }),
+        asked("fare", "lisbon", "2026-09-05T11:00:00Z", {
+          requestText: "Book the refundable fare?",
+          requestMore: 2,
+        }),
+        // Answered, so the Session is no longer waiting on it.
+        asked("rooms", "hotels", "2026-09-05T11:00:00Z", {
+          requestText: "How many rooms?",
+        }),
+      ],
+      agents,
+      titles,
+    })
+    expect(inbox.waiting.map(({ request }) => request)).toEqual([
+      { text: "Book the refundable fare?", more: 2 },
+    ])
+    expect(inbox.unread.map(({ request }) => request)).toEqual([undefined])
+  })
+
   it("draws a creator Session as the rail's draft, and names each row", () => {
     const inbox = buildInbox({
       sessions: [

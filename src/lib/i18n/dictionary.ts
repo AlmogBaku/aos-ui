@@ -32,6 +32,8 @@ export type Dictionary = {
     sessionFallback: string
     /** A waiting row's state, as its accessible name reads it. */
     waitingForInput: string
+    /** Questions after the one shown; `{count}` is substituted. */
+    requestMore: string
     turnFailed: string
     /** A row for an Agent the creator just made; `{name}` is substituted. */
     agentIsReady: string

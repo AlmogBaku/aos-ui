@@ -5,6 +5,7 @@ import {
   renderHook,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -101,17 +102,19 @@ function source() {
   const emit = (
     id: string,
     sessionId = "two",
-    type: "attention-requested" | "agent-ready" = "agent-ready"
+    type: "attention-requested" | "agent-ready" = "agent-ready",
+    extra: { replayed?: true; requestText?: string; requestMore?: number } = {}
   ) =>
     receive({
       id,
       sessionId,
       agentId: sessionId === "one" ? "a" : "b",
       occurredAt: now.toISOString(),
+      ...extra,
       ...(type === "attention-requested"
         ? { type, requestId: id, attentionKind: "question" }
         : { type }),
-    })
+    } as WorkspaceActivityEvent)
   return {
     workspace,
     emit,
@@ -449,7 +452,7 @@ describe("Activity coordinator", () => {
       available: false,
     })
   })
-  it("rings once per burst of Sessions newly waiting elsewhere, never for the one on screen", async () => {
+  it("rings once per burst of Sessions newly waiting elsewhere, never for the one on screen or a replay", async () => {
     const clock = useFakeClock()
     const provider = source()
     const waiting = sessions.map((session) => ({
@@ -461,6 +464,12 @@ describe("Activity coordinator", () => {
     })
     await act(async () =>
       provider.emit("on-screen", "one", "attention-requested")
+    )
+    // What the gateway re-sends on connect already happened.
+    await act(async () =>
+      provider.emit("replayed", "two", "attention-requested", {
+        replayed: true,
+      })
     )
     expect(result.current.ring).toBe(0)
     await act(async () => provider.emit("first", "two", "attention-requested"))
@@ -679,14 +688,39 @@ describe("the Activity inbox", () => {
     }
   }
 
-  it("names each row in full: its Agent, Session, state, and time", () => {
+  it("names each row in full, and marks it with the navigation rows' one dot", () => {
     renderInbox()
-    for (const name of [
-      "Mica, Second, waiting for your input, 2 minutes ago",
-      "Aster, First, Unread, 30 minutes ago",
-      "Aster, Third, Turn failed, 1 hour ago",
-    ])
-      expect(screen.getByRole("button", { name })).toBeVisible()
+    for (const [name, dot] of [
+      [
+        "Mica, Second, waiting for your input, 2 minutes ago",
+        "waiting for your input",
+      ],
+      ["Aster, First, Unread, 30 minutes ago", "Unread"],
+      ["Aster, Third, Turn failed, 1 hour ago", "Turn failed"],
+    ]) {
+      const row = screen.getByRole("button", { name })
+      expect(within(row).getByTitle(dot!)).toHaveAttribute(
+        "aria-hidden",
+        "true"
+      )
+    }
+  })
+
+  it("shows what a waiting row is asked, in its own direction, with how many follow", async () => {
+    const { provider } = renderInbox()
+    await act(async () =>
+      provider.emit("asked", "two", "attention-requested", {
+        requestText: "Which dates work for you?",
+        requestMore: 2,
+      })
+    )
+    const row = screen.getByRole("button", {
+      name: "Mica, Second, waiting for your input: Which dates work for you? +2 more, now",
+    })
+    expect(within(row).getByText("Which dates work for you?").tagName).toBe(
+      "BDI"
+    )
+    expect(row).toHaveTextContent("Which dates work for you? +2 more")
   })
 
   it("opens a row's Session from the whole row, once the provider confirms its owner", async () => {

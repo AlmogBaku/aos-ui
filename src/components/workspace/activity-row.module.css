@@ -35,8 +35,7 @@
 }
 .rowLead {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 0.5rem;
 }
 .rowName,
@@ -46,6 +45,8 @@
   white-space: nowrap;
 }
 .rowName {
+  flex: 1;
+  min-inline-size: 0;
   font-size: 0.875rem;
   font-weight: 550;
 }
@@ -58,6 +59,16 @@
 .rowTitle {
   color: var(--muted-foreground);
   font-size: 0.8125rem;
+}
+/* What is asked keeps its own direction and at most two lines. */
+.rowRequest {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
 }
 .rowFailed {
   color: var(--destructive);

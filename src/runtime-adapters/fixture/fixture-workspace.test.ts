@@ -307,6 +307,8 @@ describe("FixtureWorkspace", () => {
         type: "attention-requested",
         attentionKind: "question",
         requestId: "fixture-question-roadmap",
+        requestText: expect.any(String),
+        requestMore: 1,
       }),
       expect.objectContaining({
         id: "fixture:attention:aster-launch:permission:requested",
@@ -315,6 +317,7 @@ describe("FixtureWorkspace", () => {
         type: "attention-requested",
         attentionKind: "permission",
         requestId: "fixture-permission-launch",
+        requestText: expect.any(String),
       }),
       expect.objectContaining({
         id: "fixture:attention:lumen-roadmap:question:resolved",
@@ -358,7 +361,12 @@ describe("FixtureWorkspace", () => {
     ])
 
     for (const event of received) {
-      expect(Object.keys(event).sort()).toEqual(
+      // Only an attention request may carry a preview of what it asks.
+      const preview = ["requestMore", "requestText"]
+      const keys = Object.keys(event).filter(
+        (key) => event.type !== "attention-requested" || !preview.includes(key)
+      )
+      expect(keys.sort()).toEqual(
         event.type === "attention-requested"
           ? [
               "agentId",

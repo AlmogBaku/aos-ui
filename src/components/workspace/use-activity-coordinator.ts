@@ -405,9 +405,13 @@ export function useActivityCoordinator(
                   categoryOf(arrival.type) !== "completion" ||
                   !!previous?.urgent,
               }))
-              if (arrival.type === "attention-requested") ringBell()
+              if (arrival.type === "attention-requested" && !arrival.replayed)
+                ringBell()
             }
-            if (shouldChime(arrival, state, preferences)) sound?.play()
+            // What the gateway re-sends on connect already happened: it is
+            // listed, but never announced again with sound or motion.
+            if (!arrival.replayed && shouldChime(arrival, state, preferences))
+              sound?.play()
           }
         })
         .catch(() => {

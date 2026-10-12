@@ -17,6 +17,8 @@ export type InboxRow = {
   title: string | undefined
   state: InboxState
   time: string
+  /** What a waiting row is asked, and how many questions follow it. */
+  request?: { text: string; more: number | undefined }
 }
 
 export type Inbox = { waiting: InboxRow[]; unread: InboxRow[] }
@@ -73,6 +75,10 @@ export function buildInbox({
             ? "failed"
             : "unread"
     const { id, name, avatar } = agent
+    const asked =
+      state === "waiting" && record?.type === "attention-requested"
+        ? record
+        : undefined
     return [
       {
         agentId: session.agentId,
@@ -81,6 +87,9 @@ export function buildInbox({
         title: titles.get(session.sessionId),
         state,
         time: record?.occurredAt ?? session.updatedAt,
+        ...(asked?.requestText
+          ? { request: { text: asked.requestText, more: asked.requestMore } }
+          : {}),
       },
     ]
   })

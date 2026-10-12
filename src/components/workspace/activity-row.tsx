@@ -7,6 +7,7 @@ import type { InboxRow } from "@/lib/notifications/inbox"
 import { relativeTime } from "@/lib/relative-time"
 
 import styles from "./activity-row.module.css"
+import { StatusDot, UnreadDot } from "./status-dots"
 import { WorkspaceAgentTile } from "./workspace-agent-tile"
 
 /** What a row says, before its time: its lead, its Session, and its state. */
@@ -15,15 +16,27 @@ export function rowCopy(row: InboxRow, dictionary: Dictionary) {
   const [before = "", after = ""] =
     row.state === "ready" ? copy.agentIsReady.split("{name}") : []
   const title = row.title ?? copy.sessionFallback
+  const more = row.request?.more
+    ? copy.requestMore.replace("{count}", () => String(row.request?.more))
+    : undefined
+  const asked = row.request
+    ? `${copy.waitingForInput}: ${[row.request.text, more].filter(Boolean).join(" ")}`
+    : copy.waitingForInput
   const state = {
-    waiting: copy.waitingForInput,
+    waiting: asked,
     failed: copy.turnFailed,
     unread: dictionary.status.unread,
     // "<name> is ready" already says it.
     ready: null,
   }[row.state]
   const summary = [`${before}${row.agent.name}${after}`, title, state]
-  return { before, after, title, summary: summary.filter(Boolean).join(", ") }
+  return {
+    before,
+    after,
+    title,
+    more,
+    summary: summary.filter(Boolean).join(", "),
+  }
 }
 
 export function ActivityRow({
@@ -43,7 +56,7 @@ export function ActivityRow({
   onMarkRead: (from: HTMLElement) => void
 }) {
   const copy = dictionary.activity
-  const { before, after, title, summary } = rowCopy(row, dictionary)
+  const { before, after, title, more, summary } = rowCopy(row, dictionary)
   return (
     <li className={styles.row}>
       <button
@@ -64,10 +77,31 @@ export function ActivityRow({
             <time dateTime={row.time}>
               {relativeTime(row.time, now, locale)}
             </time>
+            {/* The navigation rows' one dot, decorative like theirs. */}
+            {row.state === "waiting" || row.state === "failed" ? (
+              <StatusDot
+                status={
+                  row.state === "waiting" ? "waiting-for-input" : "failed"
+                }
+                label={
+                  row.state === "waiting"
+                    ? copy.waitingForInput
+                    : copy.turnFailed
+                }
+              />
+            ) : (
+              <UnreadDot label={dictionary.status.unread} />
+            )}
           </span>
           <span className={styles.rowTitle}>
             <bdi>{title}</bdi>
           </span>
+          {row.request ? (
+            <span className={styles.rowRequest}>
+              <bdi>{row.request.text}</bdi>
+              {more ? ` ${more}` : null}
+            </span>
+          ) : null}
           {row.state === "failed" ? (
             <span className={styles.rowFailed}>{copy.turnFailed}</span>
           ) : null}

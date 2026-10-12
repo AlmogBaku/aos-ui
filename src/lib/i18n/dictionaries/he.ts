@@ -33,6 +33,7 @@ export const he = {
     markRead: "סימון כנקרא",
     sessionFallback: "שיחה",
     waitingForInput: "נדרשת תשובה שלכם",
+    requestMore: "ועוד {count}",
     turnFailed: "התור נכשל",
     agentIsReady: "הסוכן {name} מוכן לעבודה",
     runFinished: "תור הסתיים",

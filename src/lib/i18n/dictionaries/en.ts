@@ -33,6 +33,7 @@ export const en = {
     markRead: "Mark read",
     sessionFallback: "Session",
     waitingForInput: "waiting for your input",
+    requestMore: "+{count} more",
     turnFailed: "Turn failed",
     agentIsReady: "{name} is ready",
     runFinished: "A turn finished",
