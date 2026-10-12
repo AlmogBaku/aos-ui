@@ -13,6 +13,8 @@ import {
   type BrowserPreferences,
 } from "./policy"
 import { deserializeActivity, serializeActivity } from "./serialization"
+import { isRosterAgent } from "@/runtime-adapters/agent-identity"
+import type { AgentSummary } from "@/runtime-adapters/contracts"
 import { formatNotification } from "./format"
 import { sessionTag } from "./tag"
 
@@ -33,10 +35,13 @@ export type BrowserActivityOptions = {
   context(): ActivityContext
   /** The operator's language, which the notification is written in. */
   locale(): PushLocale
-  /** The names this tab already shows; they reach only the OS surface. */
-  labels(target: { agentId: string; sessionId: string }): {
-    agentName?: string | undefined
-    sessionTitle?: string | undefined
+  /**
+   * The Agents and Session titles this tab already shows. Only a rail Agent's
+   * names reach the OS surface, as the gateway's own notifications do.
+   */
+  names(): {
+    agents: readonly Pick<AgentSummary, "id" | "name" | "role" | "visibility">[]
+    titles: ReadonlyMap<string, string>
   }
   now(): number
   open(id: string): Promise<boolean>
@@ -232,6 +237,14 @@ export class BrowserActivityCoordinator {
     this.#preferences.sound = enabled
     this.publish(undefined, true)
   }
+  /** A hidden or creator Agent's Session is never named; a draft keeps its rail name. */
+  #names({ agentId, sessionId }: { agentId: string; sessionId: string }) {
+    const { agents, titles } = this.#options.names()
+    const agent = agents.find(({ id }) => id === agentId)
+    return agent && isRosterAgent(agent)
+      ? { agentName: agent.name, sessionTitle: titles.get(sessionId) }
+      : {}
+  }
   #pushActive() {
     try {
       return this.#options.push?.active() ?? false
@@ -388,7 +401,7 @@ export class BrowserActivityCoordinator {
       if (!category) return false
       const { title, body } = formatNotification({
         category,
-        ...this.#options.labels(record),
+        ...this.#names(record),
         ...(record.type === "attention-requested"
           ? { requestText: record.requestText, requestMore: record.requestMore }
           : {}),

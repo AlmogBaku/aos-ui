@@ -61,21 +61,18 @@ function setup(
     selection: null as null | { agentId: string; sessionId: string },
   }
   let permissionChanged: (() => void) | undefined
-  /** What this tab shows of the Session, and the language it speaks. */
+  /** What this tab shows of its Agents and Sessions, and its language. */
   const labels: {
     locale: "en" | "he"
-    agentName?: string
-    sessionTitle?: string
-  } = { locale: "en" }
+    agents: ReturnType<BrowserActivityOptions["names"]>["agents"]
+    titles: Map<string, string>
+  } = { locale: "en", agents: [], titles: new Map() }
   const coordinator = new BrowserActivityCoordinator({
     store,
     now: () => now,
     context: () => localContext,
     locale: () => labels.locale,
-    labels: () => ({
-      agentName: labels.agentName,
-      sessionTitle: labels.sessionTitle,
-    }),
+    names: () => labels,
     push,
     installFirst,
     port: {
@@ -329,8 +326,8 @@ describe("live browser Activity", () => {
   })
   it("delivers only new eligible leader arrivals and clicks focus then open the owning activity", async () => {
     const h = setup()
-    h.labels.agentName = "Travel Planner"
-    h.labels.sessionTitle = "Lisbon trip in May"
+    h.labels.agents = [{ id: "a", name: "Travel Planner" }]
+    h.labels.titles.set("t", "Lisbon trip in May")
     h.coordinator.start()
     await h.coordinator.setEnabled(true)
     const arrival = h.store.ingest({ ...event, message: "private secret" })!
@@ -357,6 +354,20 @@ describe("live browser Activity", () => {
     expect(h.focus.mock.invocationCallOrder[0]).toBeLessThan(
       h.open.mock.invocationCallOrder[0]!
     )
+  })
+  it.each([
+    ["a hidden Agent", { visibility: "hidden" as const }],
+    ["the creator", { role: "creator" as const }],
+  ])("names no Session of %s on the OS surface", async (_owner, withheld) => {
+    const h = setup()
+    h.labels.agents = [{ id: "a", name: "Secret Agent", ...withheld }]
+    h.labels.titles.set("t", "Secret Session")
+    h.coordinator.start()
+    await h.coordinator.setEnabled(true)
+    h.coordinator.publish(h.store.ingest(event)!)
+    expect(h.shown.map(({ title, body }) => ({ title, body }))).toEqual([
+      { title: "AOS", body: "Finished" },
+    ])
   })
   it("never delivers from a follower or from an ordinary peer message", async () => {
     const h = setup()

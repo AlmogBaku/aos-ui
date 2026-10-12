@@ -86,7 +86,7 @@ it.each([[true, true, ["hidden"]]])(
         context: () => context,
         now: () => now,
         locale: () => "en",
-        labels: () => ({}),
+        names: () => ({ agents: [], titles: new Map() }),
         port: {
           getPermission: () => "granted",
           requestPermission: async () => "granted",
@@ -161,7 +161,7 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
     now: () => now,
     context: () => context,
     locale: () => "en",
-    labels: () => ({}),
+    names: () => ({ agents: [], titles: new Map() }),
     platform: {
       read: () => saved,
       write: (value) => {
@@ -299,7 +299,7 @@ it("synchronizes live arrivals, delivery announcements, and preferences with one
       now: () => now,
       context: () => context,
       locale: () => "en",
-      labels: () => ({}),
+      names: () => ({ agents: [], titles: new Map() }),
       onChange() {},
       open: async () => true,
     })

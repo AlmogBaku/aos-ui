@@ -302,10 +302,9 @@ export function useActivityCoordinator(
           now: () => current.current.readNow().getTime(),
           context,
           locale: () => current.current.locale,
-          labels: ({ agentId, sessionId }) => ({
-            agentName: current.current.agents.find(({ id }) => id === agentId)
-              ?.name,
-            sessionTitle: current.current.titles.get(sessionId),
+          names: () => ({
+            agents: current.current.agents,
+            titles: current.current.titles,
           }),
           open: (id) => openRef.current(id),
           // A subscribed device leaves the OS alerts to push.
