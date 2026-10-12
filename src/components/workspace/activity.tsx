@@ -11,14 +11,13 @@ import type {
   ActivityView,
 } from "./use-activity-coordinator"
 import { useId, useState } from "react"
-import { Bell, BellDot, X } from "lucide-react"
+import { Bell, Check, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { attentionLabels, type AttentionLevel } from "@/lib/attention-level"
+import type { Inbox, InboxRow } from "@/lib/notifications/inbox"
+import { relativeTime } from "@/lib/relative-time"
 import { AttentionBadge } from "./attention-badge"
-import {
-  needsAttention,
-  type ActivityRecord,
-} from "@/lib/notifications/activity"
+import { WorkspaceAgentTile } from "./workspace-agent-tile"
 import styles from "./activity.module.css"
 
 export type BrowserSettingsView = {
@@ -87,54 +86,89 @@ export function ActivityBell({
   )
 }
 
-export function activityLabel(record: ActivityRecord, dictionary: Dictionary) {
+const emptyInbox: Inbox = { waiting: [], unread: [] }
+
+/** What a row says, before its time: its lead, its Session, and its state. */
+function rowCopy(row: InboxRow, dictionary: Dictionary) {
   const copy = dictionary.activity
-  switch (record.type) {
-    case "turn-finished":
-      return copy.runFinished
-    case "turn-failed":
-      return copy.runFailed
-    case "attention-requested":
-      return copy.inputRequested
-    case "agent-ready":
-      return copy.agentReady
-    case "agent-activation-failed":
-      return copy.activationFailed
-  }
+  const [before = "", after = ""] =
+    row.state === "ready" ? copy.agentIsReady.split("{name}") : []
+  const title = row.title ?? copy.sessionFallback
+  const state = {
+    waiting: copy.waitingForInput,
+    failed: copy.turnFailed,
+    unread: dictionary.status.unread,
+    // "<name> is ready" already says it.
+    ready: null,
+  }[row.state]
+  const summary = [`${before}${row.agent.name}${after}`, title, state]
+  return { before, after, title, summary: summary.filter(Boolean).join(", ") }
 }
 
-function AttentionDot({ label }: { label: string }) {
-  return (
-    <span className={styles.attentionDot} title={label} aria-hidden="true" />
-  )
-}
-
-function ActivityMarker({
-  unread,
-  attention,
+function ActivityRow({
+  row,
   dictionary,
+  locale,
+  now,
+  onOpen,
+  onMarkRead,
 }: {
-  unread: number
-  attention: boolean
+  row: InboxRow
   dictionary: Dictionary
+  locale: Locale
+  now: Date
+  onOpen: () => void
+  /** Receives Mark read itself, so focus can move on from where it was. */
+  onMarkRead: (from: HTMLElement) => void
 }) {
-  if (!unread && !attention) return null
+  const copy = dictionary.activity
+  const { before, after, title, summary } = rowCopy(row, dictionary)
   return (
-    <span className={styles.marker}>
-      {attention ? (
-        <AttentionDot label={dictionary.activity.needsAttention} />
-      ) : (
-        <BellDot aria-hidden="true" />
+    <li className={styles.row}>
+      <button
+        className={styles.open}
+        type="button"
+        data-activity-row={row.sessionId}
+        aria-label={`${summary}, ${relativeTime(row.time, now, locale, "long")}`}
+        onClick={onOpen}
+      >
+        <WorkspaceAgentTile agent={row.agent} size={32} />
+        <span className={styles.rowText}>
+          <span className={styles.rowLead}>
+            <span className={styles.rowName}>
+              {before}
+              <bdi>{row.agent.name}</bdi>
+              {after}
+            </span>
+            <time dateTime={row.time}>
+              {relativeTime(row.time, now, locale)}
+            </time>
+          </span>
+          <span className={styles.rowTitle}>
+            <bdi>{title}</bdi>
+          </span>
+          {row.state === "failed" ? (
+            <span className={styles.rowFailed}>{copy.turnFailed}</span>
+          ) : null}
+        </span>
+      </button>
+      {/* Reading a Session never answers it, so a waiting row has no Mark read. */}
+      {row.state === "waiting" ? null : (
+        <Button
+          className={styles.markRead}
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`${copy.markRead}: ${row.agent.name}, ${title}`}
+          onClick={(event) => onMarkRead(event.currentTarget)}
+        >
+          <Check />
+        </Button>
       )}
-      <span className="sr-only">
-        {attention
-          ? dictionary.activity.needsAttention
-          : `${unread} ${dictionary.activity.unread}`}
-      </span>
-    </span>
+    </li>
   )
 }
 
+/** The Sessions that need the operator, one row each, waiting ones first. */
 export function ActivityPanel({
   activity,
   locale,
@@ -150,114 +184,108 @@ export function ActivityPanel({
 }) {
   const copy = dictionary.activity
   const prefix = useId()
-  const [opening, setOpening] = useState<string | null>(null)
-  const items = activity?.items ?? []
-  const sections = [
-    {
-      title: copy.needsAttention,
-      empty: copy.emptyAttention,
-      items: items.filter((item) => item.available && needsAttention(item)),
-    },
-    {
-      title: copy.earlier,
-      empty: copy.emptyEarlier,
-      items: items.filter((item) => !item.available || !needsAttention(item)),
-    },
-  ]
-  const formatter = new Intl.DateTimeFormat(locale, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
+  const [opening, setOpening] = useState(false)
+  const inbox = activity?.inbox ?? emptyInbox
+  const now = activity?.readNow() ?? new Date()
+  // A row already waiting when the drawer opened is not news; one that
+  // arrives while it is open is announced, once.
+  const [shownWaiting] = useState(
+    () => new Set(inbox.waiting.map(({ sessionId }) => sessionId))
+  )
+  const arrival = inbox.waiting.find(
+    ({ sessionId }) => !shownWaiting.has(sessionId)
+  )
+  const groups = [
+    { title: copy.waitingGroup, rows: inbox.waiting },
+    { title: copy.unreadGroup, rows: inbox.unread },
+  ].filter(({ rows }) => rows.length)
+
+  const open = (row: InboxRow) => {
+    if (opening) return
+    setOpening(true)
+    void Promise.resolve(activity?.openSession(row.agentId, row.sessionId))
+      .then((opened) => {
+        if (opened) onOpened()
+      })
+      .finally(() => setOpening(false))
+  }
+  /** The row leaves once the provider says so; focus moves on before it does. */
+  const markRead = (row: InboxRow, from: HTMLElement) => {
+    const panel = from.closest<HTMLElement>("[data-activity-panel]")
+    const rows = [
+      ...(panel?.querySelectorAll<HTMLElement>("[data-activity-row]") ?? []),
+    ]
+    const index = rows.findIndex(
+      (element) => element.dataset.activityRow === row.sessionId
+    )
+    ;(rows[index + 1] ?? panel?.querySelector<HTMLElement>("h2"))?.focus()
+    activity?.markSessionRead(row.sessionId)
+  }
+
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} data-activity-panel>
       <div className={styles.heading}>
-        <h2>{copy.title}</h2>
+        <h2 tabIndex={-1}>{copy.title}</h2>
+        {/* Only answering clears a waiting Session, so only unread rows enable it. */}
         <Button
           variant="ghost"
           size="sm"
-          disabled={!items.some((item) => !item.read)}
+          disabled={!inbox.unread.length}
           onClick={() => activity?.markAllRead()}
         >
           {copy.markAllRead}
         </Button>
       </div>
-      {activity?.error ? (
-        <p role="status" className={styles.explanation}>
-          {copy.connectionError}
+      <div className={styles.body}>
+        {activity?.error ? (
+          <p role="status" className={styles.explanation}>
+            {copy.connectionError}
+          </p>
+        ) : null}
+        {activity && !activity.supported ? (
+          <p className={styles.explanation}>{copy.activityUnavailable}</p>
+        ) : null}
+        {/* Mounted empty, so the arrival is what gets announced. */}
+        <p role="status" className="sr-only">
+          {arrival ? rowCopy(arrival, dictionary).summary : null}
         </p>
-      ) : null}
-      {activity && !activity.supported ? (
-        <p className={styles.explanation}>{copy.activityUnavailable}</p>
-      ) : null}
-      {sections.map((section, index) => (
-        <section
-          className={styles.section}
-          key={section.title}
-          aria-labelledby={`${prefix}-${index}`}
-        >
-          <h3 id={`${prefix}-${index}`}>{section.title}</h3>
-          {section.items.length ? (
-            <ul className={styles.list}>
-              {section.items.map((item) => {
-                const agent = item.agentName ?? copy.agentFallback
-                const session = item.sessionTitle ?? copy.sessionFallback
-                return (
-                  <li key={item.id} className={styles.item}>
-                    <div className={styles.itemHeading}>
-                      <p>{activityLabel(item, dictionary)}</p>
-                      <ActivityMarker
-                        unread={item.read ? 0 : 1}
-                        attention={item.available && needsAttention(item)}
-                        dictionary={dictionary}
-                      />
-                    </div>
-                    <p className={styles.target}>
-                      <bdi>{agent}</bdi>
-                      <span aria-hidden="true"> / </span>
-                      <bdi>{session}</bdi>
-                    </p>
-                    {!item.available ? (
-                      <p className={styles.explanation}>{copy.unavailable}</p>
-                    ) : item.resolved ? (
-                      <p className={styles.explanation}>{copy.resolved}</p>
-                    ) : null}
-                    <div className={styles.itemFooter}>
-                      <time dateTime={item.occurredAt}>
-                        {formatter.format(new Date(item.occurredAt))}
-                      </time>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={opening !== null}
-                        aria-label={`${copy.open}: ${agent}, ${session}`}
-                        onClick={async () => {
-                          setOpening(item.id)
-                          try {
-                            if (await activity?.openActivity(item.id))
-                              onOpened()
-                          } finally {
-                            setOpening(null)
-                          }
-                        }}
-                      >
-                        {copy.open}
-                      </Button>
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : (
-            <p className={styles.explanation}>{section.empty}</p>
-          )}
-        </section>
-      ))}
-      <details className={styles.settings}>
-        <summary>{copy.settings}</summary>
-        <ActivitySettings dictionary={dictionary} settings={settings} />
-      </details>
+        {groups.length ? (
+          groups.map((group, index) => (
+            <section
+              className={styles.group}
+              key={group.title}
+              aria-labelledby={`${prefix}-${index}`}
+            >
+              <h3 id={`${prefix}-${index}`}>
+                {group.title}{" "}
+                <span className={styles.groupCount}>{group.rows.length}</span>
+              </h3>
+              <ul className={styles.rows}>
+                {group.rows.map((row) => (
+                  <ActivityRow
+                    key={row.sessionId}
+                    row={row}
+                    dictionary={dictionary}
+                    locale={locale}
+                    now={now}
+                    onOpen={() => open(row)}
+                    onMarkRead={(from) => markRead(row, from)}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))
+        ) : (
+          <div className={styles.empty}>
+            <p>{copy.emptyTitle}</p>
+            <p className={styles.explanation}>{copy.emptyDetail}</p>
+          </div>
+        )}
+        <details className={styles.settings}>
+          <summary>{copy.settings}</summary>
+          <ActivitySettings dictionary={dictionary} settings={settings} />
+        </details>
+      </div>
     </div>
   )
 }

@@ -16,6 +16,8 @@ import {
   type AttentionLevel,
 } from "@/lib/attention-level"
 import { ActivityStore } from "@/lib/notifications/store"
+import { buildInbox, type Inbox } from "@/lib/notifications/inbox"
+import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
 import { activityEventSchema } from "@/lib/notifications/activity"
 import {
   BrowserActivityCoordinator,
@@ -67,10 +69,17 @@ export type ActivityView = {
   attention: AttentionLevel
   /** Counts the bell's rings, each one a Session that newly waits elsewhere. */
   ring: number
+  /** The counted Sessions, one row each: the Activity drawer's contents. */
+  inbox: Inbox
+  /** The workspace clock the inbox's times are relative to. */
+  readNow: () => Date
   notice: ActivityNoticeState | null
   error: boolean
   supported: boolean
   openActivity: (id: string) => Promise<boolean>
+  /** Opens a Session once the provider confirms the Agent still owns it. */
+  openSession: (agentId: string, sessionId: string) => Promise<boolean>
+  markSessionRead: (sessionId: string) => void
   markAllRead: () => void
   dismissNotice: () => void
 }
@@ -78,6 +87,7 @@ export type ActivityView = {
 export type ActivityAgent = {
   id: string
   name: string
+  avatar?: string
   role?: "creator"
   visibility?: "visible" | "hidden"
 }
@@ -480,9 +490,8 @@ export function useActivityCoordinator(
     syncPushRef.current()
   }, [options.locale])
 
-  const attention = attentionLevel(
-    railSessions(options.agents, options.sessions)
-  )
+  const rail = railSessions(options.agents, options.sessions)
+  const attention = attentionLevel(rail)
   /** Reading a Session is a provider write; the browser never stores it. */
   const markSessionsRead = (sessionIds: readonly string[]) => {
     void Promise.all(
@@ -532,6 +541,38 @@ export function useActivityCoordinator(
         return false
       })
     },
+    async openSession(agentId: string, sessionId: string) {
+      const store = storeRef.current
+      if (!store) return false
+      // A promise `catch`, not `try`: React Compiler cannot compile the
+      // conditionals inside a `try` yet.
+      return (async () => {
+        // A draft is this browser's projection of a creator Session, so the
+        // snapshot that projected it is the only owner it has.
+        const owner = isDraftAgentId(agentId)
+          ? current.current.sessions.find(
+              (session) => session.sessionId === sessionId
+            )?.agentId
+          : await validateOwnerRef.current(sessionId, true)
+        if (storeRef.current !== store) return false
+        if (
+          !current.current.agents.some(({ id }) => id === agentId) ||
+          owner !== agentId
+        )
+          return false
+        await current.current.onOpenTarget(agentId, sessionId)
+        if (storeRef.current !== store) return false
+        markSessionsRead([sessionId])
+        setNotice(null)
+        return true
+      })().catch(() => {
+        setError(true)
+        return false
+      })
+    },
+    markSessionRead(sessionId: string) {
+      markSessionsRead([sessionId])
+    },
     markAllRead() {
       markSessionsRead(
         current.current.sessions
@@ -578,10 +619,19 @@ export function useActivityCoordinator(
     })),
     attention,
     ring,
+    inbox: buildInbox({
+      sessions: rail.filter(isSessionUnread),
+      records,
+      agents: options.agents,
+      titles: options.titles,
+    }),
+    readNow: options.readNow,
     notice: notice ? { count: attention.count, urgent: notice.urgent } : null,
     error,
     supported: !!workspace.subscribeActivity,
     openActivity: actions.openActivity,
+    openSession: actions.openSession,
+    markSessionRead: actions.markSessionRead,
     markAllRead: actions.markAllRead,
     dismissNotice: actions.dismissNotice,
   }

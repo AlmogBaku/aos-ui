@@ -57,31 +57,27 @@ describe("AosUiApp fixture composition", () => {
         await screen.findAllByRole("button", { name: everyUnread })
       )[0]!
       await user.click(bell)
-      expect(await screen.findByText("A turn finished")).toBeVisible()
-      await user.keyboard("{Escape}")
-      act(() => provider().publishActivityScenario("delayed-non-selected"))
+      // The inbox lists the unread Sessions; the focused one's turn is seen.
+      const dialog = screen.getByRole("dialog", { name: "Activity" })
       expect(
-        await screen.findAllByRole("button", { name: everyUnread })
-      ).toHaveLength(2)
-      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
+        within(dialog).getByRole("button", { name: /^Lumen, Roadmap review,/ })
+      ).toBeVisible()
+      expect(
+        within(dialog).queryByRole("button", { name: /^Aster, Market brief,/ })
+      ).toBeNull()
+
+      // Opening a row opens its own Agent's Session and acknowledges it.
+      await user.click(
+        within(dialog).getByRole("button", { name: /^Nori, Launch copy,/ })
+      )
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+      expect(
+        screen.getByRole("button", { name: /Nori.*Selected Agent/ })
+      ).toBeVisible()
+      expect(screen.getByRole("tab", { name: /^Launch copy/ })).toHaveAttribute(
         "aria-selected",
         "true"
       )
-      await user.click(bell)
-      await user.click(screen.getByRole("button", { name: /Open: Mica,/ }))
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
-      expect(
-        screen.getByRole("button", { name: /Mica.*Selected Agent/ })
-      ).toBeVisible()
-      expect(
-        screen.getByRole("tab", { name: "Quarterly synthesis" })
-      ).toHaveAttribute("aria-selected", "true")
-
-      // Opening an unread Session's Activity acknowledges it with the provider.
-      act(() => provider().publishActivityScenario("turn-failed"))
-      await user.click(screen.getAllByRole("button", { name: everyUnread })[0]!)
-      await user.click(screen.getByRole("button", { name: /Open: Nori,/ }))
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
       expect(
         await screen.findAllByRole("button", {
           name: "Activity, 1 unread, 1 waiting for you",

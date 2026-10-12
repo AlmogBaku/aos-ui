@@ -5,11 +5,9 @@ import {
   renderHook,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { useMemo, useState } from "react"
 import type {
   WorkspaceActivityEvent,
   WorkspaceAdapter,
@@ -82,7 +80,9 @@ function source() {
   let receive: (event: WorkspaceActivityEvent) => void = () => {}
   let fail: (error: Error) => void = () => {}
   const unsubscribe = vi.fn()
-  const markSessionRead = vi.fn(async () => {})
+  const markSessionRead = vi.fn<(sessionId: string) => Promise<void>>(
+    async () => {}
+  )
   const reportFocus = vi.fn()
   const workspace: WorkspaceAdapter = {
     listAgents: async () => [],
@@ -519,61 +519,6 @@ describe("Activity presentation", () => {
     expect(screen.getByRole("status")).toBeVisible()
     expect(screen.queryByRole("alert")).toBeNull()
   })
-  it("offers attention/history and marks every unread Session read", async () => {
-    const user = userEvent.setup()
-    const provider = source()
-    const props = options(provider.workspace)
-    function Harness() {
-      const [sessionState, setSessionState] = useState(sessions)
-      const workspace = useMemo<WorkspaceAdapter>(
-        () => ({
-          ...provider.workspace,
-          markSessionRead: async (sessionId) =>
-            setSessionState((current) =>
-              current.map((session) =>
-                session.sessionId === sessionId
-                  ? { ...session, unread: false }
-                  : session
-              )
-            ),
-        }),
-        []
-      )
-      const activity = useActivityCoordinator({
-        ...props,
-        workspace,
-        sessions: sessionState,
-      })
-      return (
-        <ActivityPanel
-          activity={activity}
-          locale="en"
-          dictionary={en}
-          onOpened={() => {}}
-        />
-      )
-    }
-    render(<Harness />)
-    act(() => {
-      provider.emit("attention", "two", "attention-requested")
-      provider.emit("complete")
-    })
-    await waitFor(() =>
-      expect(screen.getAllByRole("button", { name: /Open:/ })).toHaveLength(2)
-    )
-    expect(
-      within(screen.getByRole("region", { name: "Needs attention" })).getByText(
-        "Your Agent needs input"
-      )
-    ).toBeVisible()
-    expect(
-      within(screen.getByRole("region", { name: "Earlier" })).getByText(
-        "An Agent is ready"
-      )
-    ).toBeVisible()
-    await user.click(screen.getByRole("button", { name: "Mark all read" }))
-    expect(screen.getByRole("button", { name: "Mark all read" })).toBeDisabled()
-  })
   it("presents browser settings without prompting and calls only explicit user callbacks", async () => {
     const user = userEvent.setup()
     const onEnabledChange = vi.fn()
@@ -671,6 +616,169 @@ describe("Activity presentation", () => {
     expect(
       screen.queryByRole("button", { name: en.activity.install })
     ).toBeNull()
+  })
+})
+
+describe("the Activity inbox", () => {
+  const minutesAgo = (minutes: number) =>
+    new Date(now.getTime() - minutes * 60_000).toISOString()
+  const inboxSessions: SessionMetadata[] = [
+    {
+      sessionId: "one",
+      agentId: "a",
+      status: "idle",
+      updatedAt: minutesAgo(30),
+      unread: true,
+    },
+    {
+      sessionId: "two",
+      agentId: "b",
+      status: "waiting-for-input",
+      updatedAt: minutesAgo(2),
+      unread: true,
+    },
+    {
+      sessionId: "three",
+      agentId: "a",
+      status: "failed",
+      updatedAt: minutesAgo(60),
+      unread: true,
+    },
+  ]
+  /** The panel over a live coordinator; `update` is the provider's next read. */
+  function renderInbox() {
+    const provider = source()
+    const props = {
+      ...options(provider.workspace),
+      titles: new Map([
+        ["one", "First"],
+        ["two", "Second"],
+        ["three", "Third"],
+        ["four", "Fourth"],
+      ]),
+    }
+    const onOpened = vi.fn()
+    function Harness({ sessions }: { sessions: SessionMetadata[] }) {
+      const activity = useActivityCoordinator({ ...props, sessions })
+      return (
+        <ActivityPanel
+          activity={activity}
+          locale="en"
+          dictionary={en}
+          onOpened={onOpened}
+        />
+      )
+    }
+    const view = render(<Harness sessions={inboxSessions} />)
+    return {
+      provider,
+      props,
+      onOpened,
+      update: (next: SessionMetadata[]) =>
+        view.rerender(<Harness sessions={next} />),
+    }
+  }
+
+  it("names each row in full: its Agent, Session, state, and time", () => {
+    renderInbox()
+    for (const name of [
+      "Mica, Second, waiting for your input, 2 minutes ago",
+      "Aster, First, Unread, 30 minutes ago",
+      "Aster, Third, Turn failed, 1 hour ago",
+    ])
+      expect(screen.getByRole("button", { name })).toBeVisible()
+  })
+
+  it("opens a row's Session from the whole row, once the provider confirms its owner", async () => {
+    const user = userEvent.setup()
+    const { provider, props, onOpened } = renderInbox()
+    // The provider no longer lists Third, so its row opens nothing.
+    await user.click(screen.getByRole("button", { name: /^Aster, Third,/ }))
+    await user.click(screen.getByRole("button", { name: /^Aster, First,/ }))
+    await waitFor(() => expect(onOpened).toHaveBeenCalledOnce())
+    expect(props.onOpenTarget).toHaveBeenCalledExactlyOnceWith("a", "one")
+    expect(provider.markSessionRead).toHaveBeenCalledExactlyOnceWith("one")
+  })
+
+  it("marks one row read without opening it, and moves focus to the next row, then the heading", async () => {
+    const user = userEvent.setup()
+    const { provider, props, update } = renderInbox()
+    // Only answering clears a waiting Session, so it offers no Mark read.
+    expect(
+      screen.queryByRole("button", { name: "Mark read: Mica, Second" })
+    ).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", { name: "Mark read: Aster, First" })
+    )
+    expect(provider.markSessionRead).toHaveBeenCalledExactlyOnceWith("one")
+    expect(props.onOpenTarget).not.toHaveBeenCalled()
+    const third = screen.getByRole("button", { name: /^Aster, Third,/ })
+    expect(third).toHaveFocus()
+    update(
+      inboxSessions.map((session) =>
+        session.sessionId === "one" ? { ...session, unread: false } : session
+      )
+    )
+    expect(screen.queryByRole("button", { name: /^Aster, First,/ })).toBeNull()
+    expect(third).toHaveFocus()
+
+    await user.click(
+      screen.getByRole("button", { name: "Mark read: Aster, Third" })
+    )
+    expect(screen.getByRole("heading", { name: "Activity" })).toHaveFocus()
+  })
+
+  it("enables Mark all read only while a Session is unread and not waiting", async () => {
+    const user = userEvent.setup()
+    const { provider, update } = renderInbox()
+    const markAll = screen.getByRole("button", { name: "Mark all read" })
+    await user.click(markAll)
+    expect(
+      provider.markSessionRead.mock.calls.map(([sessionId]) => sessionId)
+    ).toEqual(["one", "two", "three"])
+    // Reading a waiting Session changes nothing, so it cannot enable this.
+    update([inboxSessions[1]!])
+    expect(markAll).toBeDisabled()
+  })
+
+  it("announces a waiting row that arrives while the drawer is open, and only that one", () => {
+    const { update } = renderInbox()
+    // The settings below the rows hold a status line of their own.
+    const live = screen.getAllByRole("status")[0]!
+    expect(live).toBeEmptyDOMElement()
+    const arrival: SessionMetadata = {
+      sessionId: "four",
+      agentId: "a",
+      status: "waiting-for-input",
+      updatedAt: now.toISOString(),
+    }
+    update([...inboxSessions, arrival])
+    expect(live).toHaveTextContent(/^Aster, Fourth, waiting for your input$/)
+    update([...inboxSessions.slice(1), arrival])
+    expect(live).toHaveTextContent(/^Aster, Fourth, waiting for your input$/)
+  })
+
+  it("shows one calm message while nothing needs the operator", () => {
+    const provider = source()
+    function Harness() {
+      const activity = useActivityCoordinator({
+        ...options(provider.workspace),
+        sessions: [sessions[0]!],
+      })
+      return (
+        <ActivityPanel
+          activity={activity}
+          locale="en"
+          dictionary={en}
+          onOpened={() => {}}
+        />
+      )
+    }
+    render(<Harness />)
+    expect(screen.getByText(en.activity.emptyTitle)).toBeVisible()
+    expect(screen.queryByRole("heading", { level: 3 })).toBeNull()
+    expect(screen.getByRole("button", { name: "Mark all read" })).toBeDisabled()
   })
 })
 

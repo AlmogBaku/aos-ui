@@ -18,26 +18,26 @@ export type Dictionary = {
   }
   activity: {
     title: string
-    unread: string
     /** The counts a bell or an Agent row names; `{count}` is substituted. */
     unreadCount: string
     waitingCount: string
     failedCount: string
-    needsAttention: string
-    earlier: string
-    emptyAttention: string
-    emptyEarlier: string
-    open: string
+    /** The inbox's two groups, and its one message while both are empty. */
+    waitingGroup: string
+    unreadGroup: string
+    emptyTitle: string
+    emptyDetail: string
     markAllRead: string
-    unavailable: string
-    resolved: string
-    agentFallback: string
+    markRead: string
     sessionFallback: string
+    /** A waiting row's state, as its accessible name reads it. */
+    waitingForInput: string
+    turnFailed: string
+    /** A row for an Agent the creator just made; `{name}` is substituted. */
+    agentIsReady: string
     runFinished: string
     runFailed: string
     inputRequested: string
-    agentReady: string
-    activationFailed: string
     routineNotice: string
     urgentNotice: string
     dismiss: string

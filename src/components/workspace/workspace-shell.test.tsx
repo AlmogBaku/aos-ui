@@ -544,9 +544,7 @@ describe("WorkspaceShell", () => {
     )
     const drawer = screen.getByRole("dialog", { name: "פעילות" })
     expect(drawer.closest('[dir="rtl"]')).not.toBeNull()
-    expect(
-      within(drawer).getByRole("heading", { name: "קודם לכן" })
-    ).toBeVisible()
+    expect(within(drawer).getByText(he.activity.emptyTitle)).toBeVisible()
   })
 
   it("opens Activity from either header, hides the background from assistive technology, and restores keyboard focus", async () => {
@@ -563,12 +561,7 @@ describe("WorkspaceShell", () => {
     expect(
       screen.getByText("Assistant UI conversation").closest("[inert]")
     ).toHaveAttribute("aria-hidden", "true")
-    expect(
-      within(drawer).getByRole("heading", { name: "Needs attention" })
-    ).toBeVisible()
-    expect(
-      within(drawer).getByRole("heading", { name: "Earlier" })
-    ).toBeVisible()
+    expect(within(drawer).getByText(en.activity.emptyTitle)).toBeVisible()
     await user.tab({ shift: true })
     expect(within(drawer).getByText("Notification settings")).toHaveFocus()
     await user.tab()
@@ -1211,10 +1204,14 @@ describe("WorkspaceShell", () => {
         items: [],
         attention: { count: 2, waiting: 0, failed: 0, top: "unread" },
         ring: 0,
+        inbox: { waiting: [], unread: [] },
+        readNow: () => new Date(),
         notice: { count: 2, urgent: true },
         error: false,
         supported: true,
         openActivity: async () => false,
+        openSession: async () => false,
+        markSessionRead: () => {},
         markAllRead: () => {},
         dismissNotice: () => {},
       },
