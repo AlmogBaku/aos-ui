@@ -49,6 +49,10 @@ const terminalSchema = z.object({
   truncated: z.boolean().optional(),
 })
 
+/**
+ * A subagent's card facts: its own child Session's, where its runtime gives it
+ * one. `cancellable` says the child can be stopped alone.
+ */
 const subagentSchema = z.object({
   id: z.string(),
   goal: z.string().optional(),
@@ -60,6 +64,8 @@ const subagentSchema = z.object({
   filesWritten: z.array(z.string()).optional(),
   durationMs: z.number().optional(),
   childSessionId: z.string().optional(),
+  summary: z.string().optional(),
+  cancellable: z.boolean().optional(),
 })
 
 /**

@@ -34,6 +34,7 @@ import {
   type AcpConnection,
   type AcpPendingRequest,
   type AcpHistoryPage,
+  type AcpSessionListener,
   type AcpSessionReplayListener,
   type AcpSessionUpdateListener,
 } from "@harness-gw/sdk"
@@ -44,7 +45,9 @@ import {
   queueControlsExtras,
   type QueueControls,
 } from "@/runtime-adapters/queue-controls"
+import { childSessionExtras } from "@/runtime-adapters/child-sessions"
 import { threadHistoryExtras } from "@/runtime-adapters/thread-history"
+import { readAosToolArtifact } from "@/lib/tool-artifact"
 
 import {
   acpExtras,
@@ -55,6 +58,9 @@ import {
 
 const SESSION_ID = "session-1"
 const TURN_META = { sequence: 0, turnId: "run-1" }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
 
 /** The handshake of a gateway that does, or does not, serve older pages. */
 const initializeMeta = (historyPages: boolean): HgwInitializeMeta => ({
@@ -82,6 +88,10 @@ function createFakeConnection(
   } = {}
 ) {
   const updates = new Map<string, Set<AcpSessionUpdateListener>>()
+  const children = new Map<
+    string,
+    Set<NonNullable<AcpSessionListener["child"]>>
+  >()
   const replays = new Map<string, Set<AcpSessionReplayListener>>()
   const notifications = new Map<string, Set<(params: unknown) => void>>()
   const pendingListeners = new Set<(pending: AcpPendingRequest) => void>()
@@ -104,6 +114,8 @@ function createFakeConnection(
   })
   /** What a from-start replay resends, while the resume is still in flight. */
   let replayedTurns: readonly SessionUpdate[] = []
+  /** Each child's own transcript, which the replay resends after the parent's. */
+  let replayedChildren: readonly (readonly [string, SessionUpdate])[] = []
   const fake = { history: options.history }
   const histories = new Map<string, HgwHistoryCursor>()
   /** A from-start replay: announced, recorded, then settled, as the connection does. */
@@ -111,9 +123,17 @@ function createFakeConnection(
     const settles = [...(replays.get(sessionId) ?? [])].map((listener) =>
       listener()
     )
+    // Like the connection, each update's own `_meta.hgw` is its meta.
+    const metaOf = (update: SessionUpdate): Record<string, unknown> => {
+      const hgw: unknown = isRecord(update._meta) ? update._meta.hgw : undefined
+      return isRecord(hgw) ? hgw : TURN_META
+    }
     for (const update of replayedTurns)
       for (const listener of updates.get(sessionId) ?? [])
-        listener(update, TURN_META)
+        listener(update, metaOf(update))
+    for (const [childId, update] of replayedChildren)
+      for (const listener of children.get(sessionId) ?? [])
+        listener(childId, update, metaOf(update))
     let replayed = false
     try {
       await reply
@@ -153,6 +173,7 @@ function createFakeConnection(
     subscribe: (sessionId, listener) => {
       const offs = [
         listener.update && listen(updates, sessionId, listener.update),
+        listener.child && listen(children, sessionId, listener.child),
         listener.replay && listen(replays, sessionId, listener.replay),
       ]
       return () => {
@@ -193,9 +214,13 @@ function createFakeConnection(
     resumePage,
     prompt,
     cancel,
-    /** Stores the turns a later from-start replay resends. */
-    replayOnResume: (turns: readonly SessionUpdate[]) => {
+    /** Stores the turns a later from-start replay resends, and its children's. */
+    replayOnResume: (
+      turns: readonly SessionUpdate[],
+      childTurns: readonly (readonly [string, SessionUpdate])[] = []
+    ) => {
       replayedTurns = turns
+      replayedChildren = childTurns
     },
     /** The history the next from-start replay reports. */
     set history(history: HgwHistoryCursor | undefined) {
@@ -221,17 +246,30 @@ function createFakeConnection(
       for (const listener of updates.get(SESSION_ID) ?? [])
         listener(update, meta)
     },
+    /** An update a child Session of the opened one sent under its own id. */
+    emitChild: (
+      childSessionId: string,
+      update: SessionUpdate,
+      meta: Record<string, unknown> = TURN_META
+    ) => {
+      for (const listener of children.get(SESSION_ID) ?? [])
+        listener(childSessionId, update, meta)
+    },
     notify: (method: string, params: unknown) => {
       for (const listener of notifications.get(method) ?? []) listener(params)
     },
-    /** The gateway asks to run the call `toolCallId` names. */
-    requestPermission: (toolCallId: string) => {
+    /**
+     * The gateway asks to run the call `toolCallId` names, in the opened
+     * Session or in a child Session `sessionId` names.
+     */
+    requestPermission: (toolCallId: string, sessionId = SESSION_ID) => {
       const respond = vi.fn<(response: RequestPermissionResponse) => void>()
       const pending: AcpPendingRequest = {
         kind: "permission",
-        sessionId: SESSION_ID,
+        sessionId,
+        ...(sessionId === SESSION_ID ? {} : { parentSessionId: SESSION_ID }),
         request: {
-          sessionId: SESSION_ID,
+          sessionId,
           title: "Run bash",
           subject: { type: "tool_call", toolCall: { toolCallId } },
           options: [
@@ -1280,6 +1318,137 @@ describe("useAcpRuntime approvals", () => {
     expect(callPart(result.current).getState()).toMatchObject({
       approval: { id: "interrupt-1" },
     })
+  })
+})
+
+describe("useAcpRuntime child Sessions", () => {
+  const CHILD_ID = "child-1"
+  const spawn: Built<SessionUpdate> = {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "t1",
+    name: "delegate_task",
+    status: "in_progress",
+  }
+  const SPAWN_META = { ...TURN_META, messageId: "a1" }
+  const report = (
+    patch: Record<string, unknown> = {}
+  ): Built<SessionUpdate> => ({
+    sessionUpdate: "subagent_update",
+    sessionId: CHILD_ID,
+    title: "Check the logs",
+    capabilities: { cancel: {} },
+    state: { state: "running" },
+    ...patch,
+  })
+  const REPORT_META = { ...TURN_META, toolCallId: "t1" }
+  const spawned = (fake: Fake) =>
+    act(() => {
+      fake.emit(spawn, SPAWN_META)
+      fake.emit(report(), REPORT_META)
+    })
+  const spawnPart = (runtime: ReturnType<typeof useAcpRuntime>) =>
+    runtime.thread
+      .getMessageByIndex(0)
+      .getMessagePartByToolCallId("t1")
+      .getState()
+  const childText = (runtime: ReturnType<typeof useAcpRuntime>) => {
+    const part = spawnPart(runtime)
+    return part.type === "tool-call"
+      ? (part.messages ?? []).map((message) =>
+          message.content.map(messageText).join("")
+        )
+      : []
+  }
+  const controlsOf = (runtime: ReturnType<typeof useAcpRuntime>) =>
+    childSessionExtras.tryGet(runtime.thread.getState().extras)?.childSessions
+
+  it("projects what a child Session sends under its own id onto its card", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    spawned(fake)
+    act(() => fake.emitChild(CHILD_ID, chunkUpdate("c1", "Reading the logs")))
+
+    const part = spawnPart(result.current)
+    expect(
+      part.type === "tool-call" && readAosToolArtifact(part.artifact)?.subagent
+    ).toMatchObject({ goal: "Check the logs", status: "running" })
+    expect(childText(result.current)).toEqual(["Reading the logs"])
+  })
+
+  it("answers a child's permission request on the child, from its parent's thread", async () => {
+    const fake = createFakeConnection()
+    const approvals = createAcpApprovals({ connection: fake.connection })
+    const { result } = await mount(fake, { approvals })
+    spawned(fake)
+    let respond!: ReturnType<Fake["requestPermission"]>
+    act(() => {
+      fake.emitChild(
+        CHILD_ID,
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "t2",
+          name: "bash",
+          status: "pending",
+        },
+        { ...TURN_META, messageId: "c1" }
+      )
+      respond = fake.requestPermission("t2", CHILD_ID)
+    })
+    const approvalOf = () => {
+      const part = spawnPart(result.current)
+      const nested = part.type === "tool-call" ? part.messages?.[0] : undefined
+      const call = nested?.content.find((item) => item.type === "tool-call")
+      return call?.type === "tool-call" ? call.approval : undefined
+    }
+    expect(approvalOf()).toMatchObject({ id: "interrupt-1" })
+
+    await act(() =>
+      controlsOf(result.current)!.respondToApproval("interrupt-1", "once", true)
+    )
+    expect(respond).toHaveBeenCalledWith({
+      outcome: { outcome: "selected", optionId: "once" },
+    })
+    expect(approvalOf()).toMatchObject({ optionId: "once", approved: true })
+  })
+
+  it("stops a child alone only where the child offers that", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    spawned(fake)
+
+    act(() => controlsOf(result.current)!.cancel(CHILD_ID))
+    expect(fake.cancel.mock.calls).toEqual([[CHILD_ID]])
+
+    act(() => fake.emit(report({ capabilities: {} }), REPORT_META))
+    act(() => controlsOf(result.current)!.cancel(CHILD_ID))
+    expect(fake.cancel.mock.calls).toEqual([[CHILD_ID]])
+  })
+
+  it("restores a child's card and its transcript from a replay, once", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    spawned(fake)
+    act(() => fake.emitChild(CHILD_ID, chunkUpdate("c1", "Reading the logs")))
+
+    // A replay carries no turn position, so the call lands on its turn.
+    fake.replayOnResume(
+      [
+        textUpdate("agent_message", "a1", "Delegating"),
+        spawn,
+        report({
+          state: { state: "idle", stopReason: "end_turn" },
+          _meta: { hgw: REPORT_META },
+        }),
+      ],
+      [[CHILD_ID, chunkUpdate("c1", "Reading the logs")]]
+    )
+    await act(() => fake.resync())
+
+    const part = spawnPart(result.current)
+    expect(
+      part.type === "tool-call" && readAosToolArtifact(part.artifact)?.subagent
+    ).toMatchObject({ status: "completed" })
+    expect(childText(result.current)).toEqual(["Reading the logs"])
   })
 })
 

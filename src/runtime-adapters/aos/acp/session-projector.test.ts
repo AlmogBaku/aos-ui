@@ -2,6 +2,7 @@ import type {
   CompactionUpdate,
   SessionUpdate,
   StateUpdate,
+  SubagentUpdate,
   ToolCallContent,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { ToolCallMessagePart } from "@assistant-ui/core"
@@ -25,6 +26,8 @@ import { TERMINAL_TAIL_LIMIT } from "./projector-terminals"
 
 import {
   applyApprovals,
+  applyChildApprovals,
+  applyChildUpdate,
   applyUpdate,
   clearTranscript,
   failLatestTurn,
@@ -1407,7 +1410,7 @@ describe("prependMessages", () => {
       userChunk("u2", "Stale copy"),
     ])
 
-    const prepended = prependMessages(current, older.messages)
+    const prepended = prependMessages(current, older)
 
     expect(ids(prepended)).toEqual(["u1", "a1", "u2", "a2"])
     expect(prepended.messages[2]).toBe(current.messages[0])
@@ -1416,8 +1419,8 @@ describe("prependMessages", () => {
   it("keeps the state it has when the page holds nothing new", () => {
     const current = fold([userChunk("u1", "Ship it")])
 
-    expect(prependMessages(current, current.messages)).toBe(current)
-    expect(prependMessages(current, [])).toBe(current)
+    expect(prependMessages(current, current)).toBe(current)
+    expect(prependMessages(current, initialProjectorState)).toBe(current)
   })
 })
 
@@ -1885,51 +1888,86 @@ describe("applyUpdate terminals", () => {
   })
 })
 
-describe("applyUpdate subagents", () => {
-  const SPAWN_META = {
-    ...TOOL_META,
-    subagent: { id: "sub-1", goal: "Research", status: "running" },
-  }
-  const CHILD = { subagentId: "sub-1", parentToolCallId: "t1" }
-  const spawned = fold([
-    toolCall({ title: "delegate", status: "in_progress" }, SPAWN_META),
+describe("applyUpdate child Sessions", () => {
+  const CHILD_ID = "child-1"
+  /** A child Session's report on its parent, as ACP v2 `subagent_update`. */
+  const report = (
+    patch: Omit<Built<SubagentUpdate>, "sessionId">,
+    meta: Record<string, unknown> = { ...TURN_META, toolCallId: "t1" },
+    sessionId = CHILD_ID
+  ): Entry => [{ sessionUpdate: "subagent_update", sessionId, ...patch }, meta]
+  /** Folds what a child Session sent under its own id. */
+  const inChild = (
+    state: ProjectorState,
+    entries: readonly Entry[],
+    childId = CHILD_ID
+  ) =>
+    entries.reduce<ProjectorState>(
+      (next, [update, meta]) => applyChildUpdate(next, childId, update, meta),
+      state
+    )
+  const spawnCall = toolCall(
+    { title: "delegate", name: "delegate_task", status: "in_progress" },
+    TOOL_META
+  )
+  const announced = fold([
+    spawnCall,
+    report(
+      {
+        title: "Research the tiers",
+        description: "Compare the pricing tiers",
+        state: { state: "running" },
+        capabilities: { cancel: {} },
+      },
+      {
+        ...TURN_META,
+        toolCallId: "t1",
+        model: "opus",
+        filesRead: ["a.ts", "b.ts"],
+        filesWritten: ["c.ts"],
+        durationMs: 4000,
+        summary: "The tiers match.",
+      }
+    ),
   ])
-
-  const childMessages = (state: ProjectorState) =>
-    toolPartOf(state)?.messages?.map(({ id, role, content }) => ({
+  const nested = (state: ProjectorState, toolCallId = "t1") =>
+    toolPartOf(state, toolCallId)?.messages?.map(({ id, role, content }) => ({
       id,
       role,
       content,
     }))
 
-  it("nests what the subagent writes under the call that spawned it", () => {
-    const state = fold(
+  it("builds the card of the call that spawned it from the child Session", () => {
+    const state = inChild(announced, [
+      agentChunk("c1", "Looking"),
       [
-        [
-          {
-            sessionUpdate: "agent_message_chunk",
-            messageId: "a1",
-            content: { type: "text", text: "Looking" },
-          },
-          { ...TURN_META, ...CHILD },
-        ],
-        [
-          {
-            sessionUpdate: "tool_call_update",
-            toolCallId: "t2",
-            name: "web_search",
-            status: "in_progress",
-          },
-          { ...TOOL_META, ...CHILD },
-        ],
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "t2",
+          name: "web_search",
+          status: "in_progress",
+        },
+        { ...TURN_META, messageId: "c1" },
       ],
-      spawned
-    )
+    ])
+
     expect(toThreadMessages(state)).toHaveLength(1)
-    expect(toThreadMessages(state)[0]?.content).toHaveLength(1)
-    expect(childMessages(state)).toMatchObject([
+    expect(aosOf(state)?.subagent).toEqual({
+      id: CHILD_ID,
+      childSessionId: CHILD_ID,
+      goal: "Research the tiers",
+      status: "running",
+      depth: 1,
+      cancellable: true,
+      model: "opus",
+      filesRead: ["a.ts", "b.ts"],
+      filesWritten: ["c.ts"],
+      durationMs: 4000,
+      summary: "The tiers match.",
+    })
+    expect(nested(state)).toMatchObject([
       {
-        id: "sub-1",
+        id: "c1",
         role: "assistant",
         content: [
           { type: "text", text: "Looking" },
@@ -1939,100 +1977,179 @@ describe("applyUpdate subagents", () => {
     ])
   })
 
-  it("settles a nested call its update no longer attributes", () => {
-    const state = fold(
-      [
-        [
-          {
-            sessionUpdate: "tool_call_update",
-            toolCallId: "t2",
-            name: "web_search",
-          },
-          { ...TOOL_META, ...CHILD },
-        ],
-        [
-          {
-            sessionUpdate: "tool_call_update",
-            toolCallId: "t2",
-            status: "completed",
-            rawOutput: "found",
-          },
-          TOOL_META,
-        ],
-      ],
-      spawned
-    )
-    expect(childMessages(state)?.[0]?.content).toMatchObject([
-      { toolCallId: "t2", result: "found", isError: false },
-    ])
+  it.each([
+    [{ state: "running" }, "running"],
+    [{ state: "requires_action" }, "waiting"],
+    [{ state: "idle", stopReason: "end_turn" }, "completed"],
+    [{ state: "idle", stopReason: "cancelled" }, "cancelled"],
+    [
+      {
+        state: "idle",
+        stopReason: "error",
+        error: { code: -32603, message: "internal_error" },
+      },
+      "failed",
+    ],
+  ] as const)("reads a child's %o state as %s", (childState, status) => {
+    const state = fold([report({ state: childState })], announced)
+    expect(aosOf(state)?.subagent?.status).toBe(status)
   })
 
-  it("patches the subagent's status, tokens, and duration by id", () => {
+  it("patches what a later report restates, and replaces its capabilities whole", () => {
     const state = fold(
-      [
-        toolCall(
-          {},
-          {
-            ...TOOL_META,
-            subagent: {
-              id: "sub-1",
-              status: "completed",
-              tokens: 900,
-              durationMs: 4000,
-            },
-          }
-        ),
-      ],
-      spawned
+      [report({ title: null, capabilities: {} }, TURN_META)],
+      announced
     )
-    expect(aosOf(state)?.subagent).toEqual({
-      id: "sub-1",
-      goal: "Research",
+    expect(aosOf(state)?.subagent).toMatchObject({
+      goal: "Compare the pricing tiers",
+      cancellable: false,
+      model: "opus",
+      summary: "The tiers match.",
+    })
+  })
+
+  // A child's tokens are its own, so its settled usage counts for its card
+  // alone and never reaches its parent's turn.
+  it("counts the tokens the child's own settled state reports", () => {
+    const state = inChild(announced, [
+      stateUpdate({
+        state: "idle",
+        stopReason: "end_turn",
+        usage: { totalTokens: 900, inputTokens: 700, outputTokens: 200 },
+      }),
+    ])
+    expect(aosOf(state)?.subagent).toMatchObject({
       status: "completed",
       tokens: 900,
-      durationMs: 4000,
     })
+    expect(state.execution).toEqual(announced.execution)
   })
 
-  it("holds a child update until the spawning call it names appears", () => {
+  it("shows the child under its spawning call once that call appears", () => {
     const state = fold([
       agentChunk("a1", "Delegating"),
-      [
-        {
-          sessionUpdate: "agent_message_chunk",
-          messageId: "a1",
-          content: { type: "text", text: "Early" },
-        },
-        { ...TURN_META, ...CHILD },
-      ],
-      toolCall({ title: "delegate" }, SPAWN_META),
-    ])
-    expect(childMessages(state)).toMatchObject([
-      { id: "sub-1", content: [{ type: "text", text: "Early" }] },
+      report({ title: "Research the tiers" }),
+      spawnCall,
     ])
     expect(toThreadMessages(state)[0]?.content).toHaveLength(2)
+    expect(aosOf(state)?.subagent?.goal).toBe("Research the tiers")
   })
 
-  it("synthesizes a spawning call for a subagent the stream never announced", () => {
+  it("gives a child no call names a card of its own", () => {
     const state = fold([
       agentChunk("a1", "Working"),
+      report({ title: "Orphan" }, TURN_META, "child-9"),
+    ])
+    const card = toolPartOf(state, "aos-subagent-child-9")
+    expect(card?.toolName).toBe("subagent")
+    expect(readAosToolArtifact(card?.artifact)?.subagent).toMatchObject({
+      id: "child-9",
+      goal: "Orphan",
+    })
+  })
+
+  // A child announces its own children on itself, and each sends under its
+  // own id, which reaches this Session's projection the same way.
+  it("nests a child's own child under the call that spawned it", () => {
+    const state = inChild(
+      inChild(announced, [
+        [
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "t3",
+            name: "delegate_task",
+            status: "in_progress",
+          },
+          { ...TURN_META, messageId: "c1" },
+        ],
+        report(
+          { title: "Check one tier" },
+          { ...TURN_META, toolCallId: "t3" },
+          "child-2"
+        ),
+      ]),
+      [agentChunk("g1", "Checked")],
+      "child-2"
+    )
+    const childCall = toolPartOf(state)?.messages?.[0]?.content.find(
+      (part) => part.type === "tool-call" && part.toolCallId === "t3"
+    ) as ToolCallMessagePart | undefined
+    expect(readAosToolArtifact(childCall?.artifact)?.subagent).toMatchObject({
+      id: "child-2",
+      goal: "Check one tier",
+      depth: 2,
+    })
+    expect(childCall?.messages?.[0]?.content).toMatchObject([
+      { type: "text", text: "Checked" },
+    ])
+  })
+
+  it("keeps the updates of a child no report announced yet until one does", () => {
+    const early = inChild(fold([spawnCall]), [agentChunk("c1", "Early")])
+    expect(aosOf(early)?.subagent).toBeUndefined()
+
+    const state = fold([report({ title: "Research the tiers" })], early)
+    expect(nested(state)).toMatchObject([
+      { id: "c1", content: [{ type: "text", text: "Early" }] },
+    ])
+  })
+
+  it("lays the child's permission requests over its own transcript", () => {
+    const state = applyChildApprovals(
+      inChild(announced, [
+        [
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "t2",
+            name: "bash",
+            status: "pending",
+          },
+          { ...TURN_META, messageId: "c1" },
+        ],
+      ]),
+      CHILD_ID,
       [
         {
-          sessionUpdate: "agent_message_chunk",
-          messageId: "a1",
-          content: { type: "text", text: "Orphan" },
+          id: "child-permission",
+          toolCallId: "t2",
+          action: "Run bash",
+          options: [{ id: "once", kind: "allow-once" }],
         },
-        { ...TURN_META, subagentId: "sub-9" },
-      ],
+      ]
+    )
+    expect(nested(state)?.[0]?.content).toMatchObject([
+      {
+        toolCallId: "t2",
+        approval: { id: "child-permission", prompt: "Run bash" },
+      },
     ])
-    const spawn = toolPartOf(state, "aos-subagent-sub-9")
-    expect(spawn?.toolName).toBe("subagent")
-    expect(readAosToolArtifact(spawn?.artifact)?.subagent).toEqual({
-      id: "sub-9",
-    })
-    expect(spawn?.messages?.[0]?.content).toMatchObject([
-      { type: "text", text: "Orphan" },
+    expect(toThreadMessages(state)[0]?.content).toHaveLength(1)
+  })
+
+  // An older page announces its children on itself, while their transcripts
+  // reach the Session's own projection ahead of the page's answer.
+  it("keeps an older page's children, with the transcripts that reached them first", () => {
+    const current = inChild(fold([userChunk("u2", "Newer question")]), [
+      agentChunk("c1", "Looked"),
     ])
+    const older = fold([
+      userChunk("u1", "First question"),
+      spawnCall,
+      report({ title: "Research the tiers" }),
+    ])
+
+    const state = prependMessages(current, older)
+
+    expect(aosOf(state)?.subagent?.goal).toBe("Research the tiers")
+    expect(nested(state)).toMatchObject([
+      { id: "c1", content: [{ type: "text", text: "Looked" }] },
+    ])
+  })
+
+  it("forgets every child with the transcript a replay resends", () => {
+    const cleared = clearTranscript(announced)
+    expect(cleared.children).toBeUndefined()
+    expect(toolPartOf(fold([spawnCall], cleared))?.artifact).toBeUndefined()
   })
 })
 
@@ -2211,9 +2328,7 @@ describe("applyUpdate compaction", () => {
       stored("agent_message", "a1", "Started"),
     ])
 
-    expect(
-      toThreadMessages(prependMessages(current, older.messages))
-    ).toMatchObject([
+    expect(toThreadMessages(prependMessages(current, older))).toMatchObject([
       {
         id: "a1",
         content: [

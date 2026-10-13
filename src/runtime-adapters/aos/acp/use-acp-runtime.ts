@@ -55,6 +55,11 @@ import {
   threadHistoryExtras,
   type ThreadHistoryState,
 } from "@/runtime-adapters/thread-history"
+import {
+  childSessionExtras,
+  type ChildSessionControls,
+  type ChildSessionExtras,
+} from "@/runtime-adapters/child-sessions"
 
 import { createQueue, isBusyRefusal } from "./acp-message-queue"
 
@@ -63,7 +68,10 @@ let _runtimeLog: Logger | undefined
 const runtimeLog = () => (_runtimeLog ??= tabAcpLogger())
 import {
   applyApprovals,
+  applyChildApprovals,
+  applyChildUpdate,
   applyUpdate,
+  childSessions,
   clearTranscript,
   failedWithoutReply,
   failLatestTurn,
@@ -419,6 +427,21 @@ function createAcpController({
       if (approvals) commit(applyApprovals(state, approvals.list(next)))
     }
     takeApprovals()
+    // A child Session's requests are asked under its own id, so each child the
+    // Session announces is followed for them as long as the thread binds it.
+    const childApprovals = new Map<string, () => void>()
+    const takeChildApprovals = () => {
+      if (!approvals) return
+      for (const { sessionId } of childSessions(state)) {
+        const take = () =>
+          commit(
+            applyChildApprovals(state, sessionId, approvals.list(sessionId))
+          )
+        if (!childApprovals.has(sessionId))
+          childApprovals.set(sessionId, approvals.subscribe(sessionId, take))
+        take()
+      }
+    }
     const subscriptions = [
       callbacks.subscribeSession?.(next) ?? (() => {}),
       approvals?.subscribe(next, takeApprovals) ?? (() => {}),
@@ -429,9 +452,16 @@ function createAcpController({
             replacing === undefined ? state : clearTranscript(state, replacing)
           replacing = undefined
           commit(applyUpdate(base, update, meta))
+          if (update.sessionUpdate === "subagent_update") takeChildApprovals()
           // A replayed failure is already what the provider holds.
           if (replaying === 0 && failedWithoutReply(before, state))
             failUnanswered(next, generation, state.execution.error)
+        },
+        // A child Session's own updates arrive under its id, after the report
+        // that announced it, and its card shows them.
+        child: (childSessionId, update, meta) => {
+          commit(applyChildUpdate(state, childSessionId, update, meta))
+          if (update.sessionUpdate === "subagent_update") takeChildApprovals()
         },
         // The replay carries the Session whole: it replaces the transcript,
         // and a fresh cursor comes with it.
@@ -487,6 +517,7 @@ function createAcpController({
     ]
     unsubscribe = () => {
       for (const off of subscriptions) off()
+      for (const off of childApprovals.values()) off()
     }
     replaySession(next, generation).catch((err: unknown) =>
       runtimeLog().warn({ err }, "session.replay_failed")
@@ -609,7 +640,7 @@ function createAcpController({
           initialProjectorState
         )
         cursor = page.history
-        commit(prependMessages(state, older.messages))
+        commit(prependMessages(state, older))
       } catch {
         if (transcript === transcripts) olderFailed = true
       }
@@ -619,6 +650,24 @@ function createAcpController({
         notify()
       }
     }
+  }
+
+  /** A child's own controls: its requests are answered, and it stops, alone. */
+  const childControls: ChildSessionControls = {
+    respondToApproval: (approvalId, optionId, approved) => {
+      const owner = childSessions(state).find(({ sessionId }) =>
+        approvals?.list(sessionId).some(({ id }) => id === approvalId)
+      )
+      if (!approvals || !owner)
+        throw new Error(`Permission request "${approvalId}" is not pending`)
+      return approvals.respond(owner.sessionId, approvalId, optionId, approved)
+    },
+    cancel: (childSessionId) => {
+      const child = childSessions(state).find(
+        ({ sessionId }) => sessionId === childSessionId
+      )
+      if (child?.cancellable) connection.cancel(childSessionId)
+    },
   }
 
   connection.initialized.then(
@@ -653,6 +702,7 @@ function createAcpController({
     },
     getVersion: () => version,
     getState: () => shown,
+    childControls,
     isLoading: () => loading,
     getRepository: () => {
       if (repositoryOf !== shown) {
@@ -902,20 +952,23 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
     void steerItems
     const state = controller.getState()
     const history = controller.getHistory()
-    const extras: AcpRuntimeExtras & QueueControlsExtras = {
-      execution: state.execution,
-      todos: state.todos,
-      ...(state.configOptions === undefined
-        ? {}
-        : { configOptions: state.configOptions }),
-      ...(state.commands === undefined ? {} : { commands: state.commands }),
-      ...(history === undefined ? {} : { history }),
-      ...(binding && { queueControls: binding.controls }),
-    }
+    const extras: AcpRuntimeExtras & QueueControlsExtras & ChildSessionExtras =
+      {
+        execution: state.execution,
+        todos: state.todos,
+        ...(state.configOptions === undefined
+          ? {}
+          : { configOptions: state.configOptions }),
+        ...(state.commands === undefined ? {} : { commands: state.commands }),
+        ...(history === undefined ? {} : { history }),
+        ...(binding && { queueControls: binding.controls }),
+        childSessions: controller.childControls,
+      }
     // The thread reads older history and queue controls through their
     // provider-neutral channels, stamped on the same object.
     threadHistoryExtras.provide(extras)
     queueControlsExtras.provide(extras)
+    childSessionExtras.provide(extras)
     return {
       messageRepository: controller.getRepository(),
       isRunning: state.execution.status === "running",

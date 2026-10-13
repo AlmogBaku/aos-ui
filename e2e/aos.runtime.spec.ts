@@ -19,7 +19,7 @@ const ACP_PATH = "/api/v1/acp"
 const PENDING_PROMPT = "Keep running until I stop it"
 /** A prompt the scripted provider answers with `vocabularyTurn`. */
 const VOCABULARY_PROMPT = "Lengthen the trial and run the tests"
-/** The Session the scripted turn's subagent runs in. */
+/** The child Session the scripted turn's subagent runs in. */
 const CHILD_SESSION_ID = "session-2"
 /** A prompt whose turn asks permission to run the tool call it guards. */
 const GUARDED_PERMISSION_PROMPT = "Clean the build directory"
@@ -269,14 +269,16 @@ const vocabularyTurn = [
     content: [
       { type: "content", content: { type: "text", text: "The page matches." } },
     ],
-    _meta: onAnswer({
-      subagent: {
-        id: "subagent-1",
-        goal: "Check the pricing page",
-        status: "completed",
-        childSessionId: CHILD_SESSION_ID,
-      },
-    }),
+    _meta: onAnswer(),
+  },
+  // The subagent runs in a child Session the turn announces on its parent,
+  // naming the call that spawned it.
+  {
+    sessionUpdate: "subagent_update",
+    sessionId: CHILD_SESSION_ID,
+    title: "Check the pricing page",
+    state: { state: "idle", stopReason: "end_turn" },
+    _meta: { hgw: { toolCallId: "delegate-1" } },
   },
   // The gateway restates the model options when the provider switches models.
   {
@@ -351,6 +353,14 @@ const script = {
   pendingPrompt: PENDING_PROMPT,
   vocabularyPrompt: VOCABULARY_PROMPT,
   vocabularyTurn,
+  /** What the vocabulary turn's child Session sends under its own id. */
+  childTurn: [
+    {
+      sessionUpdate: "agent_message",
+      messageId: "child-answer",
+      content: [{ type: "text", text: "The pricing page matches the tiers." }],
+    },
+  ],
   guardedPermissionPrompt: GUARDED_PERMISSION_PROMPT,
   standalonePermissionPrompt: STANDALONE_PERMISSION_PROMPT,
   /** The guarded command the permission turn streams before it waits. */
@@ -677,6 +687,21 @@ function installAcpStub(script: AcpScript) {
     }
 
     /**
+     * One update of the child Session the scripted turn announced, under the
+     * child's own id and in its parent turn's sequence.
+     */
+    child(update: Record<string, unknown>) {
+      stub.sequence += 1
+      this.notify("session/update", {
+        sessionId: CHILD_SESSION_ID,
+        update: {
+          ...update,
+          _meta: { hgw: { sequence: stub.sequence, turnId: script.turnId } },
+        },
+      })
+    }
+
+    /**
      * The Session's row, models, and capabilities, which follow a resume's
      * answer as updates rather than riding in it.
      */
@@ -747,7 +772,7 @@ function installAcpStub(script: AcpScript) {
       // the `_hgw/position` cursor reports only what the dropped transport
       // missed. As the gateway does, any other cursor is invalid params.
       this.handlers.set("session/resume", (params, id) => {
-        // A subagent's own Session opens with nothing stored.
+        // Any other Session opens with nothing stored.
         if (params.sessionId !== script.sessionId)
           return this.respond(id, { _meta: { hgw: {} } })
         const replayFrom = asRecord(params.replayFrom)
@@ -866,11 +891,17 @@ function installAcpStub(script: AcpScript) {
           return
         }
         if (promptText(params).includes(script.vocabularyPrompt)) {
-          // A model switch is Session state, not a position in the run.
+          // A model switch is Session state, not a position in the run. A
+          // child Session sends its own updates once it is announced.
           for (const update of script.vocabularyTurn)
             if (update.sessionUpdate === "config_option_update")
               this.update(update)
-            else this.run(update)
+            else {
+              this.run(update)
+              if (update.sessionUpdate === "subagent_update")
+                for (const childUpdate of script.childTurn)
+                  this.child(childUpdate)
+            }
           busy = false
           // A settled turn restates the context window.
           this.update({ sessionUpdate: "usage_update", ...script.usage })
