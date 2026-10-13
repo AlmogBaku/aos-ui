@@ -2135,6 +2135,99 @@ describe("applyUpdate compaction", () => {
     ])
     expect(compactionParts(state)).toEqual([])
   })
+
+  /** A stored turn as a replay sends it: no run state, history's own turn. */
+  const STORED = { sequence: 0, turnId: "history" }
+  const stored = (
+    sessionUpdate: "user_message" | "agent_message",
+    messageId: string,
+    text: string
+  ): Entry => [
+    { sessionUpdate, messageId, content: [{ type: "text", text }] },
+    STORED,
+  ]
+  /** A stored compaction: OpenCode keeps its summary, Hermes none. */
+  const storedCompaction = (compactionId: string, summary?: string): Entry => [
+    {
+      sessionUpdate: "compaction_update",
+      compactionId,
+      status: "completed",
+      ...(summary === undefined
+        ? {}
+        : { summary: [{ type: "text", text: summary }] }),
+    },
+    STORED,
+  ]
+  const divider = (compactionId: string, summary?: string) => ({
+    type: "data",
+    name: COMPACTION_DATA_PART_NAME,
+    data: {
+      compactionId,
+      status: "completed",
+      ...(summary === undefined ? {} : { summary }),
+    },
+  })
+
+  // A replay sets no run state, so the reply it leads is the next turn, as
+  // the live run that compacted before writing showed it.
+  it("leads the reply to the prompt each replayed compaction follows", () => {
+    const state = fold([
+      stored("user_message", "u1", "Start"),
+      stored("agent_message", "a1", "Started"),
+      stored("user_message", "u2", "Go on"),
+      storedCompaction("c1", "Earlier turns set the plan."),
+      stored("agent_message", "a2", "Going on"),
+      stored("user_message", "u3", "Finish"),
+      storedCompaction("c2"),
+      stored("agent_message", "a3", "Finished"),
+    ])
+    expect(toThreadMessages(state)).toMatchObject([
+      { id: "u1" },
+      { id: "a1", content: [{ type: "text", text: "Started" }] },
+      { id: "u2" },
+      {
+        id: "a2",
+        content: [
+          divider("c1", "Earlier turns set the plan."),
+          { type: "text", text: "Going on" },
+        ],
+      },
+      { id: "u3" },
+      {
+        id: "a3",
+        content: [divider("c2"), { type: "text", text: "Finished" }],
+      },
+    ])
+  })
+
+  it("keeps the compaction an older page starts with beside the newest page's", () => {
+    const current = fold([
+      stored("user_message", "u2", "Go on"),
+      storedCompaction("c2"),
+      stored("agent_message", "a2", "Going on"),
+    ])
+    const older = fold([
+      storedCompaction("c1", "Earlier turns set the plan."),
+      stored("agent_message", "a1", "Started"),
+    ])
+
+    expect(
+      toThreadMessages(prependMessages(current, older.messages))
+    ).toMatchObject([
+      {
+        id: "a1",
+        content: [
+          divider("c1", "Earlier turns set the plan."),
+          { type: "text", text: "Started" },
+        ],
+      },
+      { id: "u2" },
+      {
+        id: "a2",
+        content: [divider("c2"), { type: "text", text: "Going on" }],
+      },
+    ])
+  })
 })
 
 describe("applyApprovals", () => {

@@ -208,6 +208,7 @@ function onMessage(
   // Re-keying the host keeps its place and the pending status it carries; the
   // run's own state settles it under the id the provider streamed.
   const renamed = host === undefined ? state : renameMessage(state, host, id)
+  const ownHost = host !== undefined && host === state.activeAssistantId
   const opened = fresh && state.execution.status === "running"
   // A run moves on from the turn it had open only when that turn was one a
   // resume reopened, so that turn has written all it will.
@@ -240,9 +241,7 @@ function onMessage(
       )
     )
   )
-  return opened || host !== undefined
-    ? { ...next, activeAssistantId: id }
-    : next
+  return opened || ownHost ? { ...next, activeAssistantId: id } : next
 }
 
 /** The role of the message `id` follows, or would follow once appended. */
@@ -292,22 +291,39 @@ const requestHostId = (turnId: string | undefined) =>
   `${REQUEST_HOST_PREFIX}${turnId ?? "current"}`
 
 /**
- * The hosted turn the run's own first turn takes over: one this projection
- * synthesized for a request and the run has written nothing into. A host
- * that already carries content is the run's turn, so it stays where it is.
+ * The hosted turn a fresh assistant turn takes over: one this projection
+ * synthesized and nothing has written into. While a run has one open, it is
+ * the run's own first turn that takes it over. Outside a run, it is the
+ * compaction the transcript ends on, which a replay places ahead of the reply
+ * to the prompt it follows, as the live run did. A host that already carries
+ * content is a turn of its own, so it stays where it is.
  */
 function emptyRequestHostId(state: ProjectorState): string | undefined {
-  const id = state.activeAssistantId
-  if (id === undefined || !id.startsWith(REQUEST_HOST_PREFIX)) return undefined
-  const host = state.messages.find((message) => message.id === id)
-  return host?.parts.every(isHostedStatus) ? id : undefined
+  const active = state.activeAssistantId
+  if (active !== undefined) return emptyHost(state, active, isHostedStatus)
+  const last = state.messages.at(-1)
+  return state.execution.status === "running" || last === undefined
+    ? undefined
+    : emptyHost(state, last.id, isCompaction)
 }
+
+function emptyHost(
+  state: ProjectorState,
+  id: string,
+  isHosted: (part: ProjectedMessage["parts"][number]) => boolean
+) {
+  if (!id.startsWith(REQUEST_HOST_PREFIX)) return undefined
+  const host = state.messages.find((message) => message.id === id)
+  return host?.parts.every(isHosted) ? id : undefined
+}
+
+const isCompaction = (part: ProjectedMessage["parts"][number]) =>
+  part.source === "data" && part.name === COMPACTION_DATA_PART_NAME
 
 /** A compaction or notice the host shows ahead of the run's turn moves with it. */
 const isHostedStatus = (part: ProjectedMessage["parts"][number]) =>
-  part.source === "data" &&
-  (part.name === COMPACTION_DATA_PART_NAME ||
-    part.name === NOTICE_DATA_PART_NAME)
+  isCompaction(part) ||
+  (part.source === "data" && part.name === NOTICE_DATA_PART_NAME)
 
 /**
  * A tool call belongs to the turn that already holds it: a provider settles a
@@ -489,7 +505,11 @@ const compactionOf = (id: string) => (name: string, data: unknown) =>
 /**
  * A compaction reads where it happened: at first sight it takes its place
  * among the turn's parts, and every later report updates that one divider. A
- * cancelled one compacted nothing, so its divider leaves the turn.
+ * cancelled one compacted nothing, so its divider leaves the turn. One that
+ * comes before a turn's first part leads that turn: the run's own host, live,
+ * and outside a run, as a replay or an older page sends a stored one, a host
+ * of its own that the reply to the prompt before it takes over. That host is
+ * named for the compaction, so no two pages share it.
  */
 function applyCompaction(
   state: ProjectorState,
@@ -523,12 +543,14 @@ function applyCompaction(
     )
   const parsed = HgwTurnMetaSchema.safeParse(meta)
   const turnId = parsed.success ? parsed.data.turnId : state.execution.turnId
+  const last = state.messages.at(-1)
   const id =
     activeAssistantId(state) ??
     (state.execution.status === "running"
-      ? undefined
-      : latestAssistantId(state.messages)) ??
-    requestHostId(turnId)
+      ? requestHostId(turnId)
+      : last?.role === "assistant"
+        ? last.id
+        : requestHostId(compactionId))
   return onMessage(state, id, "assistant", (message) =>
     appendData(message, COMPACTION_DATA_PART_NAME, data)
   )
