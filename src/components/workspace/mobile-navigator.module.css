@@ -16,9 +16,12 @@
   border-block-end: 1px solid var(--border);
 }
 
+/* Each view focuses its heading to announce itself; like the Activity
+   drawer's, it is no control, so it draws no ring after a swipe opens it. */
 .header h2,
 .agentIdentity h2 {
   margin: 0;
+  outline: none;
 }
 
 .header h2,

@@ -654,6 +654,9 @@
   padding: 0.625rem;
 }
 
+/* The drawer slides with the pane motion, and a swipe moves it with the
+   finger: Base UI sets the swipe variables and drops the transition while the
+   finger is down. */
 .drawerLayer {
   position: fixed;
   inset: 0;
@@ -662,10 +665,17 @@
 }
 
 .drawerScrim {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  border: 0;
+  z-index: 30;
   background: var(--workspace-drawer-scrim);
+  opacity: calc(1 - var(--drawer-swipe-progress, 0));
+  transition: opacity var(--workspace-pane-duration) var(--workspace-pane-ease);
+}
+
+.drawerScrim[data-starting-style],
+.drawerScrim[data-ending-style] {
+  opacity: 0;
 }
 
 .drawer {
@@ -677,6 +687,39 @@
   background: var(--sidebar);
   box-shadow: var(--workspace-drawer-shadow);
   outline: none;
+  transform: translateX(var(--drawer-swipe-movement-x, 0px));
+  transition: transform var(--workspace-pane-duration)
+    var(--workspace-pane-ease);
+}
+
+/* Off its own physical edge before it opens and while it closes. */
+.drawer[data-swipe-direction="left"]:is(
+    [data-starting-style],
+    [data-ending-style]
+  ) {
+  transform: translateX(-100%);
+}
+
+.drawer[data-swipe-direction="right"]:is(
+    [data-starting-style],
+    [data-ending-style]
+  ) {
+  transform: translateX(100%);
+}
+
+.drawer[data-swiping],
+.drawerScrim[data-swiping] {
+  transition-duration: 0ms;
+}
+
+/* The navigator opens from the phone's inline-start edge, below the header so
+   its menu button keeps every tap. */
+.drawerSwipeArea {
+  position: fixed;
+  inset-block: calc(3.5rem + env(safe-area-inset-top)) 0;
+  inset-inline-start: 0;
+  z-index: 20;
+  inline-size: 1rem;
 }
 
 .drawer[data-side="start"] {
@@ -772,7 +815,9 @@
   }
 
   .mobileHeader,
-  .drawerLayer:not([data-desktop]) {
+  .drawerLayer:not([data-desktop]),
+  .drawerScrim:not([data-desktop]),
+  .drawerSwipeArea:not([data-desktop]) {
     display: none;
   }
 
@@ -1018,7 +1063,9 @@
   .shell,
   .tabBar,
   .shell[data-tabs-replaced="true"] .tabBar,
-  .desktopInspector[data-collapsed="true"] {
+  .desktopInspector[data-collapsed="true"],
+  .drawer,
+  .drawerScrim {
     transition: none;
   }
 }

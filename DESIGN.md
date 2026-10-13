@@ -316,9 +316,11 @@ standard component cannot express and record that reason.
   status dot of its single creator-owned Session.
 - **Narrow capacity:** below 64rem the tab strip is hidden and a two-level
   logical-start drawer (Agent roster → Sessions for the selected Agent)
-  provides Session navigation. Choosing a Session dismisses the drawer
-  immediately; merely browsing does not mark anything read. Preserve focus
-  restoration on drawer close.
+  provides Session navigation. The menu button opens it, and so does a swipe
+  in from the logical-start edge below the header, which the drawer follows;
+  every drawer closes on a swipe back toward its own edge. Choosing a Session
+  dismisses the drawer immediately; merely browsing does not mark anything
+  read. Preserve focus restoration on drawer close.
 
 #### Session status dots
 
@@ -580,8 +582,10 @@ assistant's answer.
 - **Normal preference:** status changes, drawers, dialogs, accordions, and Todos
   progress may transition to clarify a state change.
 - **Reduced preference:** alert dialogs, accordions, Todos progress, workspace
-  controls, and rich presentation fallbacks intentionally remove animation or
-  transitions while preserving visible state and focus behavior.
+  controls, drawers, and rich presentation fallbacks intentionally remove
+  animation or transitions while preserving visible state and focus behavior.
+  A drawer still follows the finger during a swipe, which is direct
+  manipulation rather than animation.
 
 - **Agent tile:** the pair sensor follows a fine pointer and blinks while the
   Agent runs. While the Agent waits on the person, the pair looks away and

@@ -631,7 +631,7 @@ describe("WorkspaceShell", () => {
     await user.tab({ shift: true })
     const settings = () =>
       within(drawer).getByRole("button", { name: en.activity.settings })
-    expect(settings()).toHaveFocus()
+    await waitFor(() => expect(settings()).toHaveFocus())
     await user.keyboard("{Enter}")
     expect(
       within(drawer).getByRole("heading", { name: en.activity.settings })
@@ -646,7 +646,7 @@ describe("WorkspaceShell", () => {
     )
     expect(settings()).toHaveFocus()
     await user.tab()
-    expect(close).toHaveFocus()
+    await waitFor(() => expect(close).toHaveFocus())
     await user.keyboard("{Escape}")
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     expect(triggers[0]).toHaveFocus()
