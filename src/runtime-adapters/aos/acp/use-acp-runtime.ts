@@ -660,13 +660,13 @@ function createAcpController({
 
   /** A child's own controls: its requests are answered, and it stops, alone. */
   const childControls: ChildSessionControls = {
-    respondToApproval: (approvalId, optionId, approved) => {
-      const owner = childSessions(state).find(({ sessionId }) =>
-        approvals?.list(sessionId).some(({ id }) => id === approvalId)
+    respondToApproval: (childSessionId, approvalId, optionId, approved) => {
+      const known = childSessions(state).some(
+        ({ sessionId }) => sessionId === childSessionId
       )
-      if (!approvals || !owner)
+      if (!approvals || !known)
         throw new Error(`Permission request "${approvalId}" is not pending`)
-      return approvals.respond(owner.sessionId, approvalId, optionId, approved)
+      return approvals.respond(childSessionId, approvalId, optionId, approved)
     },
     cancel: (childSessionId) => {
       const child = childSessions(state).find(

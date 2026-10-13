@@ -1375,40 +1375,63 @@ describe("useAcpRuntime child Sessions", () => {
     expect(childText(result.current)).toEqual(["Reading the logs"])
   })
 
-  it("answers a child's permission request on the child, from its parent's thread", async () => {
+  // Request ids are the gateway's, and two children may each ask under the
+  // same one, so an answer names the child whose card it was given on.
+  it("answers a child's permission request on that child alone, from its parent's thread", async () => {
     const fake = createFakeConnection()
     const approvals = createAcpApprovals({ connection: fake.connection })
     const { result } = await mount(fake, { approvals })
     spawned(fake)
-    let respond!: ReturnType<Fake["requestPermission"]>
-    act(() => {
+    const asks = (childId: string) => {
       fake.emitChild(
-        CHILD_ID,
+        childId,
         {
           sessionUpdate: "tool_call_update",
-          toolCallId: "t2",
+          toolCallId: `${childId}-bash`,
           name: "bash",
           status: "pending",
         },
-        { ...TURN_META, messageId: "c1" }
+        { ...TURN_META, messageId: `${childId}-turn` }
       )
-      respond = fake.requestPermission("t2", CHILD_ID)
+      return fake.requestPermission(`${childId}-bash`, childId)
+    }
+    let first!: ReturnType<Fake["requestPermission"]>
+    let second!: ReturnType<Fake["requestPermission"]>
+    act(() => {
+      fake.emit({ ...spawn, toolCallId: "t3" }, SPAWN_META)
+      fake.emit(report({ sessionId: "child-2" }), {
+        ...TURN_META,
+        toolCallId: "t3",
+      })
+      first = asks(CHILD_ID)
+      second = asks("child-2")
     })
-    const approvalOf = () => {
-      const part = spawnPart(result.current)
+    const approvalOf = (toolCallId: string) => {
+      const part = result.current.thread
+        .getMessageByIndex(0)
+        .getMessagePartByToolCallId(toolCallId)
+        .getState()
       const nested = part.type === "tool-call" ? part.messages?.[0] : undefined
       const call = nested?.content.find((item) => item.type === "tool-call")
       return call?.type === "tool-call" ? call.approval : undefined
     }
-    expect(approvalOf()).toMatchObject({ id: "interrupt-1" })
+    expect(approvalOf("t1")).toMatchObject({ id: "interrupt-1" })
+    expect(approvalOf("t3")).toMatchObject({ id: "interrupt-1" })
 
     await act(() =>
-      controlsOf(result.current)!.respondToApproval("interrupt-1", "once", true)
+      controlsOf(result.current)!.respondToApproval(
+        "child-2",
+        "interrupt-1",
+        "once",
+        true
+      )
     )
-    expect(respond).toHaveBeenCalledWith({
+    expect(second).toHaveBeenCalledWith({
       outcome: { outcome: "selected", optionId: "once" },
     })
-    expect(approvalOf()).toMatchObject({ optionId: "once", approved: true })
+    expect(first).not.toHaveBeenCalled()
+    expect(approvalOf("t3")).toMatchObject({ optionId: "once", approved: true })
+    expect(approvalOf("t1")).not.toHaveProperty("optionId")
   })
 
   it("stops a child alone only where the child offers that", async () => {

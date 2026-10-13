@@ -22,6 +22,8 @@ import type {
 } from "@/runtime-adapters/contracts"
 import { withAosToolArtifact, type AosSubagent } from "@/lib/tool-artifact"
 
+import type { ChildSessionControls } from "@/runtime-adapters/child-sessions"
+
 import { ChildSessionControlsProvider } from "./child-session-controls"
 import {
   AosToolPresentation,
@@ -383,7 +385,9 @@ describe("subagents", () => {
       },
     ]
     const controls = () => ({
-      respondToApproval: vi.fn(async () => {}),
+      respondToApproval: vi.fn<ChildSessionControls["respondToApproval"]>(
+        async () => {}
+      ),
       cancel: vi.fn(),
     })
 
@@ -417,7 +421,27 @@ describe("subagents", () => {
       expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
     })
 
-    it("answers the child's permission request on the card", async () => {
+    /** A call in the child's transcript that asks a permission. */
+    const asking = (toolCallId: string, prompt: string) =>
+      ({
+        type: "tool-call",
+        toolCallId,
+        toolName: "bash",
+        args: { command: "rm -rf build" },
+        argsText: "{}",
+        approval: {
+          id: "child-permission",
+          prompt,
+          options: [
+            { id: "once", kind: "allow-once" },
+            { id: "deny", kind: "reject-once" },
+          ],
+        },
+      }) as const
+
+    // The child's own child asks under the same request id, and each answer
+    // goes to the Session its request came from.
+    it("answers each permission request on the child Session that asked it", async () => {
       const user = userEvent.setup()
       const child = controls()
       render(
@@ -426,20 +450,26 @@ describe("subagents", () => {
             toolFallback={AosToolPresentation}
             initialMessages={threadWith(running, [
               childTurn([
+                asking("child-bash", "Delete the build directory?"),
                 {
                   type: "tool-call",
-                  toolCallId: "child-bash",
-                  toolName: "bash",
-                  args: { command: "rm -rf build" },
+                  toolCallId: "grandchild-spawn",
+                  toolName: "delegate_task",
+                  args: {},
                   argsText: "{}",
-                  approval: {
-                    id: "child-permission",
-                    prompt: "Delete the build directory?",
-                    options: [
-                      { id: "once", kind: "allow-once" },
-                      { id: "deny", kind: "reject-once" },
-                    ],
-                  },
+                  artifact: withAosToolArtifact(undefined, {
+                    subagent: {
+                      id: "grandchild",
+                      childSessionId: "session-grandchild",
+                      status: "running",
+                    },
+                  }),
+                  messages: [
+                    childTurn(
+                      [asking("grandchild-bash", "Delete the cache?")],
+                      "grandchild-answer"
+                    ),
+                  ],
                 },
               ]),
             ])}
@@ -451,11 +481,16 @@ describe("subagents", () => {
         name: "Delete the build directory?",
       })
       await user.click(within(choices).getByRole("button", { name: "Reject" }))
-      expect(child.respondToApproval).toHaveBeenCalledExactlyOnceWith(
-        "child-permission",
-        "deny",
-        false
+      const nestedChoices = await screen.findByRole("group", {
+        name: "Delete the cache?",
+      })
+      await user.click(
+        within(nestedChoices).getByRole("button", { name: "Allow once" })
       )
+      expect(child.respondToApproval.mock.calls).toEqual([
+        [CHILD_ID, "child-permission", "deny", false],
+        ["session-grandchild", "child-permission", "once", true],
+      ])
     })
 
     it("answers the child's question on the card", async () => {

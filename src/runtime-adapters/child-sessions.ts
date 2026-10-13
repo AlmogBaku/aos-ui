@@ -6,8 +6,12 @@ import { createRuntimeExtras } from "@assistant-ui/core/react"
  * and a child that offers to be stopped alone stops while its parent runs on.
  */
 export type ChildSessionControls = {
-  /** Answers a permission request one of the thread's child Sessions asked. */
+  /**
+   * Answers a permission request on the child Session that asked it: request
+   * ids are the gateway's, so two children may each ask under the same one.
+   */
   readonly respondToApproval: (
+    childSessionId: string,
     approvalId: string,
     optionId: string,
     approved: boolean

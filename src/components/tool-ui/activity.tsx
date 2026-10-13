@@ -295,19 +295,29 @@ type NestedToolCall = Extract<
   { type: "tool-call" }
 >
 
+/** A permission request, with the child Session that asked it. */
+type ChildApprovalRequest = { sessionId: string; call: NestedToolCall }
+
 /**
  * The permission requests the child Session, or a child of its own, asked on
- * its own calls, wherever its transcript nests them.
+ * its own calls, wherever its transcript nests them, each with the Session
+ * whose transcript holds it.
  */
 function childApprovals(
+  sessionId: string,
   messages: readonly ThreadMessage[] | undefined
-): NestedToolCall[] {
+): ChildApprovalRequest[] {
   return (messages ?? []).flatMap((message) =>
-    message.content.flatMap((part) =>
-      part.type === "tool-call"
-        ? [...(part.approval ? [part] : []), ...childApprovals(part.messages)]
-        : []
-    )
+    message.content.flatMap((part) => {
+      if (part.type !== "tool-call") return []
+      const nested = readAosToolArtifact(part.artifact)?.subagent
+      return [
+        ...(part.approval ? [{ sessionId, call: part }] : []),
+        ...(nested?.childSessionId
+          ? childApprovals(nested.childSessionId, part.messages)
+          : []),
+      ]
+    })
   )
 }
 
@@ -346,7 +356,9 @@ function ChildRequests({
   controls: ChildSessionControls | undefined
 }) {
   const interactions = useRuntimeInteractions()
-  const approvals = controls ? childApprovals(part.messages) : []
+  const approvals = controls
+    ? childApprovals(childSessionId, part.messages)
+    : []
   const sessions = interactions
     ? childSessionIds(childSessionId, part.messages)
     : []
@@ -354,10 +366,11 @@ function ChildRequests({
   return (
     <div className="flex flex-col gap-2 pb-2 empty:hidden">
       {controls
-        ? approvals.map((approval) => (
+        ? approvals.map(({ sessionId, call }) => (
             <ChildApproval
-              key={approval.toolCallId}
-              call={approval}
+              key={`${sessionId}:${call.toolCallId}`}
+              sessionId={sessionId}
+              call={call}
               controls={controls}
             />
           ))
@@ -377,9 +390,11 @@ function ChildRequests({
 
 /** A child's permission request, answered on the child it was asked in. */
 function ChildApproval({
+  sessionId,
   call,
   controls,
 }: {
+  sessionId: string
   call: NestedToolCall
   controls: ChildSessionControls
 }) {
@@ -398,7 +413,12 @@ function ChildApproval({
         "approved" in response
           ? response.approved
           : !option.kind.startsWith("reject")
-      return controls.respondToApproval(approval.id, optionId, approved)
+      return controls.respondToApproval(
+        sessionId,
+        approval.id,
+        optionId,
+        approved
+      )
     },
   }
   const { labels } = useToolUiLocale()
