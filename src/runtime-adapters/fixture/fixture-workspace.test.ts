@@ -79,7 +79,7 @@ describe("FixtureWorkspace", () => {
     ])
   })
 
-  it("round-trips read state: markSessionRead clears, markSessionUnread restores, each publishes once; unknown Session rejects", async () => {
+  it("round-trips read state and republishes its metadata once per change", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const published: SessionMetadata[][] = []
     const stop = workspace.subscribeSessionMetadata(
@@ -101,31 +101,30 @@ describe("FixtureWorkspace", () => {
     await expect(
       workspace.getSessionMetadata(["thread-lumen-roadmap"])
     ).resolves.toEqual([expect.objectContaining({ unread: false })])
+    expect(published).toEqual([
+      await workspace.getSessionMetadata([
+        "thread-lumen-roadmap",
+        "thread-nori-copy",
+      ]),
+    ])
+
+    await workspace.markSessionRead("thread-lumen-roadmap")
+    await workspace.markSessionRead("missing")
     expect(published).toHaveLength(1)
 
-    // markSessionUnread restores the flag and publishes once more
+    await workspace.markSessionUnread("thread-lumen-roadmap")
     await workspace.markSessionUnread("thread-lumen-roadmap")
     await expect(
       workspace.getSessionMetadata(["thread-lumen-roadmap"])
     ).resolves.toEqual([expect.objectContaining({ unread: true })])
     expect(published).toHaveLength(2)
+    await expect(workspace.markSessionUnread("missing")).rejects.toThrow(
+      "Session not found"
+    )
 
-    // Idempotent: already unread, no third publish
-    await workspace.markSessionUnread("thread-lumen-roadmap")
-    expect(published).toHaveLength(2)
-
-    // markSessionRead is idempotent when already read
-    await workspace.markSessionRead("thread-lumen-roadmap")
-    await workspace.markSessionRead("thread-lumen-roadmap")
-    expect(published).toHaveLength(3)
-
-    // Missing Session rejects; unsubscribed listener receives nothing
-    await expect(
-      workspace.markSessionUnread("missing")
-    ).rejects.toThrow("Session not found")
     stop()
     await workspace.markSessionRead("thread-nori-copy")
-    expect(published).toHaveLength(3)
+    expect(published).toHaveLength(2)
   })
 
   it("keeps the seeded pin and archival authoritative", async () => {
