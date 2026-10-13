@@ -71,6 +71,8 @@ import {
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { Locale, LocaleDirection } from "@/lib/i18n/config"
 import { useQueueControlsExtras } from "@/runtime-adapters/queue-controls"
+import { useChildSessionExtras } from "@/runtime-adapters/child-sessions"
+import { ChildSessionControlsProvider } from "@/components/tool-ui/child-session-controls"
 import {
   matchLocalCommand,
   menuSlashCommands,
@@ -470,19 +472,37 @@ export const Thread: FC<ThreadProps> = ({
           <MessageRewindContext.Provider value={messageRewind}>
             <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
               <ThreadComponentsContext.Provider value={components}>
-                <CompactionDataUI />
-                <NoticeDataUI />
-                <ThreadRoot
-                  isEmpty={isEmpty}
-                  autoFocus={autoFocus}
-                  direction={direction}
-                />
+                <ThreadChildSessionControls>
+                  <CompactionDataUI />
+                  <NoticeDataUI />
+                  <ThreadRoot
+                    isEmpty={isEmpty}
+                    autoFocus={autoFocus}
+                    direction={direction}
+                  />
+                </ThreadChildSessionControls>
               </ThreadComponentsContext.Provider>
             </ThreadComposerFeaturesContext.Provider>
           </MessageRewindContext.Provider>
         </AttachmentLabelsContext.Provider>
       </ThreadDirectionContext.Provider>
     </ThreadLabelsContext.Provider>
+  )
+}
+
+/**
+ * Hands the runtime's child Session controls to the subagent cards the thread
+ * renders, which sit below Assistant UI's tool parts.
+ */
+function ThreadChildSessionControls({ children }: { children: ReactNode }) {
+  const controls = useChildSessionExtras(
+    (extras) => extras.childSessions,
+    undefined
+  )
+  return (
+    <ChildSessionControlsProvider controls={controls}>
+      {children}
+    </ChildSessionControlsProvider>
   )
 }
 

@@ -508,8 +508,11 @@ assistant's answer.
 - **Usage stays in the composer:** the last turn's tokens and the Session cost
   appear only in the composer's context popover; messages carry no numbers.
 - **Subagents stay visible:** a subagent's work nests under the call that
-  spawned it, outside the fold, with its goal, status, and counts, and offers
-  its child Session when the workspace knows it.
+  spawned it, outside the fold, with its goal, status, counts, and summary.
+  A subagent with a child Session answers that Session's permission requests
+  and questions on its card, offers Stop only where the child can be stopped
+  alone, and opens the child's transcript to read only, never as a Session of
+  its own.
 - **Preserve fidelity:** retain provider order and lifecycle, render each piece
   of content once, and degrade to an honest inspectable fallback when richer
   presentation is unavailable.

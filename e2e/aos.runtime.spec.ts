@@ -1274,25 +1274,7 @@ test("Gateway loads a long Session's earlier messages as the reader scrolls up, 
 test("Gateway renders a turn's tools, diff, terminal, compaction, subagent, stop and usage from the wire", async ({
   page,
 }) => {
-  await serveAcp(page, {
-    sessions: [
-      ...script.sessions,
-      {
-        sessionId: CHILD_SESSION_ID,
-        cwd: "/srv/demo",
-        title: "Pricing page check",
-        updatedAt: "2026-09-11T00:00:00.000Z",
-        _meta: {
-          hgw: {
-            agentId: AGENT_ID,
-            status: "idle",
-            archived: false,
-            unread: false,
-          },
-        },
-      },
-    ],
-  })
+  await serveAcp(page)
   await page.goto("/")
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await collapseInspector(page)
@@ -1365,14 +1347,19 @@ test("Gateway renders a turn's tools, diff, terminal, compaction, subagent, stop
     await expect(page.getByText(shown, { exact: true })).toBeVisible()
   await page.keyboard.press("Escape")
 
-  // The subagent's own Session opens in place from its activity.
-  await page.getByRole("link", { name: "Open session" }).click()
+  // The subagent's child Session opens from its activity to read, from what
+  // its parent's turn carried: nothing loads or resumes the child.
+  await page.getByRole("button", { name: "Open session", exact: true }).click()
+  const childSession = page.getByRole("dialog", {
+    name: "Check the pricing page",
+  })
   await expect(
-    page.getByRole("tab", { name: "Pricing page check" })
-  ).toHaveAttribute("aria-selected", "true")
-  await expect
-    .poll(async () => (await resumes(page)).map((call) => call.sessionId))
-    .toContain(CHILD_SESSION_ID)
+    childSession.getByText("The pricing page matches the tiers.")
+  ).toBeVisible()
+  await expect(childSession.getByRole("textbox")).toHaveCount(0)
+  expect((await resumes(page)).map((call) => call.sessionId)).not.toContain(
+    CHILD_SESSION_ID
+  )
 })
 
 test("Gateway answers a permission request on the tool call it guards, and one that stands alone", async ({

@@ -24,7 +24,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
-import { useLocation } from "react-router"
 
 import {
   Thread,
@@ -33,18 +32,12 @@ import {
 import type { ComposerLocalCommand } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
-import { workspaceHref } from "@/lib/workspace-routing"
 import {
   McpAppPipPanel,
   useMcpAppPip,
 } from "@/components/mcp-apps/mcp-app-card"
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
-import {
-  AosToolPresentation,
-  ToolUiLocaleProvider,
-  ToolUiSessionLinkProvider,
-  type ToolUiSessionLinkResolver,
-} from "@/components/tool-ui"
+import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
@@ -500,7 +493,6 @@ function WorkspaceContent({
   composer?: ThreadComponents["Composer"]
 }) {
   const { assistantRuntime: runtime, workspace } = bundle
-  const location = useLocation()
   const {
     environmentLabel,
     activityCoverage,
@@ -699,29 +691,6 @@ function WorkspaceContent({
     onActionError: (reason) => setActionError(toError(reason)),
   })
 
-  // A subagent's child Session opens in place when the catalog knows its Agent.
-  // The resolver follows the URL text, not the router's location object, which
-  // is replaced by navigations that leave the URL as it was.
-  const currentPath = `${location.pathname}${location.search}${location.hash}`
-  const toolSessionLink: ToolUiSessionLinkResolver = (sessionId) => {
-    const agentId = sessions.find(
-      (session) => session.sessionId === sessionId
-    )?.agentId
-    if (!agentId) return undefined
-    return {
-      href: workspaceHref(`${window.location.origin}${currentPath}`, {
-        agentId,
-        sessionId,
-      }),
-      open: () => {
-        setPreferredAgentId(agentId)
-        openSession(sessionId, agentId).catch((reason: unknown) =>
-          setActionError(toError(reason))
-        )
-      },
-    }
-  }
-
   return (
     <AssistantRuntimeProvider runtime={runtime} config={assistantConfig}>
       <ArtifactWorkspaceBridge
@@ -814,30 +783,28 @@ function WorkspaceContent({
               </div>
             ) : selectedAgent && conversationThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
-                <ToolUiSessionLinkProvider sessionLink={toolSessionLink}>
-                  {/* A reset key, not a React key: a key would remount the
-                      Thread on every switch and lose its composer state. */}
-                  <LazyVisualBoundary
-                    resetKey={conversationThreadId}
-                    fallback={
-                      <p
-                        className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
-                        role="alert"
-                      >
-                        {workspaceCopy[locale].sessionUnavailable}
-                      </p>
-                    }
-                  >
-                    <Thread
-                      autoFocus={false}
-                      direction={getLocaleDirection(locale)}
-                      labels={threadLabels[locale]}
-                      composerFeatures={threadComposerFeatures}
-                      messageRewind={bundle.messageRewind}
-                      components={activeThreadComponents}
-                    />
-                  </LazyVisualBoundary>
-                </ToolUiSessionLinkProvider>
+                {/* A reset key, not a React key: a key would remount the
+                    Thread on every switch and lose its composer state. */}
+                <LazyVisualBoundary
+                  resetKey={conversationThreadId}
+                  fallback={
+                    <p
+                      className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
+                      role="alert"
+                    >
+                      {workspaceCopy[locale].sessionUnavailable}
+                    </p>
+                  }
+                >
+                  <Thread
+                    autoFocus={false}
+                    direction={getLocaleDirection(locale)}
+                    labels={threadLabels[locale]}
+                    composerFeatures={threadComposerFeatures}
+                    messageRewind={bundle.messageRewind}
+                    components={activeThreadComponents}
+                  />
+                </LazyVisualBoundary>
               </WorkspaceThreadChromeContext.Provider>
             ) : (
               <NoAgentEmpty
