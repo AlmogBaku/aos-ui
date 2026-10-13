@@ -87,7 +87,7 @@ describe("useSessionNotice", () => {
     report("joining")
     act(() => vi.advanceTimersByTime(RECONNECTING_NOTICE_GRACE_MS - 1))
     expect(result.current).toBeUndefined()
-    // A refused rejoin waiting out its backoff is still a rejoin.
+    // A rejoin the SDK reports as unavailable after a loss still reads as one.
     report("unavailable")
     act(() => vi.advanceTimersByTime(1))
     expect(result.current).toBe("reconnecting")

@@ -53,9 +53,12 @@ export type SessionNotice = "unavailable" | "reconnecting"
  * the Session is gone, and `reconnecting` once the connection was lost while
  * the Session was joined and it has not joined again (nor gone) past the grace
  * the connection's notice waits. A Session that leaves `joined` with no loss,
- * such as a replay the browser asked for or a join the gateway refused, has no
- * reconnect to report, and neither has a first open. The loss is forgotten
- * once the Session joins.
+ * such as a replay the browser asked for, has no reconnect to report, and
+ * neither has a first open. The loss is forgotten once the Session joins.
+ *
+ * Known limit: the SDK reports a join it retries and one the gateway refused
+ * both as `unavailable`, so a rejoin refused after a loss keeps reading as
+ * reconnecting until the next transport rejoins it.
  */
 export function useSessionNotice(
   connection: AcpConnection,
