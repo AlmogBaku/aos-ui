@@ -353,6 +353,8 @@ const script = {
   pendingPrompt: PENDING_PROMPT,
   vocabularyPrompt: VOCABULARY_PROMPT,
   vocabularyTurn,
+  /** The child Session the vocabulary turn announces. */
+  childSessionId: CHILD_SESSION_ID,
   /** What the vocabulary turn's child Session sends under its own id. */
   childTurn: [
     {
@@ -692,8 +694,9 @@ function installAcpStub(script: AcpScript) {
      */
     child(update: Record<string, unknown>) {
       stub.sequence += 1
+      // The stub runs in the page, which sees only what `script` carries.
       this.notify("session/update", {
-        sessionId: CHILD_SESSION_ID,
+        sessionId: script.childSessionId,
         update: {
           ...update,
           _meta: { hgw: { sequence: stub.sequence, turnId: script.turnId } },
