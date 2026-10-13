@@ -493,6 +493,48 @@ describe("subagents", () => {
       ])
     })
 
+    it("answers a permission request the child asked before writing anything", async () => {
+      const user = userEvent.setup()
+      const child = controls()
+      render(
+        <ChildSessionControlsProvider controls={child}>
+          <LocalThread
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith(
+              {
+                ...running,
+                approvals: [
+                  {
+                    id: "early-permission",
+                    action: "Run bash",
+                    prompt: "Delete the build directory?",
+                    options: [
+                      { id: "once", kind: "allow-once" },
+                      { id: "deny", kind: "reject-once" },
+                    ],
+                  },
+                ],
+              },
+              []
+            )}
+          />
+        </ChildSessionControlsProvider>
+      )
+
+      const choices = await screen.findByRole("group", {
+        name: "Delete the build directory?",
+      })
+      await user.click(
+        within(choices).getByRole("button", { name: "Allow once" })
+      )
+      expect(child.respondToApproval).toHaveBeenCalledExactlyOnceWith(
+        CHILD_ID,
+        "early-permission",
+        "once",
+        true
+      )
+    })
+
     it("answers the child's question on the card", async () => {
       const user = userEvent.setup()
       const request: RuntimeQuestionRequest = {

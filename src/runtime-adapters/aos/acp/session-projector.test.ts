@@ -2146,6 +2146,37 @@ describe("applyUpdate child Sessions", () => {
     ])
   })
 
+  // A child may ask before it has written anything, where no turn of its
+  // transcript can hold the request, so its card holds it instead.
+  it("keeps a child's permission request its transcript cannot host on its card", () => {
+    const state = applyChildApprovals(announced, CHILD_ID, [
+      {
+        id: "child-permission",
+        toolCallId: "t2",
+        action: "Run bash",
+        description: "Delete the build directory?",
+        options: [{ id: "once", kind: "allow-once" }],
+      },
+    ])
+    expect(aosOf(state)?.subagent?.approvals).toEqual([
+      {
+        id: "child-permission",
+        action: "Run bash",
+        prompt: "Delete the build directory?",
+        options: [{ id: "once", kind: "allow-once" }],
+      },
+    ])
+    expect(nested(state)).toBeUndefined()
+
+    // Once a turn of the child's can hold it, it reads there instead.
+    const hosted = inChild(state, [agentChunk("c1", "Asking")])
+    expect(aosOf(hosted)?.subagent?.approvals).toBeUndefined()
+    expect(nested(hosted)?.[0]?.content).toMatchObject([
+      { type: "text", text: "Asking" },
+      { approval: { id: "child-permission" } },
+    ])
+  })
+
   it("forgets every child with the transcript a replay resends", () => {
     const cleared = clearTranscript(announced)
     expect(cleared.children).toBeUndefined()

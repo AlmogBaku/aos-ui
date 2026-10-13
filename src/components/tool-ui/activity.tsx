@@ -36,7 +36,12 @@ import {
 } from "@/components/ui/dialog"
 import type { ChildSessionControls } from "@/runtime-adapters/child-sessions"
 import type { RuntimeInteractionAdapter } from "@/runtime-adapters/contracts"
-import { readAosToolArtifact, type AosSubagent } from "@/lib/tool-artifact"
+import {
+  permissionProviderMetadata,
+  readAosToolArtifact,
+  type AosSubagent,
+  type AosSubagentApproval,
+} from "@/lib/tool-artifact"
 import { cn } from "@/lib/utils"
 
 import { AosToolFallback } from "./aos-tool-fallback"
@@ -226,6 +231,7 @@ export function ActivityTool({
         <ChildRequests
           part={part}
           childSessionId={childSessionId}
+          unhosted={subagent?.approvals}
           controls={controls}
         />
       ) : null}
@@ -298,27 +304,63 @@ type NestedToolCall = Extract<
 /** A permission request, with the child Session that asked it. */
 type ChildApprovalRequest = { sessionId: string; call: NestedToolCall }
 
+const UNHOSTED_APPROVAL_PREFIX = "aos-permission-"
+
 /**
- * The permission requests the child Session, or a child of its own, asked on
- * its own calls, wherever its transcript nests them, each with the Session
- * whose transcript holds it.
+ * A request no turn of the child's transcript could hold, as the permission
+ * call the card answers it on.
+ */
+const unhostedCall = (approval: AosSubagentApproval): NestedToolCall => ({
+  type: "tool-call",
+  toolCallId: `${UNHOSTED_APPROVAL_PREFIX}${approval.id}`,
+  toolName: "request_permission",
+  args: { action: approval.action },
+  argsText: "",
+  approval: {
+    id: approval.id,
+    prompt: approval.prompt,
+    options: approval.options,
+    ...(approval.optionId === undefined ? {} : { optionId: approval.optionId }),
+    ...(approval.approved === undefined ? {} : { approved: approval.approved }),
+    ...(approval.resolution === undefined
+      ? {}
+      : { resolution: approval.resolution }),
+  },
+  providerMetadata: permissionProviderMetadata(approval.action),
+})
+
+/**
+ * The permission requests the child Session, or a child of its own, asked:
+ * on its own calls wherever its transcript nests them, and those no turn of
+ * it could hold, each with the Session that asked it.
  */
 function childApprovals(
   sessionId: string,
+  unhosted: readonly AosSubagentApproval[] | undefined,
   messages: readonly ThreadMessage[] | undefined
 ): ChildApprovalRequest[] {
-  return (messages ?? []).flatMap((message) =>
-    message.content.flatMap((part) => {
-      if (part.type !== "tool-call") return []
-      const nested = readAosToolArtifact(part.artifact)?.subagent
-      return [
-        ...(part.approval ? [{ sessionId, call: part }] : []),
-        ...(nested?.childSessionId
-          ? childApprovals(nested.childSessionId, part.messages)
-          : []),
-      ]
-    })
-  )
+  return [
+    ...(unhosted ?? []).map((approval) => ({
+      sessionId,
+      call: unhostedCall(approval),
+    })),
+    ...(messages ?? []).flatMap((message) =>
+      message.content.flatMap((part) => {
+        if (part.type !== "tool-call") return []
+        const nested = readAosToolArtifact(part.artifact)?.subagent
+        return [
+          ...(part.approval ? [{ sessionId, call: part }] : []),
+          ...(nested?.childSessionId
+            ? childApprovals(
+                nested.childSessionId,
+                nested.approvals,
+                part.messages
+              )
+            : []),
+        ]
+      })
+    ),
+  ]
 }
 
 /** The child Session ids below this card: its own, then its children's. */
@@ -349,15 +391,18 @@ function childSessionIds(
 function ChildRequests({
   part,
   childSessionId,
+  unhosted,
   controls,
 }: {
   part: RichToolPart
   childSessionId: string
+  /** The child's requests no turn of its transcript holds. */
+  unhosted: readonly AosSubagentApproval[] | undefined
   controls: ChildSessionControls | undefined
 }) {
   const interactions = useRuntimeInteractions()
   const approvals = controls
-    ? childApprovals(childSessionId, part.messages)
+    ? childApprovals(childSessionId, unhosted, part.messages)
     : []
   const sessions = interactions
     ? childSessionIds(childSessionId, part.messages)

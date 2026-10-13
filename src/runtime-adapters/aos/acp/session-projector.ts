@@ -29,7 +29,7 @@ import {
   type AosCompaction,
   type AosNotice,
 } from "@/lib/message-parts"
-import type { AosSubagent } from "@/lib/tool-artifact"
+import type { AosSubagent, AosSubagentApproval } from "@/lib/tool-artifact"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
 import {
@@ -568,6 +568,8 @@ function childView(child: ChildSession): ProjectedChild {
   const cached = childViews.get(child)
   if (cached) return cached
   const goal = child.title ?? child.description
+  // A request no turn of the child's transcript can hold reads on its card.
+  const approvals = unplacedApprovals(child.transcript).map(cardApproval)
   const subagent: AosSubagent = {
     id: child.sessionId,
     childSessionId: child.sessionId,
@@ -585,6 +587,7 @@ function childView(child: ChildSession): ProjectedChild {
       : { filesWritten: [...child.filesWritten] }),
     ...(child.durationMs === undefined ? {} : { durationMs: child.durationMs }),
     ...(child.summary === undefined ? {} : { summary: child.summary }),
+    ...(approvals.length === 0 ? {} : { approvals }),
   }
   const view = { subagent, messages: toThreadMessages(child.transcript) }
   childViews.set(child, view)
@@ -1729,6 +1732,40 @@ function approvalsByTurn(state: ProjectorState) {
       byTurn.set(turn, [...(byTurn.get(turn) ?? []), approval])
   }
   return byTurn
+}
+
+/**
+ * An approval as a card reads it, asking with the explanation when the
+ * provider gives one, beside the operation it asks for.
+ */
+function cardApproval({
+  id,
+  action,
+  description,
+  options,
+  optionId,
+  approved,
+  resolution,
+}: AcpApproval): AosSubagentApproval {
+  return {
+    id,
+    action,
+    prompt: description ?? action,
+    options: options.map((option) => ({ ...option })),
+    ...(optionId === undefined ? {} : { optionId }),
+    ...(approved === undefined ? {} : { approved }),
+    ...(resolution === undefined ? {} : { resolution }),
+  }
+}
+
+/** The approvals no turn of the transcript holds, which no turn shows. */
+function unplacedApprovals(state: ProjectorState): readonly AcpApproval[] {
+  const placed = new Set(
+    [...approvalsByTurn(state).values()].flatMap((approvals) =>
+      approvals.map(({ id }) => id)
+    )
+  )
+  return (state.approvals ?? []).filter(({ id }) => !placed.has(id))
 }
 
 export function toThreadMessages(state: ProjectorState): ThreadMessageLike[] {

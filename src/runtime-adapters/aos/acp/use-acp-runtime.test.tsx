@@ -1434,6 +1434,34 @@ describe("useAcpRuntime child Sessions", () => {
     expect(approvalOf("t1")).not.toHaveProperty("optionId")
   })
 
+  it("keeps a child's permission request on its card before the child writes anything", async () => {
+    const fake = createFakeConnection()
+    const approvals = createAcpApprovals({ connection: fake.connection })
+    const { result } = await mount(fake, { approvals })
+    spawned(fake)
+    let respond!: ReturnType<Fake["requestPermission"]>
+    act(() => {
+      respond = fake.requestPermission("child-bash", CHILD_ID)
+    })
+    const part = spawnPart(result.current)
+    expect(
+      part.type === "tool-call" &&
+        readAosToolArtifact(part.artifact)?.subagent?.approvals
+    ).toMatchObject([{ id: "interrupt-1", prompt: "Run bash" }])
+
+    await act(() =>
+      controlsOf(result.current)!.respondToApproval(
+        CHILD_ID,
+        "interrupt-1",
+        "once",
+        true
+      )
+    )
+    expect(respond).toHaveBeenCalledWith({
+      outcome: { outcome: "selected", optionId: "once" },
+    })
+  })
+
   it("stops a child alone only where the child offers that", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
