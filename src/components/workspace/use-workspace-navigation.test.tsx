@@ -337,7 +337,7 @@ it("reports the Session actions the runtime declares, and none otherwise", async
   })
 })
 
-it("renames through the thread list and pins through the provider", async () => {
+it("renames through the thread list, pins through the provider, and routes read-state changes to the right method", async () => {
   const setSessionPinned = vi.fn(async () => {})
   const markSessionRead = vi.fn(async () => {})
   const markSessionUnread = vi.fn(async () => {})
@@ -359,15 +359,19 @@ it("renames through the thread list and pins through the provider", async () => 
   })
   expect(setSessionPinned).toHaveBeenCalledWith("s-recent", true)
 
+  // unread=true → markSessionUnread only; markSessionRead must not be called
   await act(async () => {
     await result.current.setSessionUnread("s-recent", true)
   })
-  expect(markSessionUnread).toHaveBeenCalledWith("s-recent")
+  expect(markSessionUnread).toHaveBeenCalledExactlyOnceWith("s-recent")
+  expect(markSessionRead).not.toHaveBeenCalled()
 
+  // unread=false → markSessionRead only; markSessionUnread must not be called again
   await act(async () => {
     await result.current.setSessionUnread("s-recent", false)
   })
-  expect(markSessionRead).toHaveBeenCalledWith("s-recent")
+  expect(markSessionRead).toHaveBeenCalledExactlyOnceWith("s-recent")
+  expect(markSessionUnread).toHaveBeenCalledTimes(1)
 })
 
 it("scopes History's catalog to the selected Agent and reloads once per Agent", async () => {

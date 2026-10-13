@@ -414,5 +414,4 @@ export type WorkspaceCapabilities = {
   sessionArchival: boolean
   sessionDeletion: boolean
   sessionPin: boolean
-  sessionUnread: boolean
 }

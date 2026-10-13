@@ -79,7 +79,7 @@ describe("FixtureWorkspace", () => {
     ])
   })
 
-  it("acknowledges an unread Session once and republishes its metadata", async () => {
+  it("round-trips read state: markSessionRead clears, markSessionUnread restores, each publishes once; unknown Session rejects", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const published: SessionMetadata[][] = []
     const stop = workspace.subscribeSessionMetadata(
@@ -101,42 +101,31 @@ describe("FixtureWorkspace", () => {
     await expect(
       workspace.getSessionMetadata(["thread-lumen-roadmap"])
     ).resolves.toEqual([expect.objectContaining({ unread: false })])
-    expect(published).toEqual([
-      await workspace.getSessionMetadata([
-        "thread-lumen-roadmap",
-        "thread-nori-copy",
-      ]),
-    ])
-
-    await workspace.markSessionRead("thread-lumen-roadmap")
-    await workspace.markSessionRead("missing")
     expect(published).toHaveLength(1)
-    stop()
-    await workspace.markSessionRead("thread-nori-copy")
-    expect(published).toHaveLength(1)
-  })
 
-  it("marks a read Session unread and republishes once; an unknown Session rejects", async () => {
-    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
-    const published: SessionMetadata[][] = []
-    workspace.subscribeSessionMetadata(
-      ["thread-aster-launch"],
-      (metadata) => published.push(metadata)
-    )
-
-    await workspace.markSessionUnread("thread-aster-launch")
+    // markSessionUnread restores the flag and publishes once more
+    await workspace.markSessionUnread("thread-lumen-roadmap")
     await expect(
-      workspace.getSessionMetadata(["thread-aster-launch"])
+      workspace.getSessionMetadata(["thread-lumen-roadmap"])
     ).resolves.toEqual([expect.objectContaining({ unread: true })])
-    expect(published).toHaveLength(1)
+    expect(published).toHaveLength(2)
 
-    // Idempotent: already unread, no second publish
-    await workspace.markSessionUnread("thread-aster-launch")
-    expect(published).toHaveLength(1)
+    // Idempotent: already unread, no third publish
+    await workspace.markSessionUnread("thread-lumen-roadmap")
+    expect(published).toHaveLength(2)
 
+    // markSessionRead is idempotent when already read
+    await workspace.markSessionRead("thread-lumen-roadmap")
+    await workspace.markSessionRead("thread-lumen-roadmap")
+    expect(published).toHaveLength(3)
+
+    // Missing Session rejects; unsubscribed listener receives nothing
     await expect(
       workspace.markSessionUnread("missing")
     ).rejects.toThrow("Session not found")
+    stop()
+    await workspace.markSessionRead("thread-nori-copy")
+    expect(published).toHaveLength(3)
   })
 
   it("keeps the seeded pin and archival authoritative", async () => {
@@ -196,7 +185,6 @@ describe("FixtureWorkspace", () => {
       sessionArchival: true,
       sessionDeletion: true,
       sessionPin: true,
-      sessionUnread: true,
     })
   })
 

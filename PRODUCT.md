@@ -32,10 +32,11 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 - Native runtimes own durable conversations and execution. Assistant UI owns their frontend projection, composer, queue, and thread lifecycle.
 - Provider data is authoritative. Session read state is provider-owned: the
   browser reports the focused Session and the runtime decides when it becomes
-  read; the operator can also mark any Session unread or read from its row menu.
-  Client-owned state is limited to view preferences, manually opened
-  recent tabs, per-visit selection restoration, notification preferences, and a
-  content-free Activity snapshot persisted locally in the browser.
+  read; on runtimes that support it the operator can also mark a Session unread
+  or read from its row menu. Client-owned state is limited to view preferences,
+  manually opened recent tabs, per-visit selection restoration, notification
+  preferences, and a content-free Activity snapshot persisted locally in the
+  browser.
 - The Agent catalog includes visible and hidden ordinary primary Agents; only visible, selectable Agents appear in the workspace roster. Creators, native/system definitions, and Subagents are excluded from management. Visibility and creator role come from native metadata. Unsupported native mutations are read-only; AOS has no management server or Agent registry. Creator-owned Sessions are listed by the runtime like any other Session; the creator itself never appears in the roster or Manage Agents.
 - One engine is selected per deployment, with multiple Agents and Sessions. Native harnesses own execution, persistence, credentials, and Agent configuration outside this checkout. Unsupported capabilities remain explicit.
 - On configured real runtimes, Agent creation opens a creator-owned Session that the browser alone projects as a `New Agent` draft row in the Agent rail with exactly one Session, until the creator run ends with a new Agent in the provider catalog. The draft persists until the Session is deleted (Discard draft) or 48 hours since last activity; selecting a draft shows no Session tab strip and no inspector. The hidden creator identity never appears in the ordinary roster or management catalog. Creation uses the portable `aos-agent-creator` skill, and the creator writes the Agent with its harness's own CLI or files; AOS ships no creation tool. A created Agent that the harness lists as hidden is reported as not yet visible instead of resolving the draft. There is no ownership transfer and no automatic first Session for the created Agent. Public fixture/demo mode intentionally omits Agent creation. Native harnesses can initiate inbound Sessions without a browser.
@@ -49,8 +50,9 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 ## Activity and Live Notifications
 
 Session read state is provider-owned: the browser reports which Session is
-exposed, and the runtime decides when that Session becomes read. The operator
-can also mark any Session unread or read manually from its row menu. Activity
+exposed, and the runtime decides when that Session becomes read. On runtimes
+that support it, the operator can also mark a Session unread or read from its
+row menu. Activity
 presents the resulting history alongside inline conversation state, coalesced
 in-app notices, and default-on live browser notifications. Completion in the
 exact visible, focused Session is already read and suppresses alerts. Other

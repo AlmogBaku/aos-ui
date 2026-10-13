@@ -23,7 +23,6 @@ describe("workspace capabilities", () => {
       sessionArchival: false,
       sessionDeletion: false,
       sessionPin: false,
-      sessionUnread: false,
     })
 
     expect(
@@ -48,7 +47,6 @@ describe("workspace capabilities", () => {
       sessionArchival: false,
       sessionDeletion: false,
       sessionPin: false,
-      sessionUnread: false,
     })
   })
 
