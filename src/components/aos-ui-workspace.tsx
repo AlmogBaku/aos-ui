@@ -45,6 +45,7 @@ import {
   ToolUiSessionLinkProvider,
   type ToolUiSessionLinkResolver,
 } from "@/components/tool-ui"
+import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import {
@@ -75,6 +76,7 @@ import type {
   TodoItem,
 } from "@/runtime-adapters/contracts"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
+import { AcpConnectionClosedError } from "@/runtime-adapters/contracts"
 import { getWorkspaceCapabilities } from "@/runtime-adapters/workspace-state"
 import { cn } from "@/lib/utils"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
@@ -141,6 +143,11 @@ const workspaceCopy = {
     retry: "Try again",
     loading: "Loading workspace…",
     unavailable: "The workspace could not be loaded.",
+    connectionLost:
+      "The connection was interrupted. Check your connection, then try again.",
+    actionFailed: "That action could not be completed.",
+    sessionUnavailable:
+      "This Session could not be shown. Open another Session from the list.",
     tasks: "Session todos",
     tasksUnavailable: "Execution tasks are not available from this provider.",
     tasksFailed: "Todos could not be loaded.",
@@ -155,6 +162,9 @@ const workspaceCopy = {
     retry: "ניסיון חוזר",
     loading: "סביבת העבודה נטענת…",
     unavailable: "לא ניתן לטעון את סביבת העבודה.",
+    connectionLost: "החיבור נקטע. בדקו את החיבור ונסו שוב.",
+    actionFailed: "לא ניתן היה להשלים את הפעולה.",
+    sessionUnavailable: "לא ניתן להציג את השיחה הזו. פתחו שיחה אחרת מהרשימה.",
     tasks: "משימות השיחה",
     tasksUnavailable: "ספק זה אינו מציע משימות ביצוע.",
     tasksFailed: "לא ניתן לטעון את המשימות.",
@@ -352,24 +362,31 @@ function TodoDock({
   )
 }
 
+/** A gone connection says so in words; its socket's reason is no message. */
+function failureText(error: Error, locale: Locale) {
+  return error instanceof AcpConnectionClosedError
+    ? workspaceCopy[locale].connectionLost
+    : error.message
+}
+
 function WorkspaceError({
   locale,
   error,
   onRetry,
+  onDismiss,
 }: {
   locale: Locale
   error: Error
   onRetry: () => void
+  onDismiss: () => void
 }) {
   const copy = workspaceCopy[locale]
-  const [dismissed, setDismissed] = useState(false)
-  if (dismissed) return null
   return (
     <ErrorToast
       locale={locale}
       title={copy.unavailable}
-      message={error.message}
-      onDismiss={() => setDismissed(true)}
+      message={failureText(error, locale)}
+      onDismiss={onDismiss}
       actions={
         <Button type="button" size="sm" variant="outline" onClick={onRetry}>
           <RotateCw data-icon="inline-start" />
@@ -507,6 +524,7 @@ function WorkspaceContent({
   )
   const [managementOpen, setManagementOpen] = useState(false)
   const [conversationObscured, setConversationObscured] = useState(false)
+  const [conversationRevealRequest, setConversationRevealRequest] = useState(0)
   const {
     agentCreator,
     creatorNotice,
@@ -525,6 +543,7 @@ function WorkspaceContent({
     sessionsLoading,
     agentError,
     sessionError,
+    threadListError,
     actionError,
     setActionError,
     tabUndo,
@@ -561,7 +580,19 @@ function WorkspaceContent({
       ),
     [displayAgents, sessionActions, workspace]
   )
-  const workspaceError = agentError ?? sessionError ?? actionError
+  // A Session action's failure costs that action alone: it never says the
+  // workspace failed to load, and there is nothing for Retry to reload.
+  const workspaceError = agentError ?? sessionError ?? threadListError
+  // Dismissing the workspace error holds until it changes or clears, and an
+  // action's failure shows in its place meanwhile.
+  const workspaceErrorMessage = workspaceError?.message
+  const [workspaceErrorDismissed, setWorkspaceErrorDismissed] = useState(false)
+  const [dismissalFor, setDismissalFor] = useState(workspaceErrorMessage)
+  if (dismissalFor !== workspaceErrorMessage) {
+    setDismissalFor(workspaceErrorMessage)
+    setWorkspaceErrorDismissed(false)
+  }
+  const shownWorkspaceError = workspaceErrorDismissed ? null : workspaceError
   // `/new` is the composer's spelling of the New Session action: a Session is
   // the workspace's to open, so the command runs here and never becomes a turn.
   // Text after the command seeds the new Session's draft instead of being lost.
@@ -635,11 +666,14 @@ function WorkspaceContent({
     conversationExposed: !managementOpen && !conversationObscured,
     readNow,
     onOpenTarget: async (agentId, sessionId) => {
+      // A notification opens its Session in view, never behind a drawer.
+      setConversationRevealRequest((request) => request + 1)
       setPreferredAgentId(agentId)
       await openSession(sessionId, agentId)
     },
     // A created Agent opens the way its rail row does, with no Session yet.
     onOpenAgent: selectAgent,
+    onActionError: (reason) => setActionError(toError(reason)),
   })
 
   // A subagent's child Session opens in place when the catalog knows its Agent.
@@ -691,6 +725,7 @@ function WorkspaceContent({
         selectedAgentId={selectedAgentId}
         pagedAgentId={pagedAgentId}
         onBrowseAgent={browseAgent}
+        conversationRevealRequest={conversationRevealRequest}
         activeThreadId={visibleThreadId}
         environmentLabel={environmentLabel}
         agentBuilderAvailable={Boolean(agentCreator)}
@@ -725,12 +760,19 @@ function WorkspaceContent({
           connectionStatus={connectionStatus}
           sessionStatus={sessionStatus}
         >
-          {workspaceError ? (
+          {shownWorkspaceError ? (
             <WorkspaceError
-              key={workspaceError.message}
               locale={locale}
-              error={workspaceError}
+              error={shownWorkspaceError}
               onRetry={retryWorkspace}
+              onDismiss={() => setWorkspaceErrorDismissed(true)}
+            />
+          ) : actionError ? (
+            <ErrorToast
+              locale={locale}
+              title={workspaceCopy[locale].actionFailed}
+              message={failureText(actionError, locale)}
+              onDismiss={() => setActionError(null)}
             />
           ) : null}
           {assistantInstructions ? (
@@ -749,14 +791,28 @@ function WorkspaceContent({
             ) : selectedAgent && conversationThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
                 <ToolUiSessionLinkProvider sessionLink={toolSessionLink}>
-                  <Thread
-                    autoFocus={false}
-                    direction={getLocaleDirection(locale)}
-                    labels={threadLabels[locale]}
-                    composerFeatures={threadComposerFeatures}
-                    messageRewind={bundle.messageRewind}
-                    components={activeThreadComponents}
-                  />
+                  {/* A reset key, not a React key: a key would remount the
+                      Thread on every switch and lose its composer state. */}
+                  <LazyVisualBoundary
+                    resetKey={conversationThreadId}
+                    fallback={
+                      <p
+                        className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
+                        role="alert"
+                      >
+                        {workspaceCopy[locale].sessionUnavailable}
+                      </p>
+                    }
+                  >
+                    <Thread
+                      autoFocus={false}
+                      direction={getLocaleDirection(locale)}
+                      labels={threadLabels[locale]}
+                      composerFeatures={threadComposerFeatures}
+                      messageRewind={bundle.messageRewind}
+                      components={activeThreadComponents}
+                    />
+                  </LazyVisualBoundary>
                 </ToolUiSessionLinkProvider>
               </WorkspaceThreadChromeContext.Provider>
             ) : (

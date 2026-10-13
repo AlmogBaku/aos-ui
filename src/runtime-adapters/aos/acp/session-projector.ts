@@ -187,13 +187,22 @@ function withMessages(
  * later state settles — so a run that has written nothing yet never re-opens the
  * finished turn behind it, and an empty turn synthesized to host this run's
  * interrupt is taken over rather than left beside the answer it asked for.
+ * Assistant content naming a user message is that message's reply, so it goes
+ * to a reply of its own (see `replyId`), never into the user turn.
  */
 function onMessage(
   state: ProjectorState,
-  id: string,
+  named: string,
   role: MessageRole,
   patch: (message: ProjectedMessage) => ProjectedMessage
 ): ProjectorState {
+  const id =
+    role === "assistant" &&
+    state.messages.some(
+      (message) => message.id === named && message.role === "user"
+    )
+      ? replyId(named)
+      : named
   const fresh =
     role === "assistant" && !state.messages.some((message) => message.id === id)
   const host = fresh ? emptyRequestHostId(state) : undefined
@@ -269,6 +278,15 @@ function activeAssistantId(state: ProjectorState): string | undefined {
 export const LOCAL_PROMPT_PREFIX = "aos-local-"
 
 const REQUEST_HOST_PREFIX = "aos-request-"
+
+const REPLY_PREFIX = "aos-reply-"
+
+/**
+ * The reply to a user message that assistant content named: a user turn
+ * cannot carry a thought or a tool call, so they open the assistant turn that
+ * answers it, which the thread reads with the reply that follows.
+ */
+const replyId = (userMessageId: string) => `${REPLY_PREFIX}${userMessageId}`
 
 /** A request before the turn's first update still needs a message to host it. */
 const requestHostId = (turnId: string | undefined) =>

@@ -20,7 +20,8 @@ type AllocationPass = {
  * same one. Saves run one at a time in resolution order, and each Agent is
  * tried at most once while this workspace is loaded: a failed save keeps the
  * computed icon on screen and raises nothing. A conflict re-reads the catalog
- * and ends the pass; an unsupported runtime ends every pass.
+ * and ends the pass; any other failure, an unsupported answer among them, is
+ * that Agent's alone, so the pass goes on to the next.
  */
 export function useAvatarAllocation({
   workspace,
@@ -65,9 +66,10 @@ export function useAvatarAllocation({
         try {
           await update(next.agentId, { avatar: next.avatar })
         } catch (reason) {
+          // Only a conflict ends the pass; any other failure is this Agent's.
           if (!(reason instanceof AgentUpdateError)) continue
-          if (reason.code === "unsupported") current.stopped = true
-          else onConflict()
+          if (reason.code !== "conflict") continue
+          onConflict()
           return
         }
       }

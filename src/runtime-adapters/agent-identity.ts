@@ -1,11 +1,13 @@
 import type { AgentSummary } from "./contracts"
 
-/** Native metadata is the only authority; names never confer a role. */
+/**
+ * Native metadata is the only authority; names never confer a role. Two
+ * creators name none: creation is unavailable rather than guessed, and the
+ * roster they hide from is unaffected.
+ */
 export function getAgentCreator(agents: readonly AgentSummary[]) {
   const creators = agents.filter((agent) => agent.role === "creator")
-  if (creators.length > 1)
-    throw new Error("Multiple creator Agents are configured")
-  return creators[0]
+  return creators.length === 1 ? creators[0] : undefined
 }
 
 export function isRosterAgent(

@@ -15,6 +15,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
 } from "react"
 import { z } from "zod"
@@ -84,7 +85,9 @@ import {
 import { createGatewayClient } from "./gateway-client"
 import {
   type ConnectionNotice,
+  type SessionNotice,
   useConnectionOutage,
+  useSessionNotice,
 } from "./use-connection-outage"
 
 /**
@@ -178,6 +181,7 @@ function GuestArtifactShell({
   composerFeatures,
   composer,
   connectionStatus,
+  sessionStatus,
 }: {
   locale: Locale
   agentId: string
@@ -191,6 +195,7 @@ function GuestArtifactShell({
   composerFeatures: ComposerFeatureViewModel
   composer: ThreadComponents["Composer"]
   connectionStatus?: ConnectionNotice
+  sessionStatus?: SessionNotice
 }) {
   const stabilize = useMemo(() => createArtifactMessageStabilizer(), [])
   const messages = useAuiState((state: AssistantState) =>
@@ -220,6 +225,7 @@ function GuestArtifactShell({
           composerFeatures={composerFeatures}
           composer={composer}
           connectionStatus={connectionStatus}
+          sessionStatus={sessionStatus}
         />
       </McpAppHostProvider>
     </ArtifactWorkspaceProvider>
@@ -235,6 +241,7 @@ function GuestConversationShell({
   composerFeatures,
   composer,
   connectionStatus,
+  sessionStatus,
 }: {
   locale: Locale
   title?: string
@@ -244,6 +251,7 @@ function GuestConversationShell({
   composerFeatures: ComposerFeatureViewModel
   composer: ThreadComponents["Composer"]
   connectionStatus?: ConnectionNotice
+  sessionStatus?: SessionNotice
 }) {
   // The side panel holds the pip view when one is active.
   const pip = useMcpAppPip(locale)
@@ -286,6 +294,7 @@ function GuestConversationShell({
       <WorkspaceStatusNotice
         locale={locale}
         connectionStatus={connectionStatus}
+        sessionStatus={sessionStatus}
       >
         <ToolUiLocaleProvider locale={locale}>
           <Thread
@@ -379,6 +388,18 @@ function ReadyGuestAosSurface({
   const sessionId = context.conversationRef
   const selectedLocale = context.ui?.lang ?? locale
   const connectionOutage = useConnectionOutage(connection)
+  // The invited Session rejoins on its own after the transport is back, so it
+  // carries its own notice, as the operator's selected Session does.
+  const sessionState = useSyncExternalStore(
+    useCallback(
+      (listener) =>
+        connection.subscribe(sessionId, { agentId, state: listener }),
+      [agentId, connection, sessionId]
+    ),
+    () => connection.sessionState(sessionId),
+    () => undefined
+  )
+  const sessionNotice = useSessionNotice(connection, sessionId, sessionState)
   const brandName = context.ui?.name ?? "AOS"
   const logoUrl = context.ui?.logoUrl ?? "/logo-adaptive.svg"
   const rest = useMemo(() => {
@@ -521,6 +542,7 @@ function ReadyGuestAosSurface({
               composerFeatures={composerFeatures}
               composer={composer}
               connectionStatus={connectionOutage}
+              sessionStatus={sessionNotice}
             />
           </VoiceMediaProvider>
         </AssistantRuntimeProvider>

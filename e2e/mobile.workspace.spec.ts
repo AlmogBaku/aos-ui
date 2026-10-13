@@ -22,6 +22,58 @@ test("mobile Manage Agents opens from the drawer and returns focus to it", async
   await exerciseAgentManagement(page)
 })
 
+/**
+ * A finger dragged across the screen, through CDP: Chromium delivers touch
+ * events only from its own input pipeline. `whileHeld` runs before the lift.
+ */
+async function swipe(
+  page: Page,
+  y: number,
+  fromX: number,
+  toX: number,
+  whileHeld: () => Promise<void> = async () => {}
+) {
+  const session = await page.context().newCDPSession(page)
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number) =>
+    session.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+    })
+  await touch("touchStart", fromX)
+  for (let step = 1; step <= 8; step += 1)
+    await touch("touchMove", fromX + ((toX - fromX) * step) / 8)
+  await whileHeld()
+  await touch("touchEnd", toX)
+  await session.detach()
+}
+
+for (const [locale, sessions] of [
+  ["en", "Sessions"],
+  ["he", "שיחות"],
+] as const) {
+  test(`mobile Agents drawer follows a swipe in from the inline-start edge in ${locale}`, async ({
+    page,
+  }) => {
+    await page.goto(`/${locale}`)
+    await expect(page.getByRole("group", { name: /^Aster,/ })).toBeVisible()
+    const { width, height } = page.viewportSize()!
+    // The inline-start edge is the left one in LTR and the right one in RTL.
+    const edge = locale === "he" ? width - 2 : 2
+    const inward = locale === "he" ? -1 : 1
+    const drawer = page.getByRole("dialog", { name: sessions })
+
+    // A swipe that starts away from the edge belongs to the conversation.
+    await swipe(page, height / 2, edge + inward * 60, edge + inward * 300)
+    await expect(drawer).toHaveCount(0)
+
+    // The drawer is out with the finger, before it lifts, and stays open.
+    await swipe(page, height / 2, edge, edge + inward * 300, () =>
+      expect(drawer).toBeVisible()
+    )
+    await expect(drawer).toBeVisible()
+  })
+}
+
 /** F6 lands on the transcript: inside the conversation, short of the composer. */
 async function expectTranscriptFocus(page: Page) {
   const conversation = page.getByRole("main", { name: "Conversation" })

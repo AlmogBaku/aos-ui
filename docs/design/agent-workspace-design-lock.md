@@ -30,10 +30,12 @@ Implementation invariants:
 - Prefer native-feeling shadcn controls, comfortable spacing, clear contrast, and progressive disclosure.
 
 Mobile navigation uses one logical-start drawer with two levels. It opens on
-the selected Agent's Sessions, returns to the Agent roster through a Back
-control, and only changes the active Agent when a Session is chosen. Choosing a
-Session dismisses the drawer immediately. Activity remains visible at both
-levels, while merely browsing the drawer does not mark a conversation read.
+the selected Agent's Sessions, from the menu button or a swipe in from the
+logical-start edge that the drawer follows, returns to the Agent roster through
+a Back control, and only changes the active Agent when a Session is chosen.
+Choosing a Session dismisses the drawer immediately; a swipe back toward its
+edge does too. Activity remains visible at both levels, while merely browsing
+the drawer does not mark a conversation read.
 
 Any intentional visual departure must be called out before it is introduced.
 

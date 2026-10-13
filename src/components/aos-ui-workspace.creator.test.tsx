@@ -65,7 +65,7 @@ const threadTexts = (runtime: TestRuntime) =>
     )
 
 const workspaceError = (nav: WorkspaceNavigation) =>
-  (nav.agentError ?? nav.sessionError ?? nav.actionError)?.message
+  (nav.agentError ?? nav.sessionError ?? nav.threadListError)?.message
 
 /** Opens the builder and waits until its interview Session exists. */
 async function openInterview(
@@ -207,6 +207,7 @@ describe("AosUiApp fixture composition", () => {
     await expectDraftRetired(() => pending.nav)
     expect(pending.runtime.workspace.listAllSessionMetadata()).toEqual(before)
     expect(workspaceError(pending.nav)).toBeUndefined()
+    expect(pending.nav.actionError).toBeNull()
 
     cleanup()
     const started = renderNavigation(creatorFixture(), fixtureClock)
@@ -421,10 +422,28 @@ describe("AosUiApp fixture composition", () => {
       })
     )
 
+    // The catalog could not be read, which is the catalog's own error.
     await waitFor(() =>
-      expect(workspaceError(view.nav)).toBe("Agent catalog refresh failed")
+      expect(view.nav.agentError?.message).toBe("Agent catalog refresh failed")
+    )
+    expect(view.nav.actionError).toBeNull()
+    expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
+  })
+
+  it("opens the interview even when the catalog cannot be refreshed, and the catalog reports its own failure", async () => {
+    const view = renderNavigation(() => useCreatedAgentRuntime(), fixtureClock)
+    view.runtime.handle.failNextRefresh()
+
+    const interview = await openInterview(view, () => view.runtime.provider)
+
+    await waitFor(() =>
+      expect(threadTexts(view.runtime)).toContain(en.creator.kickoff)
     )
     expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
+    await waitFor(() =>
+      expect(view.nav.agentError?.message).toBe("Agent catalog refresh failed")
+    )
+    expect(view.nav.actionError).toBeNull()
   })
 
   it("retires the draft and explains an Agent that still needs operator setup", async () => {

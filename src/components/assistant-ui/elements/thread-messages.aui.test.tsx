@@ -322,6 +322,47 @@ describe("failed turn presentation", () => {
   })
 })
 
+describe("message render failure", () => {
+  it("costs only the message that throws", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    function BrokenTool(): never {
+      throw new Error("tool view failed")
+    }
+
+    render(
+      <LocalThread
+        toolFallback={BrokenTool}
+        initialMessages={[
+          {
+            id: "u1",
+            role: "user",
+            content: [{ type: "text", text: "Chart" }],
+          },
+          {
+            id: "a1",
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "chart",
+                toolName: "render_chart",
+                args: {},
+                artifact: MCP_APP_TOOL_ARTIFACT,
+                result: "Chart ready for display.",
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This message could not be shown."
+    )
+    expect(screen.getByText("Chart")).toBeVisible()
+  })
+})
+
 describe("message context menu", () => {
   it("offers the assistant turn's own actions on a right click", async () => {
     render(<LocalThread />)

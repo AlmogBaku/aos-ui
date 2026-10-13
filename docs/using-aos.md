@@ -4,7 +4,7 @@ AOS is organized around provider-owned Agents and Sessions. The selected runtime
 
 ## Choose an Agent and Session
 
-Select an Agent from the roster, then open one of its Sessions. Desktop layouts show Sessions as tabs. Narrow layouts place Agent and Session navigation in a focus-managed drawer.
+Select an Agent from the roster, then open one of its Sessions. Desktop layouts show Sessions as tabs. Narrow layouts place Agent and Session navigation in a focus-managed drawer: open it with the menu button or by swiping in from the left edge (the right edge in Hebrew), and swipe it back to close it.
 
 A pinned Session is always open: it leads Open sessions and the tab strip however old it is, and never appears in History. Closing a pinned tab removes only the tab; its Open sessions row stays, and the tab returns the next time the Session is active. The pin is stored by the runtime, not the browser.
 

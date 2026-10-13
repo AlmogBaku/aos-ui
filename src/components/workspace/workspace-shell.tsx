@@ -4,6 +4,7 @@ import {
   ThreadListPrimitive,
   type ThreadListRuntime,
 } from "@assistant-ui/react"
+import { Drawer } from "@base-ui/react/drawer"
 import {
   BellOff,
   Menu,
@@ -17,8 +18,6 @@ import {
 import {
   useCallback,
   useEffect,
-  useEffectEvent,
-  useId,
   useMemo,
   useReducer,
   useRef,
@@ -191,6 +190,11 @@ export type WorkspaceShellProps = {
   onManageAgents?: () => void
   onConversationObscuredChange?: (obscured: boolean) => void
   agentFocusRequest?: { agentId: string; nonce: number } | null
+  /**
+   * Each new value closes the phone navigator and Activity, so a Session
+   * opened from outside them, such as from a notification, is in view.
+   */
+  conversationRevealRequest?: number
   onActionError?: (error: unknown) => void
   tabUndo?: { title: string; onUndo: () => WorkspaceActionResult } | null
   artifactOutputs?: ReactNode
@@ -301,16 +305,6 @@ function getInspectorPreference() {
     return true
   }
 }
-
-const focusableSelector = [
-  "summary",
-  "a[href]",
-  "button:not(:disabled)",
-  "input:not(:disabled)",
-  "select:not(:disabled)",
-  "textarea:not(:disabled)",
-  '[tabindex]:not([tabindex="-1"]):not(:disabled)',
-].join(",")
 
 function getTabId(sessionId: string) {
   return `workspace-tab-${encodeURIComponent(sessionId)}`
@@ -995,136 +989,108 @@ type FocusDrawerProps = {
   desktop?: boolean
   open: boolean
   side: "start" | "end"
+  /** The shell's direction, which places the inline side on a physical edge. */
+  dir: "ltr" | "rtl"
   title: string
   closeLabel: string
   onClose: () => void
+  /** Lets a swipe in from the drawer's edge open it, following the finger. */
+  onSwipeOpen?: () => void
+  /** Hosts the drawer inside the shell, so its tokens and layout apply. */
+  container: RefObject<HTMLElement | null>
   returnFocusRef?: RefObject<HTMLElement | null>
   children: ReactNode
   chrome?: boolean
   initialFocusSelector?: string
 }
 
+/**
+ * A modal side drawer: Base UI traps focus, locks scroll, closes on Escape or
+ * an outside press, and returns focus. A swipe back toward the drawer's own
+ * edge closes it, and one in from that edge opens it when `onSwipeOpen` is set.
+ */
 function FocusDrawer({
   desktop = false,
   open,
   side,
+  dir,
   title,
   closeLabel,
   onClose,
+  onSwipeOpen,
+  container,
   returnFocusRef,
   children,
   chrome = true,
   initialFocusSelector,
 }: FocusDrawerProps) {
-  const titleId = useId()
-  const drawerRef = useRef<HTMLDivElement>(null)
-  const closeDrawer = useEffectEvent(onClose)
-
-  useEffect(() => {
-    if (!open) return
-
-    const previousFocus = document.activeElement as HTMLElement | null
-    const returnFocus = returnFocusRef?.current ?? previousFocus
-    const drawer = drawerRef.current
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-
-    function getFocusableElements() {
-      return [
-        ...(drawer?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
-      ].filter((element) => {
-        if (element.closest("[hidden], [inert]")) return false
-        const closedDetails = element.closest("details:not([open])")
-        return (
-          !closedDetails || element === closedDetails.querySelector("summary")
-        )
-      })
-    }
-    const focusableElements = getFocusableElements()
-    ;(
-      (initialFocusSelector
-        ? drawer?.querySelector<HTMLElement>(initialFocusSelector)
-        : null) ??
-      focusableElements?.[0] ??
-      drawer
-    )?.focus()
-
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault()
-        closeDrawer()
-        return
-      }
-
-      if (event.key !== "Tab" || !drawer) return
-      const focusable = getFocusableElements()
-      if (focusable.length === 0) {
-        event.preventDefault()
-        drawer.focus()
-        return
-      }
-
-      const first = focusable[0]
-      const last = focusable.at(-1)
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last?.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first?.focus()
-      }
-    }
-
-    document.addEventListener("keydown", handleKeyDown)
-
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown)
-      document.body.style.overflow = previousOverflow
-      returnFocus?.focus()
-    }
-  }, [initialFocusSelector, open, returnFocusRef])
-
-  if (!open) return null
+  const popupRef = useRef<HTMLDivElement>(null)
+  // Base UI names physical edges: the start side is the left one in LTR.
+  const swipeDirection =
+    (side === "start") === (dir === "ltr") ? "left" : "right"
 
   return (
-    <div className={styles.drawerLayer} data-desktop={desktop || undefined}>
-      <button
-        className={styles.drawerScrim}
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        onClick={onClose}
-      />
-      <div
-        className={styles.drawer}
-        data-side={side}
-        ref={drawerRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-      >
-        <h2 className={styles.srOnly} id={titleId}>
-          {title}
-        </h2>
-        {chrome ? (
-          <div className={styles.drawerHeader}>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={closeLabel}
-              onClick={onClose}
+    <Drawer.Root
+      open={open}
+      swipeDirection={swipeDirection}
+      onOpenChange={(next) => (next ? onSwipeOpen?.() : onClose())}
+    >
+      {onSwipeOpen ? (
+        <Drawer.SwipeArea
+          className={styles.drawerSwipeArea}
+          data-desktop={desktop || undefined}
+        />
+      ) : null}
+      <Drawer.Portal container={container}>
+        <Drawer.Backdrop
+          className={styles.drawerScrim}
+          data-desktop={desktop || undefined}
+        />
+        <Drawer.Viewport
+          className={styles.drawerLayer}
+          data-desktop={desktop || undefined}
+        >
+          <Drawer.Popup
+            ref={popupRef}
+            className={styles.drawer}
+            data-side={side}
+            initialFocus={
+              initialFocusSelector
+                ? () =>
+                    popupRef.current?.querySelector<HTMLElement>(
+                      initialFocusSelector
+                    ) ?? true
+                : true
+            }
+            finalFocus={returnFocusRef ?? true}
+          >
+            <Drawer.Title className={styles.srOnly}>{title}</Drawer.Title>
+            {chrome ? (
+              <div className={styles.drawerHeader}>
+                <Drawer.Close
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={closeLabel}
+                    />
+                  }
+                >
+                  <X />
+                </Drawer.Close>
+              </div>
+            ) : null}
+            <Drawer.Content
+              className={styles.drawerContent}
+              data-chrome={chrome || undefined}
             >
-              <X />
-            </Button>
-          </div>
-        ) : null}
-        <div className={styles.drawerContent} data-chrome={chrome || undefined}>
-          {children}
-        </div>
-      </div>
-    </div>
+              {children}
+            </Drawer.Content>
+          </Drawer.Popup>
+        </Drawer.Viewport>
+      </Drawer.Portal>
+    </Drawer.Root>
   )
 }
 
@@ -1164,6 +1130,7 @@ export function WorkspaceShell({
   onManageAgents,
   onConversationObscuredChange,
   agentFocusRequest,
+  conversationRevealRequest,
   onActionError,
   tabUndo,
   artifactOutputs,
@@ -1212,8 +1179,24 @@ export function WorkspaceShell({
     : sidePanelOpen
   const agentDrawerTriggerRef = useRef<HTMLButtonElement>(null)
   const mobileNavigatorOpen = mobileNavigator.view !== "closed"
+  const openMobileNavigator = () =>
+    dispatchMobileNavigator({
+      type: "OPEN",
+      // A draft has no Session list to browse.
+      selectedAgentId: selectedAgentIsDraft ? null : selectedAgentId,
+    })
   const browsedAgentId =
     mobileNavigator.view === "sessions" ? mobileNavigator.agentId : null
+  // Served as the request arrives, during render, so a drawer opened after it
+  // stays open.
+  const [servedRevealRequest, setServedRevealRequest] = useState(
+    conversationRevealRequest
+  )
+  if (conversationRevealRequest !== servedRevealRequest) {
+    setServedRevealRequest(conversationRevealRequest)
+    dispatchMobileNavigator({ type: "DISMISS" })
+    setActivityOpen(false)
+  }
   useEffect(() => {
     onBrowseAgent?.(browsedAgentId)
   }, [browsedAgentId, onBrowseAgent])
@@ -1584,15 +1567,7 @@ export function WorkspaceShell({
               size="icon"
               aria-label={dictionary.actions.openAgents}
               aria-expanded={mobileNavigatorOpen}
-              onClick={() => {
-                dispatchMobileNavigator({
-                  type: "OPEN",
-                  // A draft has no Session list to browse.
-                  selectedAgentId: selectedAgentIsDraft
-                    ? null
-                    : selectedAgentId,
-                })
-              }}
+              onClick={openMobileNavigator}
             >
               <Menu />
             </Button>
@@ -1842,6 +1817,9 @@ export function WorkspaceShell({
           <FocusDrawer
             open={mobileNavigatorOpen}
             side="start"
+            dir={getLocaleDirection(locale)}
+            container={shellRef}
+            onSwipeOpen={openMobileNavigator}
             title={
               mobileNavigator.view === "sessions"
                 ? dictionary.workspace.sessions
@@ -1929,6 +1907,8 @@ export function WorkspaceShell({
         <FocusDrawer
           open={artifactDrawerOpen}
           side="end"
+          dir={getLocaleDirection(locale)}
+          container={shellRef}
           title={sidePanelLabel ?? dictionary.workspace.agentDetails}
           closeLabel={dictionary.actions.closePanel}
           onClose={() => onCloseSidePanel?.()}
@@ -2024,6 +2004,8 @@ export function WorkspaceShell({
             open={activityOpen}
             desktop
             side="end"
+            dir={getLocaleDirection(locale)}
+            container={shellRef}
             title={dictionary.activity.title}
             closeLabel={dictionary.actions.closePanel}
             onClose={() => setActivityOpen(false)}

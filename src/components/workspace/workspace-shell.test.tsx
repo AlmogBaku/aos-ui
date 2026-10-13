@@ -631,7 +631,7 @@ describe("WorkspaceShell", () => {
     await user.tab({ shift: true })
     const settings = () =>
       within(drawer).getByRole("button", { name: en.activity.settings })
-    expect(settings()).toHaveFocus()
+    await waitFor(() => expect(settings()).toHaveFocus())
     await user.keyboard("{Enter}")
     expect(
       within(drawer).getByRole("heading", { name: en.activity.settings })
@@ -646,10 +646,34 @@ describe("WorkspaceShell", () => {
     )
     expect(settings()).toHaveFocus()
     await user.tab()
-    expect(close).toHaveFocus()
+    await waitFor(() => expect(close).toHaveFocus())
     await user.keyboard("{Escape}")
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     expect(triggers[0]).toHaveFocus()
+  })
+
+  it("closes the phone navigator or Activity once for each Session opened from outside them", async () => {
+    const user = userEvent.setup()
+    const { props, rerender } = renderShell()
+    const openNavigator = () =>
+      user.click(screen.getByRole("button", { name: en.actions.openAgents }))
+
+    await openNavigator()
+    expect(screen.getByRole("dialog")).toBeVisible()
+    rerender(<WorkspaceShell {...props} conversationRevealRequest={1} />)
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Activity, 0 unread" })[0]!
+    )
+    expect(screen.getByRole("dialog", { name: "Activity" })).toBeVisible()
+    rerender(<WorkspaceShell {...props} conversationRevealRequest={2} />)
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+
+    // A request already served closes nothing the operator opens after it.
+    await openNavigator()
+    rerender(<WorkspaceShell {...props} conversationRevealRequest={2} />)
+    expect(screen.getByRole("dialog")).toBeVisible()
   })
 
   it("shows an optional environment label in both responsive headers", () => {

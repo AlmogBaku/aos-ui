@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
+import { AcpConnectionClosedError } from "@/runtime-adapters/contracts"
 import type {
   HarnessRuntime,
   SessionMetadata,
+  WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
 
 import { ControlledWorkspaceFixture } from "./test-utils/controlled-workspace-fixture"
@@ -400,27 +402,107 @@ describe("AosUiApp fixture composition", () => {
   })
 
   // Full mount: the details panel's New Session failure reaches the
-  // workspace's error surface.
-  it("surfaces new-Session failures from the empty state", async () => {
+  // workspace's error surface as that action's own failure.
+  it("surfaces new-Session failures from the empty state, even past a dismissed workspace error", async () => {
     const user = userEvent.setup()
-    const rejectSession = async (): Promise<never> => {
-      throw new Error("Provider rejected the Session")
+    let failCatalog: (error: Error) => void = () => {}
+    const overrides: Partial<WorkspaceAdapter> = {
+      createSession: async () => {
+        throw new Error("Provider rejected the Session")
+      },
+      subscribeAgentCatalog: (_listener, onError) => {
+        failCatalog = (error) => onError?.(error)
+        return () => {}
+      },
     }
-    renderWorkspace(() => useEmptyAgentRuntime(rejectSession))
+    renderWorkspace(() => useEmptyAgentRuntime(overrides))
+    const createSession = () =>
+      user.click(
+        within(
+          screen.getByRole("complementary", {
+            name: en.workspace.agentDetails,
+          })
+        ).getByRole("button", { name: en.actions.newSession })
+      )
 
     await screen.findByText(/Applied AI is accelerating fastest/)
     await user.click(screen.getByRole("button", { name: /^Empty,/ }))
-    await user.click(
-      within(
-        screen.getByRole("complementary", {
-          name: en.workspace.agentDetails,
-        })
-      ).getByRole("button", { name: en.actions.newSession })
-    )
+    await createSession()
 
+    let alert = await screen.findByRole("alert")
+    expect(alert).toHaveTextContent("Provider rejected the Session")
+    // The action failed, not the workspace, so there is nothing to reload.
+    expect(alert).not.toHaveTextContent("The workspace could not be loaded.")
+    expect(
+      within(alert).queryByRole("button", { name: "Try again" })
+    ).toBeNull()
+
+    await user.click(
+      within(alert).getByRole("button", { name: "Dismiss notification" })
+    )
+    expect(screen.queryByRole("alert")).toBeNull()
+
+    // A workspace error the operator dismissed no longer hides the next one.
+    act(() => failCatalog(new Error("Agent catalog signal failed")))
+    alert = await screen.findByRole("alert")
+    expect(alert).toHaveTextContent("The workspace could not be loaded.")
+    await user.click(
+      within(alert).getByRole("button", { name: "Dismiss notification" })
+    )
+    await createSession()
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Provider rejected the Session"
     )
+    // A different workspace error is a new one, so it shows again.
+    act(() => failCatalog(new Error("Agent catalog stream failed")))
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The workspace could not be loaded."
+      )
+    )
+  })
+
+  // Full mount: a request the gone connection could not carry fails with the
+  // client's one class, whose own reason is a socket's DOM Event, not words.
+  it("words a lost connection in the workspace and action toasts, never as its own message", async () => {
+    const user = userEvent.setup()
+    const lost = () =>
+      new AcpConnectionClosedError(undefined, { cause: new Event("error") })
+    let failCatalog: (error: Error) => void = () => {}
+    renderWorkspace(() =>
+      useEmptyAgentRuntime({
+        createSession: async () => {
+          throw lost()
+        },
+        subscribeAgentCatalog: (_listener, onError) => {
+          failCatalog = (error) => onError?.(error)
+          return () => {}
+        },
+      })
+    )
+    const wording =
+      "The connection was interrupted. Check your connection, then try again."
+    await screen.findByText(/Applied AI is accelerating fastest/)
+
+    act(() => failCatalog(lost()))
+    let alert = await screen.findByRole("alert")
+    expect(alert).toHaveTextContent("The workspace could not be loaded.")
+    expect(alert).toHaveTextContent(wording)
+    expect(alert).not.toHaveTextContent(lost().message)
+    await user.click(
+      within(alert).getByRole("button", { name: "Dismiss notification" })
+    )
+
+    await user.click(screen.getByRole("button", { name: /^Empty,/ }))
+    await user.click(
+      within(
+        screen.getByRole("complementary", { name: en.workspace.agentDetails })
+      ).getByRole("button", { name: en.actions.newSession })
+    )
+    alert = await screen.findByRole("alert")
+    expect(alert).toHaveTextContent("That action could not be completed.")
+    expect(alert).toHaveTextContent(wording)
+    expect(alert).not.toHaveTextContent(lost().message)
   })
 
   it("ignores delayed todo events from the previously visible Session", async () => {
