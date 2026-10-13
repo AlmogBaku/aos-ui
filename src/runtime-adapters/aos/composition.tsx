@@ -428,6 +428,7 @@ function ReadyAosRuntimeProvider({
     () => undefined
   )
   const sessionStatus = useSessionNotice(
+    connection,
     selectedSessionId,
     selectedSessionState
   )

@@ -28,19 +28,7 @@ export function useConnectionOutage(
     () => connection.outage,
     () => connection.outage
   )
-  const active = outage !== undefined
-  const [graceOver, setGraceOver] = useState(false)
-  useEffect(() => {
-    if (!active) return
-    const timer = setTimeout(
-      () => setGraceOver(true),
-      RECONNECTING_NOTICE_GRACE_MS
-    )
-    return () => {
-      clearTimeout(timer)
-      setGraceOver(false)
-    }
-  }, [active])
+  const graceOver = useGraceOver(outage !== undefined)
   const shown = outage === "capacity" || graceOver ? outage : undefined
   const [previous, setPrevious] = useState(shown)
   const [reconnected, setReconnected] = useState(false)
@@ -62,26 +50,46 @@ export type SessionNotice = "unavailable" | "reconnecting"
 
 /**
  * The selected Session's notice, beneath the connection's: `unavailable` once
- * the Session is gone, and `reconnecting` once a Session joined since it was
- * selected has been rejoining (`joining`, or `unavailable` between retries)
- * past the grace the connection's notice waits. A first open shows nothing
- * however long its join takes, and the notice goes once the Session is joined.
+ * the Session is gone, and `reconnecting` once the connection was lost while
+ * the Session was joined and it has not joined again (nor gone) past the grace
+ * the connection's notice waits. A Session that leaves `joined` with no loss,
+ * such as a replay the browser asked for or a join the gateway refused, has no
+ * reconnect to report, and neither has a first open. The loss is forgotten
+ * once the Session joins.
  */
 export function useSessionNotice(
+  connection: AcpConnection,
   sessionId: string | undefined,
   state: AcpSessionState | undefined
 ): SessionNotice | undefined {
-  // Whether the selected Session has been joined since it was selected.
+  const outage = useSyncExternalStore(
+    connection.subscribeOutage,
+    () => connection.outage,
+    () => connection.outage
+  )
+  // Whether the selected Session has joined since it was selected, and
+  // whether the connection was lost after it had.
   const [selected, setSelected] = useState(sessionId)
   const [joined, setJoined] = useState(state === "joined")
+  const [lost, setLost] = useState(false)
   if (selected !== sessionId) {
     setSelected(sessionId)
     setJoined(state === "joined")
+    setLost(false)
   } else if (state === "joined" && !joined) setJoined(true)
-  const rejoining = joined && (state === "joining" || state === "unavailable")
+  else if (joined && outage !== undefined && !lost) setLost(true)
+  else if (lost && state === "joined" && outage === undefined) setLost(false)
+  const rejoining = lost && (state === "joining" || state === "unavailable")
+  const graceOver = useGraceOver(rejoining)
+  if (state === "gone") return "unavailable"
+  return rejoining && graceOver ? "reconnecting" : undefined
+}
+
+/** Whether `active` has held for the notice's grace; false once it lapses. */
+function useGraceOver(active: boolean) {
   const [graceOver, setGraceOver] = useState(false)
   useEffect(() => {
-    if (!rejoining) return
+    if (!active) return
     const timer = setTimeout(
       () => setGraceOver(true),
       RECONNECTING_NOTICE_GRACE_MS
@@ -90,7 +98,6 @@ export function useSessionNotice(
       clearTimeout(timer)
       setGraceOver(false)
     }
-  }, [rejoining])
-  if (state === "gone") return "unavailable"
-  return rejoining && graceOver ? "reconnecting" : undefined
+  }, [active])
+  return graceOver
 }
