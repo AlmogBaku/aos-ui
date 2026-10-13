@@ -6,6 +6,7 @@ import {
   Archive,
   ArchiveRestore,
   Ellipsis,
+  GitFork,
   Pencil,
   Pin,
   PinOff,
@@ -39,6 +40,7 @@ export type SessionRowMenuCopy = {
   unpin: string
   archive: string
   unarchive: string
+  fork: string
   delete: string
   closeTab: string
   removeOpenSession: string
@@ -54,6 +56,7 @@ export function sessionRowMenuCopy(dictionary: Dictionary): SessionRowMenuCopy {
     unpin: dictionary.actions.unpinSession,
     archive: dictionary.actions.archiveSession,
     unarchive: dictionary.actions.unarchiveSession,
+    fork: dictionary.actions.forkSession,
     delete: dictionary.actions.deleteSession,
     closeTab: dictionary.actions.closeTab,
     removeOpenSession: dictionary.mobileNavigation.removeOpenSession,
@@ -69,6 +72,7 @@ export type SessionRowMenuHandlers = {
   onRename?: (session: WorkspaceSession) => void
   onTogglePin?: (session: WorkspaceSession) => void
   onToggleArchive?: (session: WorkspaceSession) => void
+  onFork?: (session: WorkspaceSession) => void
   onDelete?: (session: WorkspaceSession) => void
   onCloseTab?: (session: WorkspaceSession) => void
   onRemoveOpenSession?: (session: WorkspaceSession) => void
@@ -149,6 +153,18 @@ function sessionMenuEntries({
     }
   }
 
+  // Only a runtime that forks is handed a fork, and the connection said so
+  // before any row showed, so no further answer is awaited.
+  if (handlers.onFork) {
+    const onFork = handlers.onFork
+    items.push({
+      id: "fork",
+      label: copy.fork,
+      icon: <GitFork aria-hidden="true" />,
+      available: true,
+      run: () => onFork(session),
+    })
+  }
   if (handlers.onCloseTab) {
     const onCloseTab = handlers.onCloseTab
     items.push({

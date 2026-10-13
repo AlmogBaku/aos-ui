@@ -564,6 +564,7 @@ function WorkspaceContent({
     unarchiveSession,
     deleteSession,
     createSession,
+    forkSession,
     openAgentBuilder,
     discardDraft,
     hideAgent,
@@ -606,35 +607,57 @@ function WorkspaceContent({
     subscribeThread,
     () => runtime.thread.getState().messages.length === 0
   )
-  const localCommands = useMemo<readonly ComposerLocalCommand[] | undefined>(
-    () =>
-      selectedAgentId && !selectedAgentIsDraft
-        ? [
-            {
-              name: "new",
-              description: dictionary.actions.newSessionCommand,
-              available: !threadIsEmpty,
-              run: async (args) => {
-                try {
-                  if (!threadIsEmpty) await createSession(selectedAgentId)
-                  if (args) runtime.thread.composer.setText(args)
-                } catch (reason) {
-                  setActionError(toError(reason))
-                }
-              },
-            },
-          ]
-        : undefined,
-    [
-      createSession,
-      dictionary,
-      runtime,
-      selectedAgentId,
-      selectedAgentIsDraft,
-      setActionError,
-      threadIsEmpty,
+  // `/fork` and `/branch` are the composer's spelling of the Fork action, run
+  // here for the same reason: the fork opens as the Session in view, and no
+  // turn is sent. A Session not created yet has nothing to fork.
+  const forksSessions = Boolean(bundle.forkSession)
+  const localCommands = useMemo<
+    readonly ComposerLocalCommand[] | undefined
+  >(() => {
+    if (!selectedAgentId || selectedAgentIsDraft) return undefined
+    const fork = async (args: string) => {
+      try {
+        if (visibleThreadId) await forkSession(visibleThreadId)
+        if (args) runtime.thread.composer.setText(args)
+      } catch (reason) {
+        setActionError(toError(reason))
+      }
+    }
+    return [
+      {
+        name: "new",
+        description: dictionary.actions.newSessionCommand,
+        available: !threadIsEmpty,
+        run: async (args) => {
+          try {
+            if (!threadIsEmpty) await createSession(selectedAgentId)
+            if (args) runtime.thread.composer.setText(args)
+          } catch (reason) {
+            setActionError(toError(reason))
+          }
+        },
+      },
+      ...(forksSessions
+        ? ["fork", "branch"].map((name) => ({
+            name,
+            description: dictionary.actions.forkSessionCommand,
+            available: Boolean(visibleThreadId),
+            run: fork,
+          }))
+        : []),
     ]
-  )
+  }, [
+    createSession,
+    dictionary,
+    forkSession,
+    forksSessions,
+    runtime,
+    selectedAgentId,
+    selectedAgentIsDraft,
+    setActionError,
+    threadIsEmpty,
+    visibleThreadId,
+  ])
   const threadComposerFeatures = useMemo(
     () => ({ ...composerFeatures, localCommands }),
     [composerFeatures, localCommands]
@@ -747,6 +770,7 @@ function WorkspaceContent({
         onSetSessionPinned={setSessionPinned}
         onArchiveSession={archiveSession}
         onUnarchiveSession={unarchiveSession}
+        onForkSession={bundle.forkSession ? forkSession : undefined}
         onDeleteSession={deleteSession}
         sessionActions={sessionActions}
         onSearchSessions={workspace.searchSessions}

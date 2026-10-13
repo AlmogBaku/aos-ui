@@ -183,6 +183,8 @@ export type WorkspaceShellProps = {
   ) => WorkspaceActionResult
   onArchiveSession?: (sessionId: string) => WorkspaceActionResult
   onUnarchiveSession?: (sessionId: string) => WorkspaceActionResult
+  /** Absent where the runtime does not fork Sessions. */
+  onForkSession?: (sessionId: string) => WorkspaceActionResult
   onDeleteSession?: (sessionId: string) => WorkspaceActionResult
   /** Runtime-declared Session actions, or `null` until the runtime answers. */
   sessionActions?: SessionActionCapabilities | null
@@ -1124,6 +1126,7 @@ export function WorkspaceShell({
   onSetSessionPinned,
   onArchiveSession,
   onUnarchiveSession,
+  onForkSession,
   onDeleteSession,
   sessionActions,
   onOpenAgentBuilder,
@@ -1443,6 +1446,10 @@ export function WorkspaceShell({
                 onActionError
               )
           : undefined,
+      onFork: onForkSession
+        ? (session) =>
+            runAction(() => onForkSession(session.sessionId), onActionError)
+        : undefined,
       onDelete: onDeleteSession
         ? (session) =>
             setSessionDialog({
@@ -1456,6 +1463,7 @@ export function WorkspaceShell({
       onActionError,
       onArchiveSession,
       onDeleteSession,
+      onForkSession,
       onRenameSession,
       onSetSessionPinned,
       onUnarchiveSession,

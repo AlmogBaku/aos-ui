@@ -118,6 +118,8 @@ export const he = {
     unpinSession: "ביטול ההצמדה",
     archiveSession: "העברה לארכיון",
     unarchiveSession: "הוצאה מהארכיון",
+    forkSession: "פיצול",
+    forkSessionCommand: "פיצול השיחה הזו לשיחה חדשה",
     deleteSession: "מחיקה",
     deleteSessionTitle: "למחוק את השיחה?",
     deleteSessionDescription:

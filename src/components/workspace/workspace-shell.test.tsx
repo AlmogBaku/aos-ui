@@ -946,6 +946,7 @@ describe("WorkspaceShell", () => {
       onSetSessionPinned: vi.fn(),
       onArchiveSession: vi.fn(),
       onUnarchiveSession: vi.fn(),
+      onForkSession: vi.fn(),
       onDeleteSession: vi.fn(),
     })
 
@@ -956,9 +957,23 @@ describe("WorkspaceShell", () => {
       "Rename",
       "Pin",
       "Archive",
+      "Fork",
       "Close tab",
       "Delete",
     ])
+  })
+
+  // The handler exists only where the runtime forks, which the connection
+  // already said, so Fork waits on no other runtime answer.
+  it("forks the Session its row menu belongs to", async () => {
+    const user = userEvent.setup()
+    const onForkSession = vi.fn()
+    renderShell({ sessionActions: null, onForkSession })
+
+    await collapseInspector(user)
+    await user.click(tabSessionMenu("Market brief"))
+    await user.click(await screen.findByRole("menuitem", { name: "Fork" }))
+    expect(onForkSession).toHaveBeenCalledExactlyOnceWith("thread-market")
   })
 
   it("renames the active Session through the shared dialog", async () => {

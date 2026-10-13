@@ -107,6 +107,7 @@ const copy: MobileNavigatorCopy = {
     unpin: "Unpin",
     archive: "Archive",
     unarchive: "Unarchive",
+    fork: "Fork",
     delete: "Delete",
     closeTab: "Close tab",
     removeOpenSession: "Remove from open sessions",

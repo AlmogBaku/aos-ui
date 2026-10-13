@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { useMemo } from "react"
 import { describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
@@ -25,6 +26,7 @@ import {
   useFixtureBundle,
   useSessionMetadataSignalRuntime,
   useStaleTodoRuntime,
+  type TestRuntime,
 } from "./aos-ui-workspace.test-helpers"
 
 vi.mock("react-router", () => import("./test-utils/window-router"))
@@ -399,6 +401,114 @@ describe("AosUiApp fixture composition", () => {
     })
     await user.type(emptyInput, "/ne")
     expect(screen.queryByText(en.actions.newSessionCommand)).toBeNull()
+  })
+
+  describe("forking a Session", () => {
+    const FORKED_TITLE = "Market brief, forked"
+
+    /**
+     * The public fixture with a runtime that forks: the fork is a new Session
+     * of the source's Agent, which the catalog then lists.
+     */
+    function forkingRuntime(forked: (sessionId: string) => void) {
+      return function useForkingRuntime(): TestRuntime {
+        const fixture = usePublicFixture()
+        return useMemo(
+          () => ({
+            ...fixture,
+            forkSession: async (sessionId: string) => {
+              forked(sessionId)
+              const [source] = await fixture.workspace.getSessionMetadata([
+                sessionId,
+              ])
+              return fixture.workspace.createSession(source!.agentId, {
+                title: FORKED_TITLE,
+              })
+            },
+          }),
+          [fixture]
+        )
+      }
+    }
+
+    type User = ReturnType<typeof userEvent.setup>
+    /** The fork, typed: Enter takes the command from the menu, then sends it. */
+    const typed = (command: string) => async (user: User) => {
+      await user.type(
+        screen.getByRole("textbox", { name: "Message input" }),
+        `${command}{Enter}{Enter}`
+      )
+    }
+
+    // Full mount: the row menu, `/fork` and `/branch` are the workspace's to
+    // define over one fork, and no lower seam joins them.
+    it.each<readonly [string, (user: User) => Promise<void>]>([
+      [
+        "the Session's row menu",
+        async (user) => {
+          await user.click(
+            screen.getByRole("button", {
+              name: `${en.actions.sessionActions}: Market brief`,
+            })
+          )
+          await user.click(
+            await screen.findByRole("menuitem", {
+              name: en.actions.forkSession,
+            })
+          )
+        },
+      ],
+      ["a typed /fork", typed("/fork")],
+      ["a typed /branch", typed("/branch")],
+    ])(
+      "forks the Session from %s and opens the fork, sending nothing",
+      async (_, fork) => {
+        const user = userEvent.setup()
+        const forked = vi.fn()
+        renderWorkspace(forkingRuntime(forked), fixtureClock)
+        await collapseInspector(user)
+        await screen.findByRole("tab", { name: "Market brief" })
+
+        await fork(user)
+
+        await waitFor(() =>
+          expect(
+            screen.getByRole("tab", { name: FORKED_TITLE })
+          ).toHaveAttribute("aria-selected", "true")
+        )
+        expect(forked).toHaveBeenCalledExactlyOnceWith("thread-aster-market")
+        expect(
+          screen.getByRole("textbox", { name: "Message input" })
+        ).toHaveValue("")
+        expect(screen.queryByText(/^\/(fork|branch)$/u)).toBeNull()
+      }
+    )
+
+    it("offers no fork where the runtime cannot fork", async () => {
+      const user = userEvent.setup()
+      renderWorkspace(usePublicFixture, fixtureClock)
+      await collapseInspector(user)
+      await screen.findByRole("tab", { name: "Market brief" })
+
+      await user.click(
+        screen.getByRole("button", {
+          name: `${en.actions.sessionActions}: Market brief`,
+        })
+      )
+      expect(
+        await screen.findByRole("menuitem", { name: en.actions.closeTab })
+      ).toBeVisible()
+      expect(
+        screen.queryByRole("menuitem", { name: en.actions.forkSession })
+      ).toBeNull()
+      await user.keyboard("{Escape}")
+
+      await user.type(
+        screen.getByRole("textbox", { name: "Message input" }),
+        "/fo"
+      )
+      expect(screen.queryByText(en.actions.forkSessionCommand)).toBeNull()
+    })
   })
 
   // Full mount: the details panel's New Session failure reaches the

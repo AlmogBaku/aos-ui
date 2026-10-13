@@ -37,7 +37,7 @@ import { AosUiWorkspace } from "./aos-ui-workspace"
 
 /** What a test hands both the workspace and its navigation hook. */
 export type TestRuntime = WorkspaceFixtureRuntime &
-  Pick<HarnessRuntime, "createSessionDraft">
+  Pick<HarnessRuntime, "createSessionDraft" | "forkSession">
 
 export type WorkspaceNavigation = ReturnType<typeof useWorkspaceNavigation>
 
@@ -55,6 +55,7 @@ export function asHarnessRuntime(runtime: TestRuntime): HarnessRuntime {
     assistantRuntime: runtime.assistantRuntime,
     workspace: runtime.workspace,
     createSessionDraft: runtime.createSessionDraft,
+    forkSession: runtime.forkSession,
     artifacts: runtime.artifacts ? { resolver: runtime.artifacts } : undefined,
     activityCoverage: "workspace",
   }
