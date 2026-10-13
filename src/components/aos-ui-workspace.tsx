@@ -76,6 +76,7 @@ import type {
   TodoItem,
 } from "@/runtime-adapters/contracts"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
+import { AcpConnectionClosedError } from "@/runtime-adapters/contracts"
 import { getWorkspaceCapabilities } from "@/runtime-adapters/workspace-state"
 import { cn } from "@/lib/utils"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
@@ -142,6 +143,8 @@ const workspaceCopy = {
     retry: "Try again",
     loading: "Loading workspace…",
     unavailable: "The workspace could not be loaded.",
+    connectionLost:
+      "The connection was interrupted. Check your connection, then try again.",
     actionFailed: "That action could not be completed.",
     sessionUnavailable:
       "This Session could not be shown. Open another Session from the list.",
@@ -159,6 +162,7 @@ const workspaceCopy = {
     retry: "ניסיון חוזר",
     loading: "סביבת העבודה נטענת…",
     unavailable: "לא ניתן לטעון את סביבת העבודה.",
+    connectionLost: "החיבור נקטע. בדקו את החיבור ונסו שוב.",
     actionFailed: "לא ניתן היה להשלים את הפעולה.",
     sessionUnavailable: "לא ניתן להציג את השיחה הזו. פתחו שיחה אחרת מהרשימה.",
     tasks: "משימות השיחה",
@@ -358,6 +362,13 @@ function TodoDock({
   )
 }
 
+/** A gone connection says so in words; its socket's reason is no message. */
+function failureText(error: Error, locale: Locale) {
+  return error instanceof AcpConnectionClosedError
+    ? workspaceCopy[locale].connectionLost
+    : error.message
+}
+
 function WorkspaceError({
   locale,
   error,
@@ -374,7 +385,7 @@ function WorkspaceError({
     <ErrorToast
       locale={locale}
       title={copy.unavailable}
-      message={error.message}
+      message={failureText(error, locale)}
       onDismiss={onDismiss}
       actions={
         <Button type="button" size="sm" variant="outline" onClick={onRetry}>
@@ -760,7 +771,7 @@ function WorkspaceContent({
             <ErrorToast
               locale={locale}
               title={workspaceCopy[locale].actionFailed}
-              message={actionError.message}
+              message={failureText(actionError, locale)}
               onDismiss={() => setActionError(null)}
             />
           ) : null}

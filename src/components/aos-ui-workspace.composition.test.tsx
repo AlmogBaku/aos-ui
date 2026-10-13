@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
+import { AcpConnectionClosedError } from "@/runtime-adapters/contracts"
 import type {
   HarnessRuntime,
   SessionMetadata,
@@ -459,6 +460,49 @@ describe("AosUiApp fixture composition", () => {
         "The workspace could not be loaded."
       )
     )
+  })
+
+  // Full mount: a request the gone connection could not carry fails with the
+  // client's one class, whose own reason is a socket's DOM Event, not words.
+  it("words a lost connection in the workspace and action toasts, never as its own message", async () => {
+    const user = userEvent.setup()
+    const lost = () =>
+      new AcpConnectionClosedError(undefined, { cause: new Event("error") })
+    let failCatalog: (error: Error) => void = () => {}
+    renderWorkspace(() =>
+      useEmptyAgentRuntime({
+        createSession: async () => {
+          throw lost()
+        },
+        subscribeAgentCatalog: (_listener, onError) => {
+          failCatalog = (error) => onError?.(error)
+          return () => {}
+        },
+      })
+    )
+    const wording =
+      "The connection was interrupted. Check your connection, then try again."
+    await screen.findByText(/Applied AI is accelerating fastest/)
+
+    act(() => failCatalog(lost()))
+    let alert = await screen.findByRole("alert")
+    expect(alert).toHaveTextContent("The workspace could not be loaded.")
+    expect(alert).toHaveTextContent(wording)
+    expect(alert).not.toHaveTextContent(lost().message)
+    await user.click(
+      within(alert).getByRole("button", { name: "Dismiss notification" })
+    )
+
+    await user.click(screen.getByRole("button", { name: /^Empty,/ }))
+    await user.click(
+      within(
+        screen.getByRole("complementary", { name: en.workspace.agentDetails })
+      ).getByRole("button", { name: en.actions.newSession })
+    )
+    alert = await screen.findByRole("alert")
+    expect(alert).toHaveTextContent("That action could not be completed.")
+    expect(alert).toHaveTextContent(wording)
+    expect(alert).not.toHaveTextContent(lost().message)
   })
 
   it("ignores delayed todo events from the previously visible Session", async () => {

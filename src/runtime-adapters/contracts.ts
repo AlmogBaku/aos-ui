@@ -70,6 +70,10 @@ export type AgentUpdate = {
 // of, so the avatar save's `instanceof` holds across the package boundary.
 export { AgentUpdateError } from "@harness-gw/sdk"
 
+// The connection is gone for a request, whatever the socket closed with; the
+// transport's own reason is only its `cause`, so the UI words it itself.
+export { AcpConnectionClosedError } from "@harness-gw/sdk"
+
 export type SessionStatus =
   | "idle"
   | "running"
