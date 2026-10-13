@@ -678,10 +678,13 @@
   opacity: 0;
 }
 
+/* A drag past open pulls the drawer off its screen edge, so it bleeds past
+   that edge by enough drawer to fill the gap it leaves. */
 .drawer {
+  --drawer-bleed: 3rem;
   position: absolute;
   inset-block: 0;
-  inline-size: min(28rem, calc(100vw - 0.75rem));
+  inline-size: calc(min(28rem, calc(100vw - 0.75rem)) + var(--drawer-bleed));
   overflow: hidden;
   padding-block-start: env(safe-area-inset-top);
   background: var(--sidebar);
@@ -697,14 +700,14 @@
     [data-starting-style],
     [data-ending-style]
   ) {
-  transform: translateX(-100%);
+  transform: translateX(calc(-100% + var(--drawer-bleed)));
 }
 
 .drawer[data-swipe-direction="right"]:is(
     [data-starting-style],
     [data-ending-style]
   ) {
-  transform: translateX(100%);
+  transform: translateX(calc(100% - var(--drawer-bleed)));
 }
 
 .drawer[data-swiping],
@@ -723,12 +726,14 @@
 }
 
 .drawer[data-side="start"] {
-  inset-inline-start: 0;
+  inset-inline-start: calc(-1 * var(--drawer-bleed));
+  padding-inline-start: var(--drawer-bleed);
   border-inline-end: 1px solid var(--border);
 }
 
 .drawer[data-side="end"] {
-  inset-inline-end: 0;
+  inset-inline-end: calc(-1 * var(--drawer-bleed));
+  padding-inline-end: var(--drawer-bleed);
   border-inline-start: 1px solid var(--border);
 }
 
@@ -741,6 +746,11 @@
   display: flex;
   block-size: 3.5rem;
   align-items: center;
+}
+
+/* An end drawer's bleed lies past its close control's edge. */
+.drawer[data-side="end"] .drawerHeader {
+  inset-inline-end: calc(0.75rem + var(--drawer-bleed));
 }
 
 .drawerContent {
