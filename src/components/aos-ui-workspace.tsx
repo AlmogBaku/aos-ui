@@ -601,16 +601,19 @@ function WorkspaceContent({
   )
   // `/fork` and `/branch` are the composer's spelling of the Fork action, run
   // here for the same reason: the fork opens as the Session in view, and no
-  // turn is sent. A Session not created yet has nothing to fork.
+  // turn is sent. ACP's fork takes no title, so a name typed after the command
+  // names the fork as Rename does; one it cannot take leaves the fork as it
+  // is. A Session not created yet has nothing to fork.
   const forksSessions = Boolean(bundle.forkSession)
   const localCommands = useMemo<
     readonly ComposerLocalCommand[] | undefined
   >(() => {
     if (!selectedAgentId || selectedAgentIsDraft) return undefined
-    const fork = async (args: string) => {
+    const fork = async (title: string) => {
+      if (!visibleThreadId) return
       try {
-        if (visibleThreadId) await forkSession(visibleThreadId)
-        if (args) runtime.thread.composer.setText(args)
+        const forked = await forkSession(visibleThreadId)
+        if (title) await renameSession(forked, title)
       } catch (reason) {
         setActionError(toError(reason))
       }
@@ -643,6 +646,7 @@ function WorkspaceContent({
     dictionary,
     forkSession,
     forksSessions,
+    renameSession,
     runtime,
     selectedAgentId,
     selectedAgentIsDraft,

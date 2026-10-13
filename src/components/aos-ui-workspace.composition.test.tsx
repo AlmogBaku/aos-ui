@@ -411,7 +411,8 @@ describe("AosUiApp fixture composition", () => {
      * of the source's Agent, which the catalog then lists.
      */
     function forkingRuntime(forked: (sessionId: string) => void) {
-      return function useForkingRuntime(): TestRuntime {
+      return function useForkingRuntime(): ReturnType<typeof usePublicFixture> &
+        Pick<TestRuntime, "forkSession"> {
         const fixture = usePublicFixture()
         return useMemo(
           () => ({
@@ -482,6 +483,49 @@ describe("AosUiApp fixture composition", () => {
         expect(screen.queryByText(/^\/(fork|branch)$/u)).toBeNull()
       }
     )
+
+    // ACP's fork takes no title, so a name typed after the command reaches
+    // the fork through Rename, and never its composer, where Enter would
+    // send it as a prompt.
+    it.each([
+      ["names the fork after a name typed behind the command", undefined],
+      [
+        "keeps the fork and says so when naming it fails",
+        "The provider refused the title",
+      ],
+    ])("%s", async (_, refusal) => {
+      const user = userEvent.setup()
+      const forked = vi.fn()
+      const view = renderWorkspace(forkingRuntime(forked), fixtureClock)
+      await collapseInspector(user)
+      await screen.findByRole("tab", { name: "Market brief" })
+      if (refusal)
+        vi.spyOn(view.runtime.workspace, "setSessionTitle").mockImplementation(
+          () => {
+            throw new Error(refusal)
+          }
+        )
+
+      await user.click(screen.getByRole("textbox", { name: "Message input" }))
+      await user.paste("/branch Pricing ideas")
+      await user.keyboard("{Enter}")
+
+      await waitFor(() =>
+        expect(forked).toHaveBeenCalledExactlyOnceWith("thread-aster-market")
+      )
+      const fork = refusal ? FORKED_TITLE : "Pricing ideas"
+      await waitFor(() =>
+        expect(screen.getByRole("tab", { name: fork })).toHaveAttribute(
+          "aria-selected",
+          "true"
+        )
+      )
+      if (refusal)
+        expect(await screen.findByRole("alert")).toHaveTextContent(refusal)
+      expect(
+        screen.getByRole("textbox", { name: "Message input" })
+      ).toHaveValue("")
+    })
 
     it("offers no fork where the runtime cannot fork", async () => {
       const user = userEvent.setup()

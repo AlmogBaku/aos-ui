@@ -1496,6 +1496,7 @@ export function useWorkspaceNavigation({
   /**
    * Forks a Session and opens the fork, as a created Session opens: the
    * runtime's copy belongs to the source's Agent and lists like any Session.
+   * Resolves with the fork's id.
    */
   async function forkSession(sessionId: string) {
     const fork = bundle.forkSession
@@ -1515,6 +1516,7 @@ export function useWorkspaceNavigation({
     await runtime.threads.reload()
     updateRoute({ agentId, sessionId: forked.sessionId }, "push")
     await selectRuntimeThread(forked.sessionId)
+    return forked.sessionId
   }
 
   async function openAgentBuilder() {
