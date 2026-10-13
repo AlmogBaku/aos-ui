@@ -28,9 +28,7 @@ export type AcpThreadListConnection = Pick<
   AcpConnection,
   "listSessions" | "updateSession" | "deleteSession"
 > & {
-  newSession(
-    meta: Parameters<AcpConnection["newSession"]>[0]
-  ): Promise<{ sessionId: string }>
+  newSession(meta: { agentId: string }): Promise<{ sessionId: string }>
 }
 
 export type AcpThreadListOptions = {

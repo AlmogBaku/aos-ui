@@ -541,6 +541,52 @@ describe("provider-neutral AOS runtime composition", () => {
     await waitFor(() => expect(proxy.prompts).toHaveLength(1))
     expect(proxy.created).toEqual([AGENT_ID])
   })
+
+  it("stages an attachment on a new Session's first message, before it is ever listed", async () => {
+    // The catalog never lists `created-1`, so only its creation can name its
+    // owner for the REST byte route.
+    const stagePath = `/api/v1/agents/${AGENT_ID}/sessions/created-1/attachments/stage`
+    const fetcher = vi.fn(async (input: RequestInfo | URL) =>
+      String(input) === stagePath
+        ? Response.json({
+            stageId: "stage-1",
+            attachments: [
+              {
+                type: "image",
+                dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+                filename: "chart.png",
+              },
+            ],
+          })
+        : new Response(null, { status: 404 })
+    )
+    vi.stubGlobal("fetch", fetcher)
+    const { proxy, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    const composer = () => runtime()!.assistantRuntime.thread.composer
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+
+    await act(async () => {
+      await composer().addAttachment(
+        new File(["png"], "chart.png", { type: "image/png" })
+      )
+      composer().setText("Read this chart")
+      composer().send()
+    })
+
+    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    expect(fetcher).toHaveBeenCalledWith(
+      stagePath,
+      expect.objectContaining({ method: "POST" })
+    )
+    expect(proxy.prompts[0]).toMatchObject({
+      sessionId: "created-1",
+      _meta: { [HGW_META_KEY]: { attachmentStageId: "stage-1" } },
+    })
+    expect(screen.queryByText("Session ownership is unknown")).toBeNull()
+  })
 })
 
 /** The operator workspace over the fake proxy, opened at one compact URL. */
