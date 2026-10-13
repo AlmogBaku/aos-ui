@@ -542,7 +542,9 @@ function childMessage(like: ThreadMessageLike, child: ProjectedChild) {
       ? { type: "incomplete", reason: "error" }
       : status === "running" || status === "waiting"
         ? { type: "running" }
-        : { type: "complete", reason: "stop" }
+        : status === "unknown"
+          ? { type: "incomplete", reason: "other" }
+          : { type: "complete", reason: "stop" }
   return fromThreadMessageLike(like, like.id ?? child.subagent.id, settled)
 }
 

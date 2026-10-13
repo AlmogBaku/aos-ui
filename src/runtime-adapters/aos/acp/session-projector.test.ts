@@ -1990,9 +1990,29 @@ describe("applyUpdate child Sessions", () => {
       },
       "failed",
     ],
+    [{ state: "unknown" }, "unknown"],
   ] as const)("reads a child's %o state as %s", (childState, status) => {
     const state = fold([report({ state: childState })], announced)
     expect(aosOf(state)?.subagent?.status).toBe(status)
+  })
+
+  // The gateway stops following a child still at work when its parent's turn
+  // ends, and says so in one last report: nothing confirms how it ended.
+  it("reads a child no longer followed as unconfirmed, until a replay restates how it ended", () => {
+    const unfollowed = fold(
+      [report({ state: { state: "unknown" }, capabilities: {} }, TURN_META)],
+      announced
+    )
+    expect(aosOf(unfollowed)?.subagent).toMatchObject({
+      status: "unknown",
+      cancellable: false,
+    })
+
+    const replayed = fold(
+      [spawnCall, report({ state: { state: "idle", stopReason: "end_turn" } })],
+      clearTranscript(unfollowed)
+    )
+    expect(aosOf(replayed)?.subagent?.status).toBe("completed")
   })
 
   it("patches what a later report restates, and replaces its capabilities whole", () => {

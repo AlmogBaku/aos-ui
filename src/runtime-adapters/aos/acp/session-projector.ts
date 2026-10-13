@@ -145,13 +145,17 @@ export type ProjectorState = {
 
 type EarlyUpdate = { readonly update: SessionUpdate; readonly meta: unknown }
 
-/** How far a child Session's work has got, from its latest state snapshot. */
+/**
+ * How far a child Session's work has got, from its latest state snapshot:
+ * `unknown` is a child nothing observes, so how it ended is unconfirmed.
+ */
 export type ChildStatus =
   | "running"
   | "waiting"
   | "completed"
   | "cancelled"
   | "failed"
+  | "unknown"
 
 /**
  * A child Session this one spawned, as ACP v2's `subagent_update` reports it on
@@ -422,9 +426,10 @@ function childStatusOf(state: UpdatePayload): ChildStatus | undefined {
       return "running"
     case "requires_action":
       return "waiting"
-    // Nothing observes the child, so it may have failed, as a Session would.
+    // Nothing observes the child: the gateway stops following one still at
+    // work when its parent's turn ends, so it may still run, or be done.
     case "unknown":
-      return "failed"
+      return "unknown"
     case "idle":
       return state.stopReason === "cancelled"
         ? "cancelled"

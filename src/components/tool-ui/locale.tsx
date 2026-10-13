@@ -19,6 +19,8 @@ export type ToolUiActivityStatus =
   | "waiting"
   | "completed"
   | "failed"
+  /** Nothing confirms how the activity ended, nor that it still runs. */
+  | "unknown"
 export type ToolUiActionKind =
   | "skill"
   | "read"
@@ -352,6 +354,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     waiting: "Waiting",
     completed: "Completed",
     failed: "Failed",
+    unknown: "Status unavailable",
   },
   activityTranscript: {
     title: "Transcript",
@@ -570,6 +573,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     waiting: "בהמתנה",
     completed: "הושלם",
     failed: "נכשל",
+    unknown: "המצב אינו זמין",
   },
   activityTranscript: {
     title: "תמליל",

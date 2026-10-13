@@ -441,6 +441,24 @@ describe("subagents", () => {
 
     // The child's own child asks under the same request id, and each answer
     // goes to the Session its request came from.
+    // A child the gateway no longer follows may still be at work, or done:
+    // the card says neither, and offers no Stop it could not confirm.
+    it("says a child no longer followed is unconfirmed, and offers no Stop", async () => {
+      render(
+        <ChildSessionControlsProvider controls={controls()}>
+          <LocalThread
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith({ ...running, status: "unknown" }, [])}
+          />
+        </ChildSessionControlsProvider>
+      )
+
+      expect(await screen.findByText("Status unavailable")).toBeVisible()
+      expect(screen.queryByText("Running")).toBeNull()
+      expect(screen.queryByText("Transcript is loading…")).toBeNull()
+      expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
+    })
+
     it("answers each permission request on the child Session that asked it", async () => {
       const user = userEvent.setup()
       const child = controls()

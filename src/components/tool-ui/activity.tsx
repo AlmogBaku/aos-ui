@@ -1,6 +1,7 @@
 import {
   Check,
   CircleAlert,
+  CircleHelp,
   Clock3,
   LoaderCircle,
   PanelRightOpen,
@@ -611,7 +612,7 @@ function ChildSessionTranscript() {
 /** A provider's free-form subagent status, when it names one AOS shows. */
 function subagentStatus(
   status: string | undefined
-): ActivityChildStatus | undefined {
+): ToolUiActivityStatus | undefined {
   switch (status?.toLowerCase()) {
     case "running":
     case "in_progress":
@@ -631,6 +632,9 @@ function subagentStatus(
     case "cancelled":
     case "canceled":
       return "failed"
+    // A child nothing follows any longer may still run, or be done.
+    case "unknown":
+      return "unknown"
     default:
       return undefined
   }
@@ -668,6 +672,7 @@ const activityStatusIcons: Record<ToolUiActivityStatus, typeof LoaderCircle> = {
   waiting: Clock3,
   completed: Check,
   failed: CircleAlert,
+  unknown: CircleHelp,
 }
 
 function ActivityStatusLabel({ status }: { status: ToolUiActivityStatus }) {
