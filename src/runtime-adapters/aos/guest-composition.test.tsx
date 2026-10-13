@@ -20,6 +20,7 @@ import { z } from "zod"
 import {
   INTERACTION_PROTOCOL,
   HGW_AUTH_METHOD_INVITE,
+  HGW_EXTENSION_VERSION,
   HGW_META_KEY,
   HGW_METHODS,
   HgwPromptMetaSchema,
@@ -165,7 +166,7 @@ function createGuestGatewayAgent(options: GuestGatewayOptions = {}) {
         ],
         _meta: {
           [HGW_META_KEY]: {
-            version: 1,
+            version: HGW_EXTENSION_VERSION,
             role: "guest",
             extensions: {
               // The guest lane carries the operator's conversation controls.
@@ -585,7 +586,9 @@ describe("AOS guest browser composition", () => {
         },
       ])
     )
-    expect(HgwSteerRequestSchema.safeParse(gateway.steers[0]).success).toBe(true)
+    expect(HgwSteerRequestSchema.safeParse(gateway.steers[0]).success).toBe(
+      true
+    )
     expect(gateway.prompts).toHaveLength(1)
   })
 

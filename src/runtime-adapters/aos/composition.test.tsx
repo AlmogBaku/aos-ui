@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import {
+  HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_META_KEY,
@@ -161,7 +162,7 @@ function createGatewayAgent() {
       info: { name: "harness-gw", version: "1" },
       _meta: {
         [HGW_META_KEY]: {
-          version: 1,
+          version: HGW_EXTENSION_VERSION,
           role: "operator",
           extensions: {
             steer: true,

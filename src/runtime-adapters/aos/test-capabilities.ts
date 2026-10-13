@@ -30,6 +30,7 @@ export function sessionCapabilities({
     },
     interactions: {
       steering: unavailable,
+      rewind: unavailable,
       reactions: unavailable,
       ...interactions,
     },

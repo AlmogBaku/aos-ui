@@ -21,6 +21,7 @@ import type { CompleteAttachment, ThreadMessageLike } from "@assistant-ui/core"
 
 import {
   HGW_ATTACHMENT_URI_SCHEME,
+  HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_PLAN_ID,
@@ -58,7 +59,7 @@ const TURN_META = { sequence: 0, turnId: "run-1" }
 
 /** The handshake of a gateway that does, or does not, serve older pages. */
 const initializeMeta = (historyPages: boolean): HgwInitializeMeta => ({
-  version: 1,
+  version: HGW_EXTENSION_VERSION,
   role: "operator",
   extensions: {
     steer: true,
@@ -142,11 +143,13 @@ function createFakeConnection(
     // Already connected: nothing here owns a transport to open.
     start: () => {},
     initialized: Promise.resolve(initializeMeta(options.historyPages ?? true)),
+    capabilities: undefined,
     subscribeStatus: () => () => {},
     outage: undefined,
     subscribeOutage: () => () => {},
     login: unused,
     newSession: unused,
+    forkSession: unused,
     listSessions: unused,
     subscribe: (sessionId, listener) => {
       const offs = [

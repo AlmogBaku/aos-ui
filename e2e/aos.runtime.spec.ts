@@ -1,3 +1,5 @@
+import { HGW_EXTENSION_VERSION } from "@harness-gw/sdk/protocol"
+
 import { expandByKeyboard } from "./disclosure"
 import { collapseInspector } from "./support/inspector"
 import { expect, test, type Page } from "./test"
@@ -365,7 +367,7 @@ const script = {
   /** `InitializeResponse._meta.hgw` for the operator role. */
   initializeMeta: {
     // The hgw extension's own version, not ACP's `protocolVersion`.
-    version: 1,
+    version: HGW_EXTENSION_VERSION,
     role: "operator",
     extensions: {
       steer: true,
