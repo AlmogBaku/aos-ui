@@ -84,6 +84,7 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
     readNow: () => new Date(session.updatedAt),
     onOpenTarget: open,
     onOpenAgent: async () => {},
+    onActionError: () => {},
     browser: {
       port,
       platform: {
@@ -217,6 +218,7 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
       readNow: () => new Date(watched.updatedAt),
       onOpenTarget: async () => {},
       onOpenAgent: async () => {},
+      onActionError: () => {},
       browser: {
         port,
         sound,
@@ -320,6 +322,7 @@ it("hands this device's push subscription to the policy and the settings", async
     readNow: () => new Date(session.updatedAt),
     onOpenTarget: async () => {},
     onOpenAgent: async () => {},
+    onActionError: () => {},
     browser: {
       port: {
         getPermission: () => "granted" as const,
@@ -465,6 +468,7 @@ function subscribedDevice() {
       readNow: () => new Date(session.updatedAt),
       onOpenTarget: async () => {},
       onOpenAgent: async () => {},
+      onActionError: () => {},
       browser: {
         port,
         push,

@@ -62,11 +62,9 @@ function OptionalToolDisplay({
   part: RichToolPart
   children: ReactNode
 }) {
-  const { labels } = useToolUiLocale()
   return (
     <LazyVisualBoundary
       key={part.toolCallId}
-      fallbackLabel={labels.common.displayUnavailable}
       fallback={<ToolDisplayFallback part={part} failed />}
     >
       <Suspense fallback={<ToolDisplayFallback part={part} />}>

@@ -106,6 +106,8 @@ type GuestProxyOptions = {
   steering?: boolean
   /** Keeps every run going until `finishRun` settles it. */
   holdRuns?: boolean
+  /** The provider no longer has the invited Session. */
+  gone?: boolean
 }
 
 /** The guest lane of the AOS proxy, in process: one invited conversation. */
@@ -196,6 +198,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
     .onRequest(methods.agent.session.resume, ({ params }) => {
       calls.push(methods.agent.session.resume)
       redeemedOrThrow()
+      if (options.gone) throw RequestError.resourceNotFound(params.sessionId)
       // What the invited Session supports follows the answer as an update.
       queueMicrotask(() => {
         resumed = true
@@ -396,6 +399,16 @@ describe("AOS guest browser composition", () => {
       )
     )
     expect(document.documentElement).toHaveAttribute("lang", "en")
+  })
+
+  // The invited Session's own notice: its rejoin and its loss are the
+  // notice hook's rules, and this is the one the guest lane reaches cheapest.
+  it("tells the guest the invited Session is no longer available", async () => {
+    mount({ gone: true })
+
+    expect(
+      await screen.findByText("This Session is no longer available.")
+    ).toBeInTheDocument()
   })
 
   it("asks for a new invitation when the proxy refuses the token", async () => {

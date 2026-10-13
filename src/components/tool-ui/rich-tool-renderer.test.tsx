@@ -1437,26 +1437,38 @@ describe("informational renderers", () => {
 })
 
 describe("safe result renderers", () => {
-  it("announces a visual chunk failure while preserving the surrounding data UI", () => {
+  it("announces a visual chunk failure while preserving the surrounding data UI, until its reset key changes", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined)
 
     function BrokenVisual(): never {
       throw new Error("visual chunk failed")
     }
-
-    render(
+    const bounded = (resetKey: string, visual: ReactNode) => (
       <>
-        <LazyVisualBoundary fallbackLabel="Visual unavailable. Data remains available.">
-          <BrokenVisual />
+        <LazyVisualBoundary
+          resetKey={resetKey}
+          fallbackLabel="Visual unavailable. Data remains available."
+        >
+          {visual}
         </LazyVisualBoundary>
         <p>Textual data</p>
       </>
     )
 
+    const { rerender } = render(bounded("session-one", <BrokenVisual />))
+
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Visual unavailable. Data remains available."
     )
     expect(screen.getByText("Textual data")).toBeInTheDocument()
+
+    rerender(bounded("session-one", <p>Healthy chart</p>))
+    expect(screen.getByRole("alert")).toBeInTheDocument()
+    expect(screen.queryByText("Healthy chart")).toBeNull()
+
+    rerender(bounded("session-two", <p>Healthy chart</p>))
+    expect(screen.getByText("Healthy chart")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 
   it("uses the inspectable JSON fallback, with copy feedback, for unknown and malformed known tools", async () => {

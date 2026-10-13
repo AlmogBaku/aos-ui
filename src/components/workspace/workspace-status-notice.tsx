@@ -8,12 +8,14 @@ const statusCopy = {
     reconnected: "Reconnected",
     capacity: "The AOS server is full. Reconnecting shortly.",
     sessionUnavailable: "This Session is no longer available.",
+    sessionReconnecting: "Reconnecting this Session…",
   },
   he: {
     reconnecting: "מתחברים מחדש ל-AOS…",
     reconnected: "החיבור חזר",
     capacity: "שרת AOS מלא כרגע. מתחברים מחדש בקרוב.",
     sessionUnavailable: "השיחה הזו כבר אינה זמינה.",
+    sessionReconnecting: "השיחה מתחברת מחדש…",
   },
 } satisfies Record<Locale, Record<string, string>>
 
@@ -30,7 +32,7 @@ export function WorkspaceStatusNotice({
 }: {
   locale: Locale
   connectionStatus?: "reconnecting" | "capacity" | "reconnected"
-  sessionStatus?: "unavailable"
+  sessionStatus?: "unavailable" | "reconnecting"
   children: ReactNode
 }) {
   const copy = statusCopy[locale]
@@ -38,7 +40,9 @@ export function WorkspaceStatusNotice({
     ? copy[connectionStatus]
     : sessionStatus === "unavailable"
       ? copy.sessionUnavailable
-      : null
+      : sessionStatus === "reconnecting"
+        ? copy.sessionReconnecting
+        : null
   return (
     <div className="relative h-full min-h-0">
       {/* Mounted empty so the text is announced when it appears. */}

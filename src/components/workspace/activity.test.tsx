@@ -145,6 +145,7 @@ function options(
     readNow: () => now,
     onOpenTarget: vi.fn(async () => {}),
     onOpenAgent: vi.fn(async () => {}),
+    onActionError: vi.fn(),
   }
 }
 beforeEach(() => {
@@ -428,6 +429,25 @@ describe("Activity coordinator", () => {
     await waitFor(() => expect(result.current.items).toHaveLength(1))
     expect(result.current.error).toBe(false)
   })
+  it("holds back only the Session whose owner lookup never settles", async () => {
+    const provider = source()
+    // "one" is unknown locally, so its owner is asked of a provider that
+    // never answers; "two" is known.
+    provider.workspace.getSessionMetadata = () => new Promise(() => {})
+    const { result } = renderHook(useActivityCoordinator, {
+      initialProps: {
+        ...options(provider.workspace),
+        sessions: [sessions[1]!],
+      },
+    })
+    act(() => {
+      provider.emit("stuck", "one")
+      provider.emit("lands", "two")
+    })
+    await waitFor(() =>
+      expect(result.current.items.map(({ id }) => id)).toEqual(["lands"])
+    )
+  })
   it("resolves labels from current data and never navigates to deleted targets", async () => {
     const provider = source()
     const props = options(provider.workspace)
@@ -480,6 +500,9 @@ describe("Activity coordinator", () => {
   })
   it("validates and opens the owning Agent and Session then acknowledges it", async () => {
     const provider = source()
+    // An acknowledgment the provider refuses leaves the Session unread, which
+    // is no Activity failure.
+    provider.markSessionRead.mockRejectedValueOnce(new Error("read failed"))
     const props = options(provider.workspace)
     const { result } = renderHook(useActivityCoordinator, {
       initialProps: props,
@@ -492,6 +515,28 @@ describe("Activity coordinator", () => {
     })
     expect(props.onOpenTarget).toHaveBeenCalledWith("b", "two")
     expect(provider.markSessionRead).toHaveBeenCalledWith("two")
+    expect(result.current.error).toBe(false)
+  })
+  it("reports an open that fails as that action's failure, never as interrupted Activity", async () => {
+    const provider = source()
+    const failure = new Error("Session switch failed")
+    const props = {
+      ...options(provider.workspace),
+      onOpenTarget: vi.fn(async () => {
+        throw failure
+      }),
+    }
+    const { result } = renderHook(useActivityCoordinator, {
+      initialProps: props,
+    })
+    act(() => provider.emit("event"))
+    await waitFor(() => expect(result.current.items).toHaveLength(1))
+    await act(async () => {
+      expect(await result.current.openActivity("event")).toBe(false)
+    })
+    expect(props.onActionError).toHaveBeenCalledExactlyOnceWith(failure)
+    expect(provider.markSessionRead).not.toHaveBeenCalled()
+    expect(result.current.error).toBe(false)
   })
 })
 
@@ -911,6 +956,7 @@ describe("an Agent the creator made", () => {
         readNow: () => now,
         onOpenTarget: async () => {},
         onOpenAgent,
+        onActionError: () => {},
       })
       return (
         <ActivityPanel

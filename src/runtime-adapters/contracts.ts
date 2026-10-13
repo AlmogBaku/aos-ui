@@ -389,8 +389,11 @@ export type HarnessRuntime = {
    * moment once it has recovered; the runtime keeps retrying on its own.
    */
   connectionStatus?: "reconnecting" | "capacity" | "reconnected"
-  /** Present only while the selected Session is gone at its provider. */
-  sessionStatus?: "unavailable"
+  /**
+   * Present while the selected Session is gone at its provider, or while it
+   * rejoins past the connection notice's grace; the runtime keeps retrying.
+   */
+  sessionStatus?: "unavailable" | "reconnecting"
 }
 
 export type WorkspaceCapabilities = {

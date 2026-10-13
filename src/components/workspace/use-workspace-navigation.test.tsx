@@ -406,3 +406,38 @@ it("scopes a deep link's own Agent first, never the default one", async () => {
   expect(scopeSessionCatalog.mock.calls).toEqual([["agent-b"]])
   expect(threadList.log.filter((entry) => entry === "reload")).toHaveLength(1)
 })
+
+it("names no creator and raises no workspace error when two are configured", async () => {
+  const creator = (id: string): AgentSummary => ({
+    kind: "ready",
+    id,
+    name: id,
+    role: "creator",
+    visibility: "hidden",
+  })
+  const agents = [agent, creator("builder-a"), creator("builder-b")]
+  const { result } = await mountNavigation(["s-recent"], [recent], {
+    listAgents: async () => agents,
+    refreshAgents: async () => agents,
+  })
+
+  expect(result.current.agentError).toBeNull()
+  expect(result.current.agentCreator).toBeUndefined()
+})
+
+it("reports a failed selection repair as the workspace's, never as an action", async () => {
+  const { result, runtime } = await mountNavigation(["s-recent"], [recent])
+  runtime.threads.switchToThread = vi
+    .fn(runtime.threads.switchToThread)
+    .mockRejectedValueOnce(new Error("Thread switch failed"))
+
+  // Assistant UI leaves the Session on its own; the repair selects it again.
+  await act(async () => {
+    await runtime.threads.switchToNewThread()
+  })
+
+  await waitFor(() =>
+    expect(result.current.threadListError?.message).toBe("Thread switch failed")
+  )
+  expect(result.current.actionError).toBeNull()
+})
