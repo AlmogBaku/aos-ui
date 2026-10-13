@@ -35,6 +35,7 @@ import {
   ArrowUpIcon,
   GripVerticalIcon,
   LoaderCircleIcon,
+  PaperclipIcon,
   XIcon,
 } from "lucide-react"
 
@@ -49,6 +50,9 @@ export type MessageQueueLabels = {
   readonly editAll: string
   readonly rowHint: string
   readonly steerLabel: string
+  /** Names the steer button on a row holding an attachment. */
+  readonly stopAndSendLabel: string
+  readonly attachments: (count: number) => string
   readonly removeLabel: string
   readonly steering: string
   readonly failed: string
@@ -111,6 +115,7 @@ function QueueRow({
   const requestId = useAuiState((state) => state.queueItem.id)
   const parts = useAuiState((state) => state.queueItem.parts)
   const text = queueItemText(parts)
+  const attachments = parts.filter((part) => part.type !== "text").length
   const running = useAuiState((state) => state.thread.isRunning)
   // An accepted steer is a user message under the steer's own request id.
   const acknowledged = useAuiState((state) =>
@@ -145,6 +150,13 @@ function QueueRow({
       setStatus("error")
     }
   }, [aui, onUnconfirmed, originThreadId, requestId, status, steer, text])
+
+  // A steer carries text alone, so a row holding an attachment interrupts
+  // instead: the live turn stops and this row goes out first.
+  const steerNow = () => {
+    if (attachments > 0) aui.queueItem.move({ lane: "steer" })
+    else void submitSteering()
+  }
 
   const pending = status === "pending"
   const {
@@ -204,6 +216,8 @@ function QueueRow({
   }
 
   const canSteer = running && steer !== undefined
+  const steerLabel =
+    attachments > 0 ? labels.stopAndSendLabel : labels.steerLabel
   return (
     <li
       ref={setNodeRef}
@@ -235,6 +249,16 @@ function QueueRow({
         </span>
         <GripVerticalIcon className="hidden size-3.5 group-hover/queue-row:block group-focus-visible/queue-row:block [@media(pointer:coarse)]:hidden" />
       </span>
+      {attachments > 0 ? (
+        <span
+          role="img"
+          aria-label={labels.attachments(attachments)}
+          className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground tabular-nums"
+        >
+          <PaperclipIcon aria-hidden="true" className="size-3.5" />
+          {attachments > 1 ? attachments : null}
+        </span>
+      ) : null}
       <QueueItemPrimitive.Text
         dir="auto"
         className="min-w-0 flex-1 truncate py-1 text-start text-foreground/75"
@@ -247,11 +271,11 @@ function QueueRow({
       {canSteer ? (
         <TooltipIconButton
           type="button"
-          tooltip={labels.steerLabel}
-          aria-label={labels.steerLabel}
+          tooltip={steerLabel}
+          aria-label={steerLabel}
           disabled={pending}
           className="size-7 shrink-0 text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:size-11"
-          onClick={() => void submitSteering()}
+          onClick={steerNow}
         >
           {pending ? (
             <LoaderCircleIcon
