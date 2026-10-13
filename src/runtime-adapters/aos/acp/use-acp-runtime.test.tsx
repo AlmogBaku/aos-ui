@@ -56,7 +56,7 @@ import {
 const SESSION_ID = "session-1"
 const TURN_META = { sequence: 0, turnId: "run-1" }
 
-/** The handshake of a proxy that does, or does not, serve older pages. */
+/** The handshake of a gateway that does, or does not, serve older pages. */
 const initializeMeta = (historyPages: boolean): HgwInitializeMeta => ({
   version: 1,
   role: "operator",
@@ -222,7 +222,7 @@ function createFakeConnection(
     notify: (method: string, params: unknown) => {
       for (const listener of notifications.get(method) ?? []) listener(params)
     },
-    /** The proxy asks to run the call `toolCallId` names. */
+    /** The gateway asks to run the call `toolCallId` names. */
     requestPermission: (toolCallId: string) => {
       const respond = vi.fn<(response: RequestPermissionResponse) => void>()
       const pending: AcpPendingRequest = {
@@ -500,7 +500,7 @@ describe("useAcpRuntime", () => {
       { id: "a1", role: "assistant", text: "Shipped" },
     ])
 
-    // The proxy reports the Session gone before a replay's drop: the restored
+    // The gateway reports the Session gone before a replay's drop: the restored
     // transcript still reads as gone.
     const shipped = visible(result.current)
     fake.replayOnResume([textUpdate("user_message", "u1", "Ship it")])
@@ -617,7 +617,7 @@ describe("useAcpRuntime", () => {
     expect(fake.replay).toHaveBeenCalledTimes(1)
   })
 
-  it("ends the run of a Session the proxy reports gone", async () => {
+  it("ends the run of a Session the gateway reports gone", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
     act(() => {
@@ -1105,7 +1105,7 @@ describe("useAcpRuntime", () => {
     const { result } = await mount(fake, { enableMessageQueue: true })
     running(fake)
     await queue(result.current, "First")
-    // The proxy accepts the first send before its turn reports running.
+    // The gateway accepts the first send before its turn reports running.
     await ends(fake)
     expect(fake.prompt).toHaveBeenCalledTimes(1)
     await queue(result.current, "Second")
@@ -1124,7 +1124,7 @@ describe("useAcpRuntime", () => {
     expect(fake.prompt).toHaveBeenCalledTimes(2)
   })
 
-  it("sends a queued turn again, unshown, while the proxy still holds the Session", async () => {
+  it("sends a queued turn again, unshown, while the gateway still holds the Session", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake, { enableMessageQueue: true })
     fake.prompt.mockRejectedValueOnce(
@@ -1194,7 +1194,7 @@ describe("useAcpRuntime", () => {
 })
 
 describe("useAcpRuntime approvals", () => {
-  /** A run blocked on its `bash` call, as the proxy streams it. */
+  /** A run blocked on its `bash` call, as the gateway streams it. */
   const blockOnCall = (fake: Fake) => {
     fake.emit({ sessionUpdate: "state_update", state: "running" })
     fake.emit(chunkUpdate("a1", "Deploying"))
@@ -1363,7 +1363,7 @@ describe("useAcpRuntime older history", () => {
 
   it.each([
     [
-      "when the proxy does not serve older pages",
+      "when the gateway does not serve older pages",
       { history: { nextCursor: "cursor-1" }, historyPages: false },
     ],
     ["until a replay reports where history stands", {}],

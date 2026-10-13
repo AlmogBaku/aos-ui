@@ -410,7 +410,7 @@ describe("Activity coordinator", () => {
       vi.mocked(document.hasFocus).mockReturnValue(false)
       await act(async () => window.dispatchEvent(new Event("blur")))
       provider.reportFocus.mockClear()
-      // A background tab has nothing to keep fresh; the proxy expires it.
+      // A background tab has nothing to keep fresh; the gateway expires it.
       await act(async () => vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS * 3))
       expect(provider.reportFocus).not.toHaveBeenCalled()
     } finally {

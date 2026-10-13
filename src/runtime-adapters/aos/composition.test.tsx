@@ -101,13 +101,13 @@ const catalogLatency = () =>
     setTimeout(resolve, 0)
   })
 
-/** The AOS proxy end of the operator connection, in process. */
+/** The gateway end of the operator connection, in process. */
 function createGatewayAgent() {
   let peer: AgentContext | undefined
   const prompts: PromptParams[] = []
   const cancelled: string[] = []
   const resumed: string[] = []
-  // The proxy keeps each Session's transcript and replays it from the start on
+  // The gateway keeps each Session's transcript and replays it from the start on
   // every such resume; it streams live updates only to a client that resumed it.
   const history = new Map<string, SessionUpdate[]>()
   const memberships = new Set<string>()
@@ -155,7 +155,7 @@ function createGatewayAgent() {
     },
   ])
 
-  const app = agent({ name: "fake-aos-proxy" })
+  const app = agent({ name: "fake-aos-gateway" })
     .onRequest(methods.agent.initialize, () => ({
       protocolVersion: 2,
       info: { name: "harness-gw", version: "1" },
@@ -202,7 +202,7 @@ function createGatewayAgent() {
       const { sessionId } = params
       resumed.push(sessionId)
       memberships.add(sessionId)
-      // The proxy replays inside the resume request, before answering it, so a
+      // The gateway replays inside the resume request, before answering it, so a
       // browser that waits for the response has already seen the history.
       if (params.replayFrom?.type === "start")
         for (const update of history.get(sessionId) ?? [])
@@ -245,7 +245,7 @@ function createGatewayAgent() {
       return { sessionId: `created-${created.length}` }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
-      // Exactly what the proxy refuses a prompt with while a Session is not idle.
+      // Exactly what the gateway refuses a prompt with while a Session is not idle.
       if (busy.has(params.sessionId))
         throw new RequestError(
           HGW_JSONRPC_ERRORS.turnInProgress,
@@ -299,7 +299,7 @@ function createGatewayAgent() {
     busy,
     created,
     unavailable,
-    /** One question request, exactly as the proxy issues it. */
+    /** One question request, exactly as the gateway issues it. */
     ask: (sessionId: string, requestId: string) =>
       peer?.request(methods.client.elicitation.create, {
         mode: "form",
@@ -334,7 +334,7 @@ const CONFIG = {
   composerFeatures: { modelSelectorEnabled: true, contextEnabled: true },
 } as const
 
-/** A WebSocket-shaped pipe to the in-process proxy agent. */
+/** A WebSocket-shaped pipe to the in-process gateway agent. */
 function pipedSocket(app: AgentApp) {
   return class PipedSocket extends EventTarget {
     readyState = 0
@@ -378,8 +378,8 @@ function pipedSocket(app: AgentApp) {
 }
 
 function mount() {
-  const proxy = createGatewayAgent()
-  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
+  const gateway = createGatewayAgent()
+  vi.stubGlobal("WebSocket", pipedSocket(gateway.app))
   let supplied: HarnessRuntime | undefined
   const Provider = runtimeAdapter.Provider
   render(
@@ -395,7 +395,7 @@ function mount() {
       }}
     </Provider>
   )
-  return { proxy, runtime: () => supplied }
+  return { gateway, runtime: () => supplied }
 }
 
 /** Lets every queued notification and reply reach the runtime. */
@@ -412,7 +412,7 @@ afterEach(() => {
 
 describe("provider-neutral AOS runtime composition", () => {
   it("resumes each opened Session once and replays nothing on return", async () => {
-    const { proxy, runtime } = mount()
+    const { gateway, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())
     const supplied = runtime()!
     await supplied.assistantRuntime.threads.getLoadThreadsPromise()
@@ -422,20 +422,20 @@ describe("provider-neutral AOS runtime composition", () => {
     })
     expect(await screen.findByText("Ready")).toBeVisible()
     await settle()
-    expect(proxy.resumed).toEqual([SESSION_ID])
+    expect(gateway.resumed).toEqual([SESSION_ID])
 
     await act(async () => {
       await supplied.assistantRuntime.threads.switchToThread(SECOND_SESSION_ID)
     })
     expect(await screen.findByText("First answer")).toBeVisible()
     await settle()
-    expect(proxy.resumed).toEqual([SESSION_ID, SECOND_SESSION_ID])
+    expect(gateway.resumed).toEqual([SESSION_ID, SECOND_SESSION_ID])
 
     // The first Session's thread stays mounted and resumed while the operator
     // is away, so returning to it replays nothing: what arrived meanwhile is
     // already projected.
     act(() => {
-      proxy.push(SESSION_ID, {
+      gateway.push(SESSION_ID, {
         sessionUpdate: "agent_message",
         messageId: "history-5",
         content: [{ type: "text", text: "Still here" }],
@@ -447,11 +447,11 @@ describe("provider-neutral AOS runtime composition", () => {
     })
     expect(await screen.findByText("Still here")).toBeVisible()
     await settle()
-    expect(proxy.resumed).toEqual([SESSION_ID, SECOND_SESSION_ID])
+    expect(gateway.resumed).toEqual([SESSION_ID, SECOND_SESSION_ID])
   })
 
   it("switching threads neither stops the provider run nor cancels a pending question", async () => {
-    const { proxy, runtime } = mount()
+    const { gateway, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())
     const supplied = runtime()!
     await supplied.assistantRuntime.threads.getLoadThreadsPromise()
@@ -464,9 +464,9 @@ describe("provider-neutral AOS runtime composition", () => {
       supplied.assistantRuntime.thread.composer.setText("Ship it")
       supplied.assistantRuntime.thread.composer.send()
     })
-    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
     act(() => {
-      proxy.push(SESSION_ID, {
+      gateway.push(SESSION_ID, {
         sessionUpdate: "state_update",
         state: "running",
         _meta: { [HGW_META_KEY]: { turnId: "run-1", sequence: 3 } },
@@ -477,7 +477,7 @@ describe("provider-neutral AOS runtime composition", () => {
     )
 
     let answered: unknown
-    void proxy.ask(SESSION_ID, "interrupt-1")?.then((response) => {
+    void gateway.ask(SESSION_ID, "interrupt-1")?.then((response) => {
       answered = response
     })
     await waitFor(() =>
@@ -493,7 +493,7 @@ describe("provider-neutral AOS runtime composition", () => {
       await Promise.resolve()
     })
     expect(answered).toBeUndefined()
-    expect(proxy.cancelled).toEqual([])
+    expect(gateway.cancelled).toEqual([])
 
     await act(async () => {
       await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
@@ -504,7 +504,7 @@ describe("provider-neutral AOS runtime composition", () => {
   })
 
   it("keeps a refused draft's turn in the composer and opens the next draft empty", async () => {
-    const { proxy, runtime } = mount()
+    const { gateway, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())
     const thread = () => runtime()!.assistantRuntime.thread
     const send = async (text: string) => {
@@ -517,7 +517,7 @@ describe("provider-neutral AOS runtime composition", () => {
     await act(async () => {
       await runtime()!.createSessionDraft?.(AGENT_ID)
     })
-    proxy.unavailable.creates = 1
+    gateway.unavailable.creates = 1
 
     await send("Ship it")
 
@@ -525,7 +525,7 @@ describe("provider-neutral AOS runtime composition", () => {
       await screen.findByText(en.runErrors.HGW_PROVIDER_UNAVAILABLE)
     ).toBeVisible()
     expect(thread().composer.getState().text).toBe("Ship it")
-    expect(proxy.created).toEqual([])
+    expect(gateway.created).toEqual([])
 
     await act(async () => {
       await runtime()!.createSessionDraft?.(AGENT_ID)
@@ -538,8 +538,8 @@ describe("provider-neutral AOS runtime composition", () => {
     expect(thread().composer.getState().text).toBe("")
 
     await send("Ship it")
-    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
-    expect(proxy.created).toEqual([AGENT_ID])
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
+    expect(gateway.created).toEqual([AGENT_ID])
   })
 
   it("stages an attachment on a new Session's first message, before it is ever listed", async () => {
@@ -561,7 +561,7 @@ describe("provider-neutral AOS runtime composition", () => {
         : new Response(null, { status: 404 })
     )
     vi.stubGlobal("fetch", fetcher)
-    const { proxy, runtime } = mount()
+    const { gateway, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())
     const composer = () => runtime()!.assistantRuntime.thread.composer
     await act(async () => {
@@ -576,12 +576,12 @@ describe("provider-neutral AOS runtime composition", () => {
       composer().send()
     })
 
-    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
     expect(fetcher).toHaveBeenCalledWith(
       stagePath,
       expect.objectContaining({ method: "POST" })
     )
-    expect(proxy.prompts[0]).toMatchObject({
+    expect(gateway.prompts[0]).toMatchObject({
       sessionId: "created-1",
       _meta: { [HGW_META_KEY]: { attachmentStageId: "stage-1" } },
     })
@@ -589,11 +589,11 @@ describe("provider-neutral AOS runtime composition", () => {
   })
 })
 
-/** The operator workspace over the fake proxy, opened at one compact URL. */
+/** The operator workspace over the fake gateway, opened at one compact URL. */
 function mountWorkspace(pathname: string) {
   window.history.replaceState(null, "", pathname)
-  const proxy = createGatewayAgent()
-  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
+  const gateway = createGatewayAgent()
+  vi.stubGlobal("WebSocket", pipedSocket(gateway.app))
   const Provider = runtimeAdapter.Provider
   const view = render(
     <Provider config={CONFIG} locale="en">
@@ -607,18 +607,18 @@ function mountWorkspace(pathname: string) {
       )}
     </Provider>
   )
-  return { proxy, view }
+  return { gateway, view }
 }
 
 describe("the workspace over one ACP connection", () => {
   it("renders the Session a URL names on a cold load", async () => {
-    const { proxy } = mountWorkspace(`/${AGENT_ID}/${BOOKMARKED_SESSION_ID}`)
+    const { gateway } = mountWorkspace(`/${AGENT_ID}/${BOOKMARKED_SESSION_ID}`)
 
     // The Session sits past the first catalog page, so nothing has listed it
     // when the URL names it: the workspace opens that Session and no other
     // while the pages that describe it are still being read.
     expect(await screen.findByText("Bookmarked answer")).toBeVisible()
-    expect(proxy.resumed).toEqual([BOOKMARKED_SESSION_ID])
+    expect(gateway.resumed).toEqual([BOOKMARKED_SESSION_ID])
     expect(screen.queryByText("Ready")).toBeNull()
     expect(window.location.pathname).toBe(
       `/${AGENT_ID}/${BOOKMARKED_SESSION_ID}`
@@ -627,13 +627,13 @@ describe("the workspace over one ACP connection", () => {
 
   it("keeps the Session selected when Retry re-runs its first turn", async () => {
     const user = userEvent.setup()
-    const { proxy } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
+    const { gateway } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
     expect(await screen.findByText("First answer")).toBeVisible()
 
     await user.click(screen.getByRole("button", { name: "Retry response" }))
 
-    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
-    expect(proxy.prompts[0]).toMatchObject({
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
+    expect(gateway.prompts[0]).toMatchObject({
       sessionId: SECOND_SESSION_ID,
       prompt: [{ type: "text", text: "Draft the plan" }],
     })
@@ -643,23 +643,23 @@ describe("the workspace over one ACP connection", () => {
 
   it("keeps the transcript and reports a turn the provider refuses", async () => {
     const user = userEvent.setup()
-    const { proxy } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
+    const { gateway } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
     expect(await screen.findByText("First answer")).toBeVisible()
-    proxy.busy.add(SECOND_SESSION_ID)
+    gateway.busy.add(SECOND_SESSION_ID)
 
     await user.click(screen.getByRole("button", { name: "Retry response" }))
 
     expect(await screen.findByText(en.runErrors.HGW_SESSION_BUSY)).toBeVisible()
-    expect(proxy.prompts).toHaveLength(0)
+    expect(gateway.prompts).toHaveLength(0)
     expect(screen.getByText("Draft the plan")).toBeVisible()
     expect(screen.getByText("First answer")).toBeVisible()
     expect(window.location.pathname).toBe(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
   })
 
   it("opens one ACP socket when React discards the provider's render", async () => {
-    const proxy = createGatewayAgent()
+    const gateway = createGatewayAgent()
     const sockets: { readyState: number }[] = []
-    const socket = pipedSocket(proxy.app)
+    const socket = pipedSocket(gateway.app)
     vi.stubGlobal(
       "WebSocket",
       class extends socket {

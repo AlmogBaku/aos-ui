@@ -555,7 +555,7 @@ describe("MCP App files", () => {
     expect(renewFiles.mock.calls).toEqual([[target]])
   })
 
-  it("retries a failed renewal with backoff until the proxy refuses it", async () => {
+  it("retries a failed renewal with backoff until the gateway refuses it", async () => {
     const { renewFiles, setStatus } = mountFiles({
       renewFiles: vi
         .fn()

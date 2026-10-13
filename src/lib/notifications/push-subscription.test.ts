@@ -155,7 +155,7 @@ describe("what this deployment offers", () => {
     expect(h.register).not.toHaveBeenCalled()
   })
 
-  it("asks the proxy and installs the worker once, and never after a refusal", async () => {
+  it("asks the gateway and installs the worker once, and never after a refusal", async () => {
     const h = setup()
     await h.manager.prepare("default")
     await h.manager.prepare("granted")
@@ -212,7 +212,7 @@ describe("subscribing from the operator's gesture", () => {
   })
 })
 
-describe("keeping the proxy's copy of this device correct", () => {
+describe("keeping the gateway's copy of this device correct", () => {
   it("registers the granted subscription with its locale and categories", async () => {
     const h = setup({
       subscription: fakeSubscription("https://push.example/a"),
@@ -299,11 +299,11 @@ describe("keeping the proxy's copy of this device correct", () => {
     expect(h.manager.active()).toBe(true)
   })
 
-  it("leaves OS alerts to the tabs when the proxy refuses the subscription", async () => {
+  it("leaves OS alerts to the tabs when the gateway refuses the subscription", async () => {
     const h = setup({
       subscription: fakeSubscription("https://push.example/a"),
     })
-    h.putPushSubscription.mockRejectedValue(new Error("proxy failure"))
+    h.putPushSubscription.mockRejectedValue(new Error("gateway failure"))
     await h.manager.prepare("granted")
 
     await expect(h.manager.sync(sync())).resolves.toBeUndefined()

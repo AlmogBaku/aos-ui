@@ -100,7 +100,7 @@ const prefillParams = (text: string) => ({
 
 const authenticationRequired = () => RequestError.authRequired()
 
-type GuestProxyOptions = {
+type GuestGatewayOptions = {
   token?: string
   /** Whether the invited Session reports steering as available. */
   steering?: boolean
@@ -110,15 +110,15 @@ type GuestProxyOptions = {
   gone?: boolean
 }
 
-/** The guest lane of the AOS proxy, in process: one invited conversation. */
-function createGuestProxyAgent(options: GuestProxyOptions = {}) {
+/** The guest lane of the gateway, in process: one invited conversation. */
+function createGuestGatewayAgent(options: GuestGatewayOptions = {}) {
   const accepted = options.token ?? TOKEN
   const calls: string[] = []
   const prompts: PromptRequest[] = []
   const steers: unknown[] = []
   let peer: AgentContext | undefined
   let redeemed = false
-  // The proxy streams a Session only to a client that resumed it, so updates
+  // The gateway streams a Session only to a client that resumed it, so updates
   // raised before the resume wait for the replay that carries them.
   const waiting: SessionUpdate[] = [
     {
@@ -149,7 +149,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
     if (!redeemed) throw authenticationRequired()
   }
 
-  const app = agent({ name: "fake-guest-proxy" })
+  const app = agent({ name: "fake-guest-gateway" })
     .onRequest(methods.agent.initialize, () => {
       calls.push("initialize")
       return {
@@ -325,10 +325,10 @@ function stubMatchMedia() {
 function mount({
   inviteToken,
   ...options
-}: GuestProxyOptions & { inviteToken?: string } = {}) {
+}: GuestGatewayOptions & { inviteToken?: string } = {}) {
   stubMatchMedia()
-  const proxy = createGuestProxyAgent(options)
-  vi.stubGlobal("WebSocket", pipedSockets(() => proxy.app).WebSocket)
+  const gateway = createGuestGatewayAgent(options)
+  vi.stubGlobal("WebSocket", pipedSockets(() => gateway.app).WebSocket)
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url === `${BASE_PATH}/runtime`)
@@ -344,7 +344,7 @@ function mount({
   })
   vi.stubGlobal("fetch", fetcher)
   render(<GuestAosSurface inviteToken={inviteToken ?? TOKEN} locale="en" />)
-  return { proxy, fetcher }
+  return { gateway, fetcher }
 }
 
 describe("AOS guest browser composition", () => {
@@ -379,11 +379,11 @@ describe("AOS guest browser composition", () => {
   })
 
   it("redeems the invitation before it resumes the invited conversation", async () => {
-    const { proxy } = mount()
+    const { gateway } = mount()
 
     expect(await screen.findByText("Earlier guest answer")).toBeVisible()
 
-    expect(proxy.calls).toEqual([
+    expect(gateway.calls).toEqual([
       "initialize",
       methods.agent.auth.login,
       methods.agent.session.resume,
@@ -411,20 +411,20 @@ describe("AOS guest browser composition", () => {
     ).toBeInTheDocument()
   })
 
-  it("asks for a new invitation when the proxy refuses the token", async () => {
-    const { proxy } = mount({ token: "another.token" })
+  it("asks for a new invitation when the gateway refuses the token", async () => {
+    const { gateway } = mount({ token: "another.token" })
 
     expect(
       await screen.findByText(
         "This invitation link is no longer active. Please ask the person who invited you to send a new one."
       )
     ).toBeInTheDocument()
-    expect(proxy.calls).not.toContain(methods.agent.session.resume)
+    expect(gateway.calls).not.toContain(methods.agent.session.resume)
   })
 
   it("streams one guest turn without any execution detail", async () => {
     const user = userEvent.setup()
-    const { proxy } = mount()
+    const { gateway } = mount()
     await screen.findByText("Earlier guest answer")
 
     await user.type(
@@ -434,14 +434,14 @@ describe("AOS guest browser composition", () => {
     await user.keyboard("{Enter}")
 
     expect(await screen.findByText("Guest-visible answer")).toBeVisible()
-    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
-    expect(proxy.prompts[0]).toMatchObject({
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
+    expect(gateway.prompts[0]).toMatchObject({
       sessionId: REF,
       prompt: [{ type: "text", text: "Start the interview" }],
     })
-    // The invitation's first-turn instruction is applied by the proxy, so the
+    // The invitation's first-turn instruction is applied by the gateway, so the
     // browser sends nothing beyond what the guest wrote.
-    expect(proxy.prompts[0]?._meta).toMatchObject({ [HGW_META_KEY]: {} })
+    expect(gateway.prompts[0]?._meta).toMatchObject({ [HGW_META_KEY]: {} })
     // A guest-safe run carries no execution history, so the invited
     // conversation discloses neither reasoning nor a tool timeline.
     expect(
@@ -451,10 +451,10 @@ describe("AOS guest browser composition", () => {
 
   it("answers a question in the composer even when its tool call never showed", async () => {
     const user = userEvent.setup()
-    const { proxy } = mount()
+    const { gateway } = mount()
     await screen.findByText("Earlier guest answer")
 
-    const answered = proxy.askQuestion()
+    const answered = gateway.askQuestion()
 
     expect(await screen.findByText("Continue the interview?")).toBeVisible()
     await user.click(screen.getByText("Yes"))
@@ -510,7 +510,7 @@ describe("AOS guest browser composition", () => {
 
   it("edits an earlier turn by rewinding the provider turn it replaces", async () => {
     const user = userEvent.setup()
-    const { proxy } = mount()
+    const { gateway } = mount()
     await screen.findByText("Earlier guest answer")
 
     // An earlier turn shows its actions while the guest points at it.
@@ -526,21 +526,21 @@ describe("AOS guest browser composition", () => {
     await user.type(editor!, "A better question")
     await user.click(screen.getByRole("button", { name: "Update" }))
 
-    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
-    expect(proxy.prompts[0]).toMatchObject({
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
+    expect(gateway.prompts[0]).toMatchObject({
       sessionId: REF,
       prompt: [{ type: "text", text: "A better question" }],
       _meta: { [HGW_META_KEY]: { rewindSourceId: "history-0" } },
     })
     expect(
-      HgwPromptMetaSchema.safeParse(proxy.prompts[0]?._meta?.[HGW_META_KEY])
+      HgwPromptMetaSchema.safeParse(gateway.prompts[0]?._meta?.[HGW_META_KEY])
         .success
     ).toBe(true)
   })
 
   it("links a staged attachment batch from the guest prompt", async () => {
     const user = userEvent.setup()
-    const { proxy, fetcher } = mount()
+    const { gateway, fetcher } = mount()
     await screen.findByText("Earlier guest answer")
 
     const composer = screen.getByRole("textbox", { name: "Message input" })
@@ -552,20 +552,20 @@ describe("AOS guest browser composition", () => {
     await screen.findByRole("button", { name: "Remove attachment" })
     await sendTurn(user, "Read the brief")
 
-    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
     expect(
       fetcher.mock.calls.some(([input]) =>
         String(input).endsWith(`/sessions/${REF}/attachments/stage`)
       )
     ).toBe(true)
-    const meta = proxy.prompts[0]?._meta?.[HGW_META_KEY]
+    const meta = gateway.prompts[0]?._meta?.[HGW_META_KEY]
     expect(meta).toMatchObject({ attachmentStageId: "stage-1" })
     expect(HgwPromptMetaSchema.safeParse(meta).success).toBe(true)
   })
 
   it("steers the running turn when the invited Session allows steering", async () => {
     const user = userEvent.setup()
-    const { proxy } = mount({ steering: true, holdRuns: true })
+    const { gateway } = mount({ steering: true, holdRuns: true })
     await screen.findByText("Earlier guest answer")
     await sendTurn(user, "Start the interview")
     expect(await screen.findByText("Guest-visible answer")).toBeVisible()
@@ -577,7 +577,7 @@ describe("AOS guest browser composition", () => {
     await user.keyboard("{Control>}{Shift>}{Enter}{/Shift}{/Control}")
 
     await waitFor(() =>
-      expect(proxy.steers).toEqual([
+      expect(gateway.steers).toEqual([
         {
           sessionId: REF,
           requestId: expect.any(String),
@@ -585,13 +585,13 @@ describe("AOS guest browser composition", () => {
         },
       ])
     )
-    expect(HgwSteerRequestSchema.safeParse(proxy.steers[0]).success).toBe(true)
-    expect(proxy.prompts).toHaveLength(1)
+    expect(HgwSteerRequestSchema.safeParse(gateway.steers[0]).success).toBe(true)
+    expect(gateway.prompts).toHaveLength(1)
   })
 
   it("does not steer when the invited Session reports steering unavailable", async () => {
     const user = userEvent.setup()
-    const { proxy } = mount({ holdRuns: true })
+    const { gateway } = mount({ holdRuns: true })
     await screen.findByText("Earlier guest answer")
     await sendTurn(user, "Start the interview")
     expect(await screen.findByText("Guest-visible answer")).toBeVisible()
@@ -600,39 +600,39 @@ describe("AOS guest browser composition", () => {
     await user.type(composer, "Focus on pricing")
     await user.keyboard("{Control>}{Shift>}{Enter}{/Shift}{/Control}")
 
-    expect(proxy.steers).toEqual([])
-    expect(proxy.prompts).toHaveLength(1)
+    expect(gateway.steers).toEqual([])
+    expect(gateway.prompts).toHaveLength(1)
     expect(composer).toHaveValue("Focus on pricing")
   })
 
   it("fills an empty composer with the suggested turn once the run settles", async () => {
     const user = userEvent.setup()
-    const { proxy } = mount({ holdRuns: true })
+    const { gateway } = mount({ holdRuns: true })
     await screen.findByText("Earlier guest answer")
     await sendTurn(user, "Start the interview")
     expect(await screen.findByText("Guest-visible answer")).toBeVisible()
     const composer = screen.getByRole("textbox", { name: "Message input" })
 
-    proxy.suggestPrefill("What about pricing?")
+    gateway.suggestPrefill("What about pricing?")
     // A suggestion waits for the run it came from to settle.
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(composer).toHaveValue("")
 
-    proxy.finishRun()
+    gateway.finishRun()
     await waitFor(() => expect(composer).toHaveValue("What about pricing?"))
   })
 
   it("never lets a suggested turn overwrite what the guest typed", async () => {
     const user = userEvent.setup()
-    const { proxy } = mount({ holdRuns: true })
+    const { gateway } = mount({ holdRuns: true })
     await screen.findByText("Earlier guest answer")
     await sendTurn(user, "Start the interview")
     expect(await screen.findByText("Guest-visible answer")).toBeVisible()
     const composer = screen.getByRole("textbox", { name: "Message input" })
     await user.type(composer, "My own follow-up")
 
-    proxy.suggestPrefill("What about pricing?")
-    proxy.finishRun()
+    gateway.suggestPrefill("What about pricing?")
+    gateway.finishRun()
 
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /stop/iu })).toBeNull()

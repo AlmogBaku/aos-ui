@@ -22,7 +22,7 @@ const RENEWAL_BACKOFF = { baseMs: 1_000, capMs: 60_000 }
  * lapse under it: at half their life, counted from when they arrived; when the
  * page wakes or comes online past that point, since a sleeping page's timers
  * stall; and when the connection comes back. A failed renewal retries with
- * backoff until the proxy refuses it outright. `renew` renews on demand and
+ * backoff until the gateway refuses it outright. `renew` renews on demand and
  * resolves to the fresh files.
  */
 export function useAppFiles({

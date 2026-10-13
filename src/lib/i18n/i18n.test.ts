@@ -74,10 +74,10 @@ describe("run error messages", () => {
 
     for (const code of Object.keys(english.runErrors) as RunErrorCode[]) {
       expect(hebrew.runErrors[code]).not.toBe(english.runErrors[code])
-      expect(runErrorMessage(english, code, "proxy text")).toBe(
+      expect(runErrorMessage(english, code, "gateway text")).toBe(
         english.runErrors[code]
       )
-      expect(runErrorMessage(hebrew, code, "proxy text")).toBe(
+      expect(runErrorMessage(hebrew, code, "gateway text")).toBe(
         hebrew.runErrors[code]
       )
     }
@@ -92,19 +92,19 @@ describe("run error messages", () => {
         expect(dictionary.runErrors[code]).not.toMatch(/\/[A-Za-z]/u)
   })
 
-  it("keeps the proxy description for an unknown or absent run error code", async () => {
+  it("keeps the gateway description for an unknown or absent run error code", async () => {
     const english = await getDictionary("en")
 
-    expect(runErrorMessage(english, "HGW_NOT_A_CODE", "Proxy said this")).toBe(
-      "Proxy said this"
+    expect(runErrorMessage(english, "HGW_NOT_A_CODE", "Gateway said this")).toBe(
+      "Gateway said this"
     )
-    expect(runErrorMessage(english, undefined, "Proxy said this")).toBe(
-      "Proxy said this"
+    expect(runErrorMessage(english, undefined, "Gateway said this")).toBe(
+      "Gateway said this"
     )
     // An inherited object key is not a run error code.
     for (const inherited of ["constructor", "toString", "hasOwnProperty"])
-      expect(runErrorMessage(english, inherited, "Proxy said this")).toBe(
-        "Proxy said this"
+      expect(runErrorMessage(english, inherited, "Gateway said this")).toBe(
+        "Gateway said this"
       )
   })
 })

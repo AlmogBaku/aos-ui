@@ -48,7 +48,7 @@ export default defineConfig({
       },
     },
     {
-      name: "aos-proxy-chromium",
+      name: "aos-gateway-chromium",
       testMatch: /aos\.runtime\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],

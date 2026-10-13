@@ -319,7 +319,7 @@ describe("render_stats", () => {
 
 describe("present_artifact", () => {
   // A result reaches guests through the view, so it names the file and never
-  // its path; the proxy reads the path from the call's own arguments. A title
+  // its path; the gateway reads the path from the call's own arguments. A title
   // keeps the path's extension, which the view and a download type it by.
   const anyFileId = { fileId: expect.stringMatching(/^[0-9a-f]{16}$/u) }
   it.each([

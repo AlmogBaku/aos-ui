@@ -117,7 +117,7 @@ export type UseAcpRuntimeOptions = {
   connection: AcpConnection
   /**
    * The connection's permission requests, shown and answered as tool
-   * approvals. They outlive the thread, since the proxy sends each one once.
+   * approvals. They outlive the thread, since the gateway sends each one once.
    */
   approvals?: AcpApprovals
   sessionId: string | undefined
@@ -154,7 +154,7 @@ export type UseAcpRuntimeOptions = {
   /** The next turn the provider suggests for this Session's composer. */
   onComposerPrefill?: (text: string) => void
   /**
-   * Localizes a normalized failure code, keeping the proxy's own description
+   * Localizes a normalized failure code, keeping the gateway's own description
    * for a code this build does not know.
    */
   describeRunError?: (code: string | undefined, fallback: string) => string
@@ -167,7 +167,7 @@ const subscribeNoop = () => () => {}
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
 
-/** Text the user wrote, plus links to the batch the proxy staged for it. */
+/** Text the user wrote, plus links to the batch the gateway staged for it. */
 function promptBlocks(
   message: AppendMessage,
   stage: AcpAttachmentStage | undefined
@@ -215,9 +215,9 @@ const REFUSAL_CODES: Readonly<Record<number, string>> = {
 type ResumeOutcome = "replayed" | "refused" | "abandoned"
 
 /**
- * What the proxy refused a turn with, as copy the operator can read. The
+ * What the gateway refused a turn with, as copy the operator can read. The
  * normalized code carries the workspace's own wording; anything else keeps the
- * proxy's description rather than inventing one.
+ * gateway's description rather than inventing one.
  */
 function refusalText(
   error: unknown,
@@ -687,7 +687,7 @@ function createAcpController({
       } catch (error) {
         throw refuse(error)
       }
-      // Every send carries a fresh clientId, so the proxy can recognize the
+      // Every send carries a fresh clientId, so the gateway can recognize the
       // same turn delivered twice.
       const clientId = crypto.randomUUID()
       const rewound = rewindFor(message.sourceId)

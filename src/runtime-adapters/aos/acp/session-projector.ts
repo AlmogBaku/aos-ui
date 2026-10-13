@@ -562,7 +562,7 @@ const noticeSeverity = (raw: string | undefined): AosNotice["severity"] =>
     : "info"
 
 /**
- * A status the proxy announces live: attaches to the active assistant turn
+ * A status the gateway announces live: attaches to the active assistant turn
  * while a run is under way, or to the latest assistant message while idle
  * (so `resumed()` cannot reopen a notice message as the next turn). When
  * the thread holds no assistant message yet a standalone `aos-notice-<n>`
@@ -1150,7 +1150,7 @@ function applyKind(
 /**
  * Whether this turn already carries the artifact. A replay re-grants every
  * artifact the transcript stored, so one publication lands on its turn once
- * however often the proxy announces it.
+ * however often the gateway announces it.
  */
 function carriesArtifact(message: ProjectedMessage, id: string) {
   return message.parts.some(
@@ -1163,7 +1163,7 @@ function carriesArtifact(message: ProjectedMessage, id: string) {
 }
 
 /**
- * Re-keys the optimistic user turn onto the id the proxy assigned it. The echo
+ * Re-keys the optimistic user turn onto the id the gateway assigned it. The echo
  * may arrive first, in which case the local copy is dropped instead.
  */
 export function renameMessage(
@@ -1188,7 +1188,7 @@ export function renameMessage(
  * The turns a replay that resends the whole Session replaces, as it starts.
  * A prompt the provider has not echoed yet is the browser's alone: a draft's
  * first turn binds and resumes while its own prompt is in flight, and the reply
- * re-keys it onto the id the proxy assigned, which drops it if the replay
+ * re-keys it onto the id the gateway assigned, which drops it if the replay
  * already carried that turn.
  */
 export function replacedTurns(state: ProjectorState): ReadonlySet<string> {
@@ -1295,7 +1295,7 @@ export function failSession(
 /**
  * Whether the update between the two states ended a live run in a failure
  * before it wrote a reply, so no turn of its own shows the failure. A settled
- * state the proxy restates, such as an uncertain one, ends no run.
+ * state the gateway restates, such as an uncertain one, ends no run.
  */
 export function failedWithoutReply(
   before: ProjectorState,

@@ -12,7 +12,7 @@ import type { BrowserPermission, BrowserPreferences } from "./policy"
 
 /**
  * This device's Web Push subscription: what the deployment offers, what the
- * browser granted, and what the proxy currently holds. While the proxy holds a
+ * browser granted, and what the gateway currently holds. While the gateway holds a
  * working subscription, push owns the OS alerts and no tab raises its own.
  */
 
@@ -22,7 +22,7 @@ export type PushStatus =
   | "not-configured"
   | "available"
 
-/** The proxy REST surface push needs; the provider adapter implements it. */
+/** The gateway REST surface push needs; the provider adapter implements it. */
 export type PushClient = {
   pushInfo(): Promise<PushInfo>
   putPushSubscription(registration: PushRegistration): Promise<void>
@@ -80,7 +80,7 @@ export type PushSubscriptionManager = {
 const SUBSCRIBE_RETRY_MS = 60_000
 
 /**
- * A page kept open re-sends its registration this often, so the proxy keeps
+ * A page kept open re-sends its registration this often, so the gateway keeps
  * counting the device fresh enough to be shown names and what is asked.
  */
 const REGISTRATION_REFRESH_MS = 24 * 60 * 60 * 1000
@@ -110,7 +110,7 @@ export function createPushSubscriptionManager({
   let described: Promise<void> | undefined
   let registered: Promise<void> | undefined
   let subscription: PushSubscriptionLike | undefined
-  /** Endpoint and body the proxy accepted; holding them is what makes push active. */
+  /** Endpoint and body the gateway accepted; holding them is what makes push active. */
   let heldEndpoint: string | undefined
   let heldBody: string | undefined
   let heldAt: number | undefined
@@ -226,7 +226,7 @@ export function createPushSubscriptionManager({
         }
         let live: PushSubscriptionLike | undefined = current ?? undefined
         if (!live) {
-          // Whatever the proxy held belonged to a subscription this browser no
+          // Whatever the gateway held belonged to a subscription this browser no
           // longer has, so it is retired before a fresh one replaces it.
           const stale = heldEndpoint
           release()
@@ -249,7 +249,7 @@ export function createPushSubscriptionManager({
         if (!registration.success) throw new Error("Invalid push registration")
         const body = JSON.stringify(registration.data)
         // The browser may replace an endpoint at any time; the old one is then
-        // a subscription the proxy would keep pushing to.
+        // a subscription the gateway would keep pushing to.
         const rotated =
           heldEndpoint && heldEndpoint !== live.endpoint
             ? heldEndpoint
@@ -268,7 +268,7 @@ export function createPushSubscriptionManager({
         await retire(rotated)
         changed()
       } catch {
-        // The proxy does not hold this device, so its tabs keep alerting.
+        // The gateway does not hold this device, so its tabs keep alerting.
         release()
         changed()
       }

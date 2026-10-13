@@ -4,8 +4,8 @@ import { expect, test, type Page } from "./test"
 
 /**
  * The operator surface over one scripted ACP v2 connection. A fake
- * `window.WebSocket` answers the proxy's operator lane with JSON-RPC and pushes
- * the `session/update` notifications a real proxy emits; REST carries only the
+ * `window.WebSocket` answers the gateway's operator lane with JSON-RPC and pushes
+ * the `session/update` notifications a real gateway emits; REST carries only the
  * runtime read.
  */
 
@@ -275,7 +275,7 @@ const vocabularyTurn = [
       },
     }),
   },
-  // The proxy restates the model options when the provider switches models.
+  // The gateway restates the model options when the provider switches models.
   {
     sessionUpdate: "config_option_update",
     configOptions: [
@@ -428,7 +428,7 @@ const script = {
       ],
     },
   ],
-  /** What the proxy restates behind a resume's answer, as updates. */
+  /** What the gateway restates behind a resume's answer, as updates. */
   restated: {
     session: {
       agentId: AGENT_ID,
@@ -511,7 +511,7 @@ declare global {
       sequence: number
       /**
        * Closes the live transport with a close code: 1006 by default, as a
-       * proxy restart would, or 1013 as a proxy at capacity would.
+       * gateway restart would, or 1013 as a gateway at capacity would.
        */
       dropSocket: (code?: number) => void
       /** Sends the held `_hgw/before` page, if one is waiting. */
@@ -709,7 +709,7 @@ function installAcpStub(script: AcpScript) {
     }
 
     /**
-     * The page ending `offset` messages before the newest, as the proxy reads
+     * The page ending `offset` messages before the newest, as the gateway reads
      * it: its messages, then the cursor of the page before it, if any.
      */
     historyPage(
@@ -824,7 +824,7 @@ function installAcpStub(script: AcpScript) {
             stopReason: "end_turn",
           })
         }
-        // A permission turn waits on the operator, as the proxy's
+        // A permission turn waits on the operator, as the gateway's
         // `requiresActionOutbound` does: the wait, then the request.
         if (promptText(params).includes(script.guardedPermissionPrompt)) {
           const call = script.guardedToolCall
@@ -969,7 +969,7 @@ async function serveAcp(page: Page, overrides: Partial<AcpScript> = {}) {
     route.fulfill({ json: { mode: "aos" } })
   )
   // The runtime read and the push status probe are the only REST routes this
-  // journey needs; the real proxy answers the probe even without push set up.
+  // journey needs; the real gateway answers the probe even without push set up.
   await page.route("**/api/v1/**", (route) => {
     const { pathname } = new URL(route.request().url())
     if (pathname.endsWith("/runtime")) return route.fulfill({ json: runtime })
@@ -995,7 +995,7 @@ async function resumes(page: Page) {
   )
 }
 
-test("AOS proxy restores history, offers commands, streams one turn, stops, and reconnects", async ({
+test("Gateway restores history, offers commands, streams one turn, stops, and reconnects", async ({
   page,
 }) => {
   await serveAcp(page)
@@ -1056,7 +1056,7 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   await expect(input).toBeVisible()
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible()
 
-  // The exposed Session is reported to the proxy, which owns read state, along
+  // The exposed Session is reported to the gateway, which owns read state, along
   // with this connection's presence for push delivery.
   await expect
     .poll(() => recorded(page, "_hgw/session/focus"))
@@ -1080,7 +1080,7 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
 })
 
-test("AOS proxy at capacity is waited out before the browser reconnects", async ({
+test("Gateway at capacity is waited out before the browser reconnects", async ({
   page,
 }) => {
   await page.clock.install()
@@ -1141,7 +1141,7 @@ test("AOS shows a reconnecting notice over the conversation while a dropped link
   await expect(reconnected).toBeHidden()
 })
 
-test("AOS proxy loads a long Session's earlier messages as the reader scrolls up, keeping their place", async ({
+test("Gateway loads a long Session's earlier messages as the reader scrolls up, keeping their place", async ({
   page,
 }) => {
   // Five pages of scrolling through 1,200 messages outlast the default budget
@@ -1155,7 +1155,7 @@ test("AOS proxy loads a long Session's earlier messages as the reader scrolls up
       extensions: { ...script.initializeMeta.extensions, historyPages: true },
     },
     pagedHistory: {
-      // Even pages start at a user message, as the proxy's turn-aligned pages do.
+      // Even pages start at a user message, as the gateway's turn-aligned pages do.
       pageSize: 200,
       messages: Array.from({ length }, (_, index) => ({
         role: index % 2 === 0 ? "user" : "assistant",
@@ -1219,7 +1219,7 @@ test("AOS proxy loads a long Session's earlier messages as the reader scrolls up
   expect(await pageReads()).toBe(length / 200 - 1)
 })
 
-test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, stop and usage from the wire", async ({
+test("Gateway renders a turn's tools, diff, terminal, compaction, subagent, stop and usage from the wire", async ({
   page,
 }) => {
   await serveAcp(page, {
@@ -1323,7 +1323,7 @@ test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, st
     .toContain(CHILD_SESSION_ID)
 })
 
-test("AOS proxy answers a permission request on the tool call it guards, and one that stands alone", async ({
+test("Gateway answers a permission request on the tool call it guards, and one that stands alone", async ({
   page,
 }) => {
   await serveAcp(page)
@@ -1373,7 +1373,7 @@ test("AOS proxy answers a permission request on the tool call it guards, and one
   await expect(choices).toHaveCount(0)
 })
 
-test("AOS proxy search adds a Session the provider matched by content to the title filter", async ({
+test("Gateway search adds a Session the provider matched by content to the title filter", async ({
   page,
 }) => {
   await serveAcp(page, {

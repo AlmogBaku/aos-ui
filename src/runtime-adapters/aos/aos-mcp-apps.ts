@@ -27,7 +27,7 @@ function refusal(error: unknown): error is HgwClientError {
   )
 }
 
-/** The part of a target the proxy's path names under its Session. */
+/** The part of a target the gateway's path names under its Session. */
 function subjectOf(target: McpAppTarget): McpAppSubject {
   return "toolCallId" in target
     ? { toolCallId: target.toolCallId }
@@ -36,7 +36,7 @@ function subjectOf(target: McpAppTarget): McpAppSubject {
 
 /**
  * A tool call id or a published Artifact id is all an App request names: the
- * proxy resolves the view's resource and MCP server from the Session this
+ * gateway resolves the view's resource and MCP server from the Session this
  * client authorizes, so the browser never addresses a server or a resource
  * URI of its own. An Artifact's view calls no tool.
  */

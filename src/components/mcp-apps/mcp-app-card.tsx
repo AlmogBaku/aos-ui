@@ -160,7 +160,7 @@ function HostedMcpApp({
     adapter.open(target, controller.signal).then(setSettledView, () => {})
     return () => controller.abort()
   }, [adapter, awaitingResult, target])
-  // A view given files takes the arguments the proxy handed it, which hold
+  // A view given files takes the arguments the gateway handed it, which hold
   // none of the host paths the call's own arguments name.
   const input = opened?.view.files
     ? (opened.view.toolInput ?? settledView?.toolInput)

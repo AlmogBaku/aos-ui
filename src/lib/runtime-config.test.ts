@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { resolveRuntimeConfiguration } from "./runtime-config"
 
 describe("resolveRuntimeConfiguration", () => {
-  it("defaults the browser to the normalized AOS proxy", () => {
+  it("defaults the browser to the normalized gateway", () => {
     expect(resolveRuntimeConfiguration({})).toMatchObject({
       status: "ready",
       mode: "aos",

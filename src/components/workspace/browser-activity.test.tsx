@@ -543,7 +543,7 @@ it("retires this device's subscription when the browser resets the permission", 
   expect(device.result.current.browserSettings.ask).toBe(false)
 
   await act(async () => device.revoke("default", "watcher"))
-  // Nothing can be displayed any more, so the proxy must stop pushing here.
+  // Nothing can be displayed any more, so the gateway must stop pushing here.
   await waitFor(() =>
     expect(device.client.deletePushSubscription).toHaveBeenCalledWith(
       device.endpoint

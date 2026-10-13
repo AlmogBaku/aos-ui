@@ -48,7 +48,7 @@ export type AcpThreadListAdapter = RemoteThreadListAdapter & {
   historyFor?: never
 }
 
-/** Rejects a Session the proxy did not describe rather than guessing at it. */
+/** Rejects a Session the gateway did not describe rather than guessing at it. */
 function metadataOf(info: SessionInfo) {
   const meta = HgwSessionInfoMetaSchema.parse(info._meta?.[HGW_META_KEY])
   const metadata: RemoteThreadMetadata = {

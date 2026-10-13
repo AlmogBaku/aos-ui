@@ -212,7 +212,7 @@ export async function loadFile(
     })
     if (!response.ok) {
       discard(response.body)
-      // The proxy answers 403 only for a path its folders do not serve.
+      // The gateway answers 403 only for a path its folders do not serve.
       return { status: response.status === 403 ? "denied" : "unreachable" }
     }
     const type =

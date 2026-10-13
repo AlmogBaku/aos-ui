@@ -110,7 +110,7 @@ type Options = {
   titles: ReadonlyMap<string, string>
   selection: ActivityContext["selection"]
   conversationExposed?: boolean
-  /** Push notifications are authored on the proxy, in the device's language. */
+  /** Push notifications are authored on the gateway, in the device's language. */
   locale: Locale
   readNow: () => Date
   onOpenTarget: (agentId: string, sessionId: string) => Promise<void>
@@ -212,7 +212,7 @@ export function useActivityCoordinator(
     ),
   })
   /**
-   * The proxy owns read state, so the browser only reports what is exposed, and
+   * The gateway owns read state, so the browser only reports what is exposed, and
    * it decides which devices still need a push from the presence reported with
    * it. A repeat carries the same values, which is what keeps presence fresh.
    */
@@ -330,7 +330,7 @@ export function useActivityCoordinator(
         })
       : null
     browserRef.current = browser
-    // Preferences, permission, and locale are what the proxy has to be told.
+    // Preferences, permission, and locale are what the gateway has to be told.
     let pushQueue = Promise.resolve()
     function syncPush() {
       if (!push || !browser) return
@@ -486,7 +486,7 @@ export function useActivityCoordinator(
       })
     }
     // An attended tab holds this device's pushes back, so going idle and staying
-    // present are both reports the proxy has to hear. The tracker listens to
+    // present are both reports the gateway has to hear. The tracker listens to
     // `focus` first, so a return to the window is attended before it is reported.
     const idleTracker = createIdleTracker({ target: window })
     idleRef.current = idleTracker
@@ -542,7 +542,7 @@ export function useActivityCoordinator(
     const timeout = window.setTimeout(() => setNotice(null), 8000)
     return () => window.clearTimeout(timeout)
   }, [notice])
-  // The proxy authors push bodies, so a language change is a registration change.
+  // The gateway authors push bodies, so a language change is a registration change.
   useEffect(() => {
     syncPushRef.current()
   }, [options.locale])

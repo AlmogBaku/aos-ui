@@ -8,7 +8,7 @@ import {
 } from "./runtime-config"
 
 describe("browser runtime configuration", () => {
-  it("round-trips the AOS proxy configuration without a provider URL", () => {
+  it("round-trips the gateway configuration without a provider URL", () => {
     const resolved = resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: "aos" })
     expect(serializePublicRuntimeConfiguration(resolved)).toEqual({
       mode: "aos",

@@ -7,14 +7,14 @@ import {
 } from "./runtime-config"
 
 describe("provider-neutral AOS runtime configuration", () => {
-  it("defaults to the normalized AOS proxy", () => {
+  it("defaults to the normalized gateway", () => {
     expect(resolveRuntimeConfiguration({})).toMatchObject({
       status: "ready",
       mode: "aos",
     })
   })
 
-  it("selects the same-origin proxy without exposing a provider URL", () => {
+  it("selects the same-origin gateway without exposing a provider URL", () => {
     const resolved = resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: "aos" })
     expect(resolved).toEqual({
       status: "ready",

@@ -49,7 +49,7 @@ export class PipedSocket extends EventTarget {
   async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
     for (;;) {
       const next = await reader.read().catch(() => undefined)
-      // The agent ending its side is the proxy closing the socket.
+      // The agent ending its side is the gateway closing the socket.
       if (!next || next.done) {
         this.#end(1000, "", true)
         return
@@ -79,13 +79,13 @@ export class PipedSocket extends EventTarget {
     this.#end(code, reason, true)
   }
 
-  /** The network drops: an abnormal close, and the proxy loses its end. */
+  /** The network drops: an abnormal close, and the gateway loses its end. */
   drop() {
     this.#end(1006, "", false)
   }
 
-  /** The proxy closes the socket with `code`. */
-  closeFromProxy(code: number, reason = "") {
+  /** The gateway closes the socket with `code`. */
+  closeFromGateway(code: number, reason = "") {
     this.#end(code, reason, true)
   }
 

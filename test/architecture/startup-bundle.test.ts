@@ -56,7 +56,7 @@ it("keeps runtime-specific workspace code out of the configuration bootstrap", (
   expect(initialGzipBytes).toBeLessThan(120_000)
 })
 
-// A tab whose build differs from the proxy's reloads, so the id must change
+// A tab whose build differs from the gateway's reloads, so the id must change
 // with every chunk the page loads: the entry chunk's hash covers them all.
 it("names the build by its entry chunk's content hash", () => {
   const entry = chunks.find((chunk) => chunk.isEntry)

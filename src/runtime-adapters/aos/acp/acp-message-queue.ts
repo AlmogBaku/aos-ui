@@ -18,7 +18,7 @@ export type QueueSession = {
   readonly subscribe: (listener: () => void) => () => void
 }
 
-/** A refusal because the proxy still holds the Session for an earlier turn. */
+/** A refusal because the gateway still holds the Session for an earlier turn. */
 export const isBusyRefusal = (error: unknown) =>
   typeof error === "object" &&
   error !== null &&
@@ -40,8 +40,8 @@ type Dispatch = {
 }
 
 /**
- * How long a queued send keeps asking a Session the proxy still holds. The
- * browser can read a turn over before the proxy does, and the proxy never
+ * How long a queued send keeps asking a Session the gateway still holds. The
+ * browser can read a turn over before the gateway does, and the gateway never
  * queues, so the send waits here instead of being lost to the refusal.
  */
 const BUSY_RETRY_MS = 60_000
@@ -94,7 +94,7 @@ const composable = (message: AppendMessage) =>
   (message.attachments ?? []).every((attachment) => attachment.content)
 
 /**
- * Holds the queue while a turn owns the Session. The proxy answers a prompt
+ * Holds the queue while a turn owns the Session. The gateway answers a prompt
  * as it accepts the turn, before the turn reports running, so a dispatched
  * send holds the queue until it is accepted and its turn has settled, in
  * whichever order the two arrive. A busy refusal sends again on backoff;

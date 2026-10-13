@@ -68,7 +68,7 @@ function resolveComposerFeatures(
 }
 
 /**
- * Browser configuration never names a native provider. The AOS proxy owns
+ * Browser configuration never names a native provider. The gateway owns
  * provider selection and credentials; fixture is deliberately explicit.
  */
 export function resolveRuntimeConfiguration(

@@ -20,7 +20,7 @@ export const FIXTURE_MCP_APP_TOOL = "show_launch_board"
 const REFRESH_TOOL = "refresh_launch_board"
 
 /**
- * Withholds a call's files as the proxy does: every top-level string argument
+ * Withholds a call's files as the gateway does: every top-level string argument
  * that starts with `/` leaves the view's input, which reads the file at an
  * address instead. The preview's passes never expire.
  */
@@ -156,7 +156,7 @@ function recordedToolsServer(): () => Promise<RecordedToolsServer> {
     })
 }
 
-/** The viewer a published attachment opens in, as the proxy configures it by default. */
+/** The viewer a published attachment opens in, as the gateway configures it by default. */
 const ARTIFACT_VIEWER = "ui://aos-ui/artifact"
 
 /**

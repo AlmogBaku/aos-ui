@@ -662,7 +662,7 @@ describe("artifact view", () => {
     }
   )
 
-  it("says a file is not allowed when the proxy answers 403", async () => {
+  it("says a file is not allowed when the gateway answers 403", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(null, { status: 403 }))

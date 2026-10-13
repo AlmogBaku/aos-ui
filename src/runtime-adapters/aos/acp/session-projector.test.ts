@@ -98,7 +98,7 @@ const ARTIFACT = {
   source: { type: "provider", reference: "art-1" },
 } as const
 
-/** A published artifact as the proxy streams it: a `resource_link` to its id. */
+/** A published artifact as the gateway streams it: a `resource_link` to its id. */
 const artifactLink = (
   messageId: string,
   extra: { uri?: string; size?: number } = {},
@@ -1448,7 +1448,7 @@ describe("local turn bookkeeping", () => {
 describe("one turn per user message", () => {
   const STARTED_AT = "2026-09-22T10:00:00.000Z"
   const COMPLETED_AT = "2026-09-22T10:00:04.500Z"
-  /** A run's responses and thoughts, each its own message, as the proxy streams them. */
+  /** A run's responses and thoughts, each its own message, as the gateway streams them. */
   const streaming = fold([
     userChunk("u1", "Ship it"),
     stateUpdate({ state: "running" }, { ...TURN_META, at: STARTED_AT }),

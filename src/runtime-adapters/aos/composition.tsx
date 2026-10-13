@@ -67,7 +67,7 @@ import { createGatewayClient } from "./gateway-client"
 import { useConnectionOutage, useSessionNotice } from "./use-connection-outage"
 
 /**
- * The operator surface over one ACP connection to the proxy. The connection
+ * The operator surface over one ACP connection to the gateway. The connection
  * owns the wire, the workspace client owns Agent and Session ownership, and the
  * Session projector owns the thread; REST carries only bytes.
  */
@@ -89,7 +89,7 @@ function ReadyAosRuntimeProvider({
   locale,
 }: RuntimeAdapterProps<"aos">) {
   const rest = useMemo(() => createGatewayClient(), [])
-  // Only an operator workspace with the real proxy client can subscribe this
+  // Only an operator workspace with the real gateway client can subscribe this
   // device; every other surface simply has no manager.
   const push = useMemo(
     () =>
@@ -184,7 +184,7 @@ function ReadyAosRuntimeProvider({
     [locale]
   )
   // The Session owns the batch, so staging waits for the Session a draft's
-  // first turn creates; the prompt then links what the proxy accepted.
+  // first turn creates; the prompt then links what the gateway accepted.
   const stageAttachments = useCallback(
     async (sessionId: string, attachments: readonly CompleteAttachment[]) => {
       const { stageId } = await client.stageAttachments(

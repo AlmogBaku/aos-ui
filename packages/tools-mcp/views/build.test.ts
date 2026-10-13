@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { SYNTAX_LANGUAGES } from "../../../shared/syntax-language"
 import { buildGrammars, buildPdfjs, buildViews } from "./build"
 
-/** The proxy refuses an App document, or any resource it reads, above this size. */
+/** The gateway refuses an App document, or any resource it reads, above this size. */
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 
 describe("buildViews", () => {

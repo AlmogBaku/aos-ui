@@ -131,7 +131,7 @@ describe("ACP remote thread-list adapter", () => {
 
   describe("scoped to the selected Agent", () => {
     const pinned = sessionInfo({ sessionId: "aster-pinned", agentId: "aster" })
-    // Every Agent's page one and Aster's own pages, as the proxy serves them.
+    // Every Agent's page one and Aster's own pages, as the gateway serves them.
     function scopedCatalog(asterPages: SessionInfo[][]) {
       return vi.fn(async (meta: { agentId?: string }, cursor?: string) => {
         if (meta.agentId === undefined)
@@ -246,7 +246,7 @@ describe("ACP remote thread-list adapter", () => {
     })
   })
 
-  it("rejects a Session the proxy described without AOS metadata", async () => {
+  it("rejects a Session the gateway described without AOS metadata", async () => {
     const { adapter } = harness({
       listSessions: vi.fn(async () => ({
         sessions: [{ sessionId: "session-1", cwd: "/workspaces/demo" }],

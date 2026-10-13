@@ -177,7 +177,7 @@ describe("runtime package import boundaries", () => {
         importers.push(path)
     }
 
-    // The browser speaks ACP v2 to the proxy and the proxy owns its own run
+    // The browser speaks ACP v2 to the gateway and the gateway owns its own run
     // vocabulary, so no AG-UI package belongs anywhere in the repository.
     expect(importers).toEqual([])
   })

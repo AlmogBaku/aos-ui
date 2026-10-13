@@ -91,7 +91,7 @@ import {
 } from "./use-connection-outage"
 
 /**
- * The invited guest surface: one ACP connection to the proxy's guest listener,
+ * The invited guest surface: one ACP connection to the gateway's guest listener,
  * one Session — the invitation's conversation reference — and the same Thread,
  * interactions, and artifacts the operator workspace composes. REST carries
  * only the verified presentation context and bytes.
@@ -139,7 +139,7 @@ class GuestRuntimeContextError extends Error {
   }
 }
 
-/** An invitation the proxy refuses is finished; anything else may recover. */
+/** An invitation the gateway refuses is finished; anything else may recover. */
 function failureOf(cause: unknown): GuestFailure {
   if (cause instanceof GuestRuntimeContextError) return cause.kind
   return isAuthenticationRequired(cause) ? "inactive" : "unavailable"
@@ -436,7 +436,7 @@ function ReadyGuestAosSurface({
     [connection, sessionId]
   )
   // The invited Session owns the batch, so its bytes are staged per turn and
-  // the prompt links whatever the proxy accepted.
+  // the prompt links whatever the gateway accepted.
   const stageAttachments = useCallback(
     async (staged: string, composed: readonly CompleteAttachment[]) => {
       const { stageId } = await rest.stageAttachments(

@@ -260,7 +260,7 @@ describe("MCP App routing", () => {
 
   it.each([
     [
-      "the input the proxy recorded to a view given files",
+      "the input the gateway recorded to a view given files",
       true,
       { title: "Q3" },
     ],

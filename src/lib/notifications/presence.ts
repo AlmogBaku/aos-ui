@@ -4,7 +4,7 @@ import {
 } from "@harness-gw/sdk/protocol"
 
 /**
- * Whether a foreground connection is still attended. The proxy holds a push back
+ * Whether a foreground connection is still attended. The gateway holds a push back
  * only while some connection is present, so a tab nobody is using has to say so,
  * and has to keep saying so while it stays in the foreground.
  */
