@@ -132,6 +132,12 @@ export type UseAcpRuntimeOptions = {
   agentId: string
   isDisabled?: boolean
   enableMessageQueue?: boolean
+  /**
+   * Whether the thread's subagent cards may answer and stop the child Sessions
+   * behind them. A surface that must never act for a child, as the guest lane
+   * is, passes `false`.
+   */
+  childSessionControls?: boolean
   adapters?: {
     attachments?: AttachmentAdapter
     speech?: SpeechSynthesisAdapter
@@ -891,8 +897,14 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
   // mutable state, keyed on the `version` token it subscribes to. The compiler
   // would drop that unread token from the keys and serve a stale store.
   "use no memo"
-  const { connection, approvals, sessionId, enableMessageQueue, isDisabled } =
-    options
+  const {
+    connection,
+    approvals,
+    sessionId,
+    enableMessageQueue,
+    isDisabled,
+    childSessionControls = true,
+  } = options
   // One controller per mounted thread: a local draft gains its Session while
   // this thread stays mounted, so keying the store on that Session would
   // discard the very turn that created it, mid-prompt. Only the Session the
@@ -962,7 +974,9 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
         ...(state.commands === undefined ? {} : { commands: state.commands }),
         ...(history === undefined ? {} : { history }),
         ...(binding && { queueControls: binding.controls }),
-        childSessions: controller.childControls,
+        ...(childSessionControls
+          ? { childSessions: controller.childControls }
+          : {}),
       }
     // The thread reads older history and queue controls through their
     // provider-neutral channels, stamped on the same object.
@@ -1003,6 +1017,7 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
   }, [
     adapters,
     binding,
+    childSessionControls,
     controller,
     isDisabled,
     queue,

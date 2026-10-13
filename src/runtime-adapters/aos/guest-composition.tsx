@@ -488,6 +488,8 @@ function ReadyGuestAosSurface({
     stageAttachments,
     // An invitation exposes one conversation, so no turn queues behind a run.
     enableMessageQueue: false,
+    // A guest is shown nothing of a child Session and acts for none.
+    childSessionControls: false,
     adapters: { attachments, ...mediaAdapters },
     messageRewind: rewindSource,
     onComposerPrefill,

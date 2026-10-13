@@ -7,6 +7,7 @@ import {
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -254,12 +255,84 @@ function createGuestGatewayAgent(options: GuestGatewayOptions = {}) {
     })
   }
 
+  const CHILD_ID = "guest-child"
+  const childTurn = { turnId: "run-0", sequence: 2 }
+
   return {
     app,
     calls,
     prompts,
     steers,
     finishRun,
+    /**
+     * A child Session the earlier turn spawned, which offers to be stopped and
+     * asks for a permission and a question: what a guest lane never sends,
+     * arriving all the same.
+     */
+    spawnChild() {
+      push({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "spawn",
+        name: "delegate_task",
+        status: "in_progress",
+        _meta: { [HGW_META_KEY]: { ...childTurn, messageId: "history-1" } },
+      })
+      push({
+        sessionUpdate: "subagent_update",
+        sessionId: CHILD_ID,
+        title: "Read the guest's notes",
+        capabilities: { cancel: {} },
+        state: { state: "running" },
+        _meta: { [HGW_META_KEY]: { ...childTurn, toolCallId: "spawn" } },
+      })
+      void peer?.notify(methods.client.session.update, {
+        sessionId: CHILD_ID,
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "child-bash",
+          name: "bash",
+          status: "pending",
+          _meta: { [HGW_META_KEY]: { ...childTurn, messageId: "child-1" } },
+        },
+      })
+      void peer
+        ?.request(methods.client.session.requestPermission, {
+          sessionId: CHILD_ID,
+          title: "Run bash",
+          subject: {
+            type: "tool_call",
+            toolCall: { toolCallId: "child-bash", status: "pending" },
+          },
+          options: [
+            { optionId: "once", name: "Allow once", kind: "allow_once" },
+          ],
+          _meta: { [HGW_META_KEY]: { requestId: "child-permission" } },
+        })
+        .catch(() => {})
+      void peer
+        ?.request(methods.client.elicitation.create, {
+          mode: "form",
+          sessionId: CHILD_ID,
+          message: "The child needs an answer",
+          requestedSchema: {
+            type: "object",
+            properties: { q0: { type: "string", enum: ["Yes", "No"] } },
+          },
+          _meta: {
+            [HGW_META_KEY]: {
+              requestId: "child-question",
+              questions: [
+                {
+                  header: "Scope",
+                  prompt: "Read the archived notes too?",
+                  options: [{ label: "Yes" }, { label: "No" }],
+                },
+              ],
+            },
+          },
+        })
+        .catch(() => {})
+    },
     /** The provider's suggested next turn for the invited composer. */
     suggestPrefill(text: string) {
       void peer?.notify(HGW_METHODS.notify.composerPrefill, prefillParams(text))
@@ -539,6 +612,22 @@ describe("AOS guest browser composition", () => {
     expect(screen.getByRole("button", { name: "Copy" })).toBeVisible()
     expect(screen.queryByRole("button", { name: "Edit message" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Retry response" })).toBeNull()
+  })
+
+  // The gateway shows a guest nothing of a child, so the guest lane acts for
+  // none either: its subagent cards are never handed the child controls.
+  it("gives a guest no control over a child Session that reaches it", async () => {
+    const { gateway } = mount()
+    await screen.findByText("Earlier guest answer")
+
+    gateway.spawnChild()
+    expect(await screen.findByText("Read the guest's notes")).toBeVisible()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
+    expect(screen.queryByRole("group", { name: "Run bash" })).toBeNull()
+    expect(screen.queryByText("Read the archived notes too?")).toBeNull()
   })
 
   it("links a staged attachment batch from the guest prompt", async () => {
