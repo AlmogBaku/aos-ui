@@ -560,6 +560,7 @@ function WorkspaceContent({
     undoCloseSession,
     renameSession,
     setSessionPinned,
+    setSessionUnread,
     archiveSession,
     unarchiveSession,
     deleteSession,
@@ -745,6 +746,7 @@ function WorkspaceContent({
         onCreateSession={createSession}
         onRenameSession={renameSession}
         onSetSessionPinned={setSessionPinned}
+        onSetSessionUnread={setSessionUnread}
         onArchiveSession={archiveSession}
         onUnarchiveSession={unarchiveSession}
         onDeleteSession={deleteSession}

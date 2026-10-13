@@ -23,5 +23,6 @@ export function getWorkspaceCapabilities(
     sessionArchival: sessionActions?.archive ?? false,
     sessionDeletion: sessionActions?.delete ?? false,
     sessionPin: sessionActions?.pin ?? false,
+    sessionUnread: sessionActions?.unread ?? false,
   }
 }

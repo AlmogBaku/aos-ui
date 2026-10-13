@@ -122,6 +122,7 @@ export const en = {
     cancel: "Cancel",
     pinSession: "Pin",
     unpinSession: "Unpin",
+    markUnread: "Mark unread",
     archiveSession: "Archive",
     unarchiveSession: "Unarchive",
     deleteSession: "Delete",

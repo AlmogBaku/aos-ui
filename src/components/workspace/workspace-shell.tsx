@@ -181,6 +181,10 @@ export type WorkspaceShellProps = {
     sessionId: string,
     pinned: boolean
   ) => WorkspaceActionResult
+  onSetSessionUnread?: (
+    sessionId: string,
+    unread: boolean
+  ) => WorkspaceActionResult
   onArchiveSession?: (sessionId: string) => WorkspaceActionResult
   onUnarchiveSession?: (sessionId: string) => WorkspaceActionResult
   onDeleteSession?: (sessionId: string) => WorkspaceActionResult
@@ -1122,6 +1126,7 @@ export function WorkspaceShell({
   onCreateSession,
   onRenameSession,
   onSetSessionPinned,
+  onSetSessionUnread,
   onArchiveSession,
   onUnarchiveSession,
   onDeleteSession,
@@ -1432,6 +1437,13 @@ export function WorkspaceShell({
               onActionError
             )
         : undefined,
+      onToggleUnread: onSetSessionUnread
+        ? (session) =>
+            runAction(
+              () => onSetSessionUnread(session.sessionId, !session.unread),
+              onActionError
+            )
+        : undefined,
       onToggleArchive:
         onArchiveSession && onUnarchiveSession
           ? (session) =>
@@ -1458,6 +1470,7 @@ export function WorkspaceShell({
       onDeleteSession,
       onRenameSession,
       onSetSessionPinned,
+      onSetSessionUnread,
       onUnarchiveSession,
     ]
   )

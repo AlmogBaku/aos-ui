@@ -6,6 +6,8 @@ import {
   Archive,
   ArchiveRestore,
   Ellipsis,
+  Mail,
+  MailOpen,
   Pencil,
   Pin,
   PinOff,
@@ -37,6 +39,8 @@ export type SessionRowMenuCopy = {
   rename: string
   pin: string
   unpin: string
+  markUnread: string
+  markRead: string
   archive: string
   unarchive: string
   delete: string
@@ -52,6 +56,8 @@ export function sessionRowMenuCopy(dictionary: Dictionary): SessionRowMenuCopy {
     rename: dictionary.actions.rename,
     pin: dictionary.actions.pinSession,
     unpin: dictionary.actions.unpinSession,
+    markUnread: dictionary.actions.markUnread,
+    markRead: dictionary.activity.markRead,
     archive: dictionary.actions.archiveSession,
     unarchive: dictionary.actions.unarchiveSession,
     delete: dictionary.actions.deleteSession,
@@ -68,6 +74,7 @@ export function sessionRowMenuCopy(dictionary: Dictionary): SessionRowMenuCopy {
 export type SessionRowMenuHandlers = {
   onRename?: (session: WorkspaceSession) => void
   onTogglePin?: (session: WorkspaceSession) => void
+  onToggleUnread?: (session: WorkspaceSession) => void
   onToggleArchive?: (session: WorkspaceSession) => void
   onDelete?: (session: WorkspaceSession) => void
   onCloseTab?: (session: WorkspaceSession) => void
@@ -111,7 +118,7 @@ function sessionMenuEntries({
   const items: MenuEntry[] = []
 
   if (availability) {
-    const { onRename, onTogglePin, onToggleArchive } = handlers
+    const { onRename, onTogglePin, onToggleUnread, onToggleArchive } = handlers
     if (onRename) {
       items.push({
         id: "rename",
@@ -132,6 +139,19 @@ function sessionMenuEntries({
         ),
         available: availability.pin,
         run: () => onTogglePin(session),
+      })
+    }
+    if (onToggleUnread) {
+      items.push({
+        id: "mark-unread",
+        label: session.unread ? copy.markRead : copy.markUnread,
+        icon: session.unread ? (
+          <MailOpen aria-hidden="true" />
+        ) : (
+          <Mail aria-hidden="true" />
+        ),
+        available: availability.unread,
+        run: () => onToggleUnread(session),
       })
     }
     if (onToggleArchive) {

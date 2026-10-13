@@ -360,6 +360,13 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     this.#publishSessions()
   }
 
+  async markSessionUnread(sessionId: string) {
+    const session = this.#requireSession(sessionId)
+    if (session.unread === true) return
+    session.unread = true
+    this.#publishSessions()
+  }
+
   async setSessionPinned(sessionId: string, pinned: boolean) {
     const session = this.#requireSession(sessionId)
     if (session.pinned === pinned) return
@@ -383,7 +390,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   /** The preview performs every Session action the workspace offers. */
   async sessionActionCapabilities() {
-    return { rename: true, archive: true, delete: true, pin: true }
+    return { rename: true, archive: true, delete: true, pin: true, unread: true }
   }
 
   /**
