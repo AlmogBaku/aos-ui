@@ -227,7 +227,7 @@ describe("context compaction", () => {
           compaction({
             compactionId: "c1",
             status: "completed",
-            summary: "Earlier turns reviewed README.md.",
+            summary: "Earlier turns:\n\n- reviewed README.md\n- ran the tests",
           }),
           {
             ...read,
@@ -257,7 +257,14 @@ describe("context compaction", () => {
 
     await user.click(divider)
     expect(divider).toHaveAttribute("aria-expanded", "true")
-    expect(screen.getByText("Earlier turns reviewed README.md.")).toBeVisible()
+    // The runtime writes the summary as Markdown, drawn as Agent text is.
+    expect(screen.getByText("Earlier turns:")).toBeVisible()
+    const summary = await screen.findByRole("list")
+    expect(
+      within(summary)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent)
+    ).toEqual(["reviewed README.md", "ran the tests"])
   })
 
   it("says a compaction is under way while it runs", async () => {
