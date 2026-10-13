@@ -155,6 +155,7 @@ function createWorkspace(
       archive: true,
       delete: true,
       pin: true,
+      unread: true,
     }),
     ...overrides,
   }
@@ -320,6 +321,7 @@ it("reports the Session actions the runtime declares, and none otherwise", async
       archive: true,
       delete: true,
       pin: true,
+      unread: true,
     })
   )
 
@@ -331,15 +333,18 @@ it("reports the Session actions the runtime declares, and none otherwise", async
     archive: false,
     delete: false,
     pin: false,
+    unread: false,
   })
 })
 
 it("renames through the thread list and pins through the provider", async () => {
   const setSessionPinned = vi.fn(async () => {})
+  const markSessionRead = vi.fn(async () => {})
+  const markSessionUnread = vi.fn(async () => {})
   const { result, log, release } = await mountNavigation(
     ["s-recent"],
     [recent],
-    { setSessionPinned }
+    { setSessionPinned, markSessionRead, markSessionUnread }
   )
 
   await act(async () => {
@@ -353,6 +358,16 @@ it("renames through the thread list and pins through the provider", async () => 
     await result.current.setSessionPinned("s-recent", true)
   })
   expect(setSessionPinned).toHaveBeenCalledWith("s-recent", true)
+
+  await act(async () => {
+    await result.current.setSessionUnread("s-recent", true)
+  })
+  expect(markSessionUnread).toHaveBeenCalledWith("s-recent")
+
+  await act(async () => {
+    await result.current.setSessionUnread("s-recent", false)
+  })
+  expect(markSessionRead).toHaveBeenCalledWith("s-recent")
 })
 
 it("scopes History's catalog to the selected Agent and reloads once per Agent", async () => {

@@ -116,6 +116,29 @@ describe("FixtureWorkspace", () => {
     expect(published).toHaveLength(1)
   })
 
+  it("marks a read Session unread and republishes once; an unknown Session rejects", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const published: SessionMetadata[][] = []
+    workspace.subscribeSessionMetadata(
+      ["thread-aster-launch"],
+      (metadata) => published.push(metadata)
+    )
+
+    await workspace.markSessionUnread("thread-aster-launch")
+    await expect(
+      workspace.getSessionMetadata(["thread-aster-launch"])
+    ).resolves.toEqual([expect.objectContaining({ unread: true })])
+    expect(published).toHaveLength(1)
+
+    // Idempotent: already unread, no second publish
+    await workspace.markSessionUnread("thread-aster-launch")
+    expect(published).toHaveLength(1)
+
+    await expect(
+      workspace.markSessionUnread("missing")
+    ).rejects.toThrow("Session not found")
+  })
+
   it("keeps the seeded pin and archival authoritative", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
 
@@ -173,6 +196,7 @@ describe("FixtureWorkspace", () => {
       sessionArchival: true,
       sessionDeletion: true,
       sessionPin: true,
+      sessionUnread: true,
     })
   })
 
