@@ -352,7 +352,7 @@ function ChildRequests({
     : []
   if (approvals.length === 0 && sessions.length === 0) return null
   return (
-    <div className="flex flex-col gap-2 pb-2">
+    <div className="flex flex-col gap-2 pb-2 empty:hidden">
       {controls
         ? approvals.map((approval) => (
             <ChildApproval
