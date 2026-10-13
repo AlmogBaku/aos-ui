@@ -496,8 +496,8 @@ type AcpCall = { method: string; params: unknown }
 type AcpReply = { method: string; result?: unknown; error?: unknown }
 type ResumeParams = {
   sessionId: string
-  replayFrom?: { type: string }
-  _meta?: { hgw?: { agentId?: string; after?: number; turnId?: string } }
+  replayFrom?: { type: string; turnId?: string; from?: number }
+  _meta?: { hgw?: { agentId?: string } }
 }
 
 declare global {
@@ -742,8 +742,9 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("session/list", (_params, id) =>
         this.respond(id, { sessions: script.sessions })
       )
-      // A resume from the start replays the stored turns; a resume positioned
-      // by `_meta.hgw.after` reports only what the dropped transport missed.
+      // A resume from the start replays the stored turns; one positioned by
+      // the `_hgw/position` cursor reports only what the dropped transport
+      // missed. As the gateway does, any other cursor is invalid params.
       this.handlers.set("session/resume", (params, id) => {
         // A subagent's own Session opens with nothing stored.
         if (params.sessionId !== script.sessionId)
@@ -770,6 +771,12 @@ function installAcpStub(script: AcpScript) {
           this.restate()
           return
         }
+        if (replayFrom.type !== "start" && replayFrom.type !== "_hgw/position")
+          return this.deliver({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32602, message: "invalid_request" },
+          })
         const reply = () => {
           if (replayFrom.type === "start")
             for (const entry of script.history)
@@ -1076,9 +1083,20 @@ test("Gateway restores history, offers commands, streams one turn, stops, and re
   await expect
     .poll(async () => (await recorded(page, "initialize")).length)
     .toBe(2)
+  // The cursor names the first event still needed, inclusive.
   await expect
-    .poll(async () => (await resumes(page)).at(-1)?._meta?.hgw)
-    .toEqual({ agentId: AGENT_ID, after: sequence, turnId: TURN_ID })
+    .poll(async () => {
+      const resume = (await resumes(page)).at(-1)
+      return { replayFrom: resume?.replayFrom, hgw: resume?._meta?.hgw }
+    })
+    .toEqual({
+      replayFrom: {
+        type: "_hgw/position",
+        turnId: TURN_ID,
+        from: sequence + 1,
+      },
+      hgw: { agentId: AGENT_ID },
+    })
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
 })
 
