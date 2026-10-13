@@ -38,6 +38,7 @@ import {
   useInsideTurnFold,
 } from "@/components/assistant-ui/elements/turn-working-fold"
 import { isAosRichTool, useToolUiLocale } from "@/components/tool-ui"
+import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import {
   ModelSelectorContent,
@@ -205,6 +206,7 @@ export type ThreadLabels = {
   loadingEarlierMessages: string
   conversationBeginning: string
   earlierMessagesUnavailable: string
+  messageUnavailable: string
   scrollToBottom: string
   welcome: string
   composerPlaceholder: string
@@ -318,6 +320,7 @@ const DEFAULT_LABELS: ThreadLabels = {
   loadingEarlierMessages: "Loading earlier messages",
   conversationBeginning: "Beginning of conversation",
   earlierMessagesUnavailable: "Earlier messages can't be loaded",
+  messageUnavailable: "This message could not be shown.",
   copy: "Copy",
   refresh: "Refresh",
   more: "More",
@@ -673,8 +676,18 @@ const ThreadMessage: FC = () => {
   return <AssistantMessageComponent />
 }
 
+/** One message that cannot render costs only that message. */
+const BoundedThreadMessage: FC = () => {
+  const labels = useContext(ThreadLabelsContext)
+  return (
+    <LazyVisualBoundary fallbackLabel={labels.messageUnavailable}>
+      <ThreadMessage />
+    </LazyVisualBoundary>
+  )
+}
+
 /** `ThreadMessage` picks the role and the edit composer itself. */
-const THREAD_MESSAGE_COMPONENTS = { Message: ThreadMessage }
+const THREAD_MESSAGE_COMPONENTS = { Message: BoundedThreadMessage }
 
 /**
  * Search reads the loaded messages; subscribing here keeps a streaming token

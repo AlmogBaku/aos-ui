@@ -45,6 +45,7 @@ import {
   ToolUiSessionLinkProvider,
   type ToolUiSessionLinkResolver,
 } from "@/components/tool-ui"
+import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import {
@@ -141,6 +142,9 @@ const workspaceCopy = {
     retry: "Try again",
     loading: "Loading workspace…",
     unavailable: "The workspace could not be loaded.",
+    actionFailed: "That action could not be completed.",
+    sessionUnavailable:
+      "This Session could not be shown. Open another Session from the list.",
     tasks: "Session todos",
     tasksUnavailable: "Execution tasks are not available from this provider.",
     tasksFailed: "Todos could not be loaded.",
@@ -155,6 +159,8 @@ const workspaceCopy = {
     retry: "ניסיון חוזר",
     loading: "סביבת העבודה נטענת…",
     unavailable: "לא ניתן לטעון את סביבת העבודה.",
+    actionFailed: "לא ניתן היה להשלים את הפעולה.",
+    sessionUnavailable: "לא ניתן להציג את השיחה הזו. פתחו שיחה אחרת מהרשימה.",
     tasks: "משימות השיחה",
     tasksUnavailable: "ספק זה אינו מציע משימות ביצוע.",
     tasksFailed: "לא ניתן לטעון את המשימות.",
@@ -356,20 +362,20 @@ function WorkspaceError({
   locale,
   error,
   onRetry,
+  onDismiss,
 }: {
   locale: Locale
   error: Error
   onRetry: () => void
+  onDismiss: () => void
 }) {
   const copy = workspaceCopy[locale]
-  const [dismissed, setDismissed] = useState(false)
-  if (dismissed) return null
   return (
     <ErrorToast
       locale={locale}
       title={copy.unavailable}
       message={error.message}
-      onDismiss={() => setDismissed(true)}
+      onDismiss={onDismiss}
       actions={
         <Button type="button" size="sm" variant="outline" onClick={onRetry}>
           <RotateCw data-icon="inline-start" />
@@ -524,6 +530,7 @@ function WorkspaceContent({
     sessionsLoading,
     agentError,
     sessionError,
+    threadListError,
     actionError,
     setActionError,
     tabUndo,
@@ -560,7 +567,19 @@ function WorkspaceContent({
       ),
     [displayAgents, sessionActions, workspace]
   )
-  const workspaceError = agentError ?? sessionError ?? actionError
+  // A Session action's failure costs that action alone: it never says the
+  // workspace failed to load, and there is nothing for Retry to reload.
+  const workspaceError = agentError ?? sessionError ?? threadListError
+  // Dismissing the workspace error holds until it changes or clears, and an
+  // action's failure shows in its place meanwhile.
+  const workspaceErrorMessage = workspaceError?.message
+  const [workspaceErrorDismissed, setWorkspaceErrorDismissed] = useState(false)
+  const [dismissalFor, setDismissalFor] = useState(workspaceErrorMessage)
+  if (dismissalFor !== workspaceErrorMessage) {
+    setDismissalFor(workspaceErrorMessage)
+    setWorkspaceErrorDismissed(false)
+  }
+  const shownWorkspaceError = workspaceErrorDismissed ? null : workspaceError
   // `/new` is the composer's spelling of the New Session action: a Session is
   // the workspace's to open, so the command runs here and never becomes a turn.
   // Text after the command seeds the new Session's draft instead of being lost.
@@ -639,6 +658,7 @@ function WorkspaceContent({
     },
     // A created Agent opens the way its rail row does, with no Session yet.
     onOpenAgent: selectAgent,
+    onActionError: (reason) => setActionError(toError(reason)),
   })
 
   // A subagent's child Session opens in place when the catalog knows its Agent.
@@ -723,12 +743,19 @@ function WorkspaceContent({
           connectionStatus={connectionStatus}
           sessionStatus={sessionStatus}
         >
-          {workspaceError ? (
+          {shownWorkspaceError ? (
             <WorkspaceError
-              key={workspaceError.message}
               locale={locale}
-              error={workspaceError}
+              error={shownWorkspaceError}
               onRetry={retryWorkspace}
+              onDismiss={() => setWorkspaceErrorDismissed(true)}
+            />
+          ) : actionError ? (
+            <ErrorToast
+              locale={locale}
+              title={workspaceCopy[locale].actionFailed}
+              message={actionError.message}
+              onDismiss={() => setActionError(null)}
             />
           ) : null}
           {assistantInstructions ? (
@@ -747,14 +774,28 @@ function WorkspaceContent({
             ) : selectedAgent && conversationThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
                 <ToolUiSessionLinkProvider sessionLink={toolSessionLink}>
-                  <Thread
-                    autoFocus={false}
-                    direction={getLocaleDirection(locale)}
-                    labels={threadLabels[locale]}
-                    composerFeatures={threadComposerFeatures}
-                    messageRewind={bundle.messageRewind}
-                    components={activeThreadComponents}
-                  />
+                  {/* A reset key, not a React key: a key would remount the
+                      Thread on every switch and lose its composer state. */}
+                  <LazyVisualBoundary
+                    resetKey={conversationThreadId}
+                    fallback={
+                      <p
+                        className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
+                        role="alert"
+                      >
+                        {workspaceCopy[locale].sessionUnavailable}
+                      </p>
+                    }
+                  >
+                    <Thread
+                      autoFocus={false}
+                      direction={getLocaleDirection(locale)}
+                      labels={threadLabels[locale]}
+                      composerFeatures={threadComposerFeatures}
+                      messageRewind={bundle.messageRewind}
+                      components={activeThreadComponents}
+                    />
+                  </LazyVisualBoundary>
                 </ToolUiSessionLinkProvider>
               </WorkspaceThreadChromeContext.Provider>
             ) : (

@@ -92,14 +92,33 @@ describe("useAvatarAllocation", () => {
     expect(onConflict).toHaveBeenCalledTimes(1)
   })
 
-  it("keeps going without an error when one save fails", async () => {
-    const [first] = planAvatarSaves(roster, new Set())
-    const { update, onConflict } = renderAllocation(async (agentId) => {
-      if (agentId === first.agentId) throw new Error("Provider unavailable")
-    })
-    await waitFor(() => expect(update).toHaveBeenCalledTimes(roster.length))
-    expect(onConflict).not.toHaveBeenCalled()
-  })
+  it.each([
+    ["a failed save", new Error("Provider unavailable")],
+    [
+      "an unsupported answer",
+      new ClientAgentUpdateError("unsupported", "Avatars are not stored"),
+    ],
+  ])(
+    "keeps going past %s, which is that Agent's alone and never retried",
+    async (_case, failure) => {
+      const [first] = planAvatarSaves(roster, new Set())
+      const { update, onConflict, rerender } = renderAllocation(
+        async (agentId) => {
+          if (agentId === first.agentId) throw failure
+        }
+      )
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(roster.length))
+
+      rerender({ agents: [...roster, editable("agent-d")], ready: true })
+      await waitFor(() =>
+        expect(update).toHaveBeenCalledTimes(roster.length + 1)
+      )
+      expect(
+        savedIds(update).filter((id) => id === first.agentId)
+      ).toHaveLength(1)
+      expect(onConflict).not.toHaveBeenCalled()
+    }
+  )
 
   it("an Agent that is not avatarEditable is never sent, and later Agents still save", async () => {
     const agents = [
@@ -111,17 +130,5 @@ describe("useAvatarAllocation", () => {
     const { update } = renderAllocation(async () => undefined, { agents })
     await waitFor(() => expect(update).toHaveBeenCalledTimes(2))
     expect(savedIds(update).sort()).toEqual(["agent-c", "agent-d"])
-  })
-
-  it("after an unsupported rejection nothing else is attempted", async () => {
-    // The workspace client throws its own class: the save must recognize it.
-    const { update, rerender } = renderAllocation(async () => {
-      throw new ClientAgentUpdateError("unsupported", "Avatars are not stored")
-    })
-    await waitFor(() => expect(update).toHaveBeenCalledTimes(1))
-
-    rerender({ agents: [...roster, editable("agent-d")], ready: true })
-    await act(async () => {})
-    expect(update).toHaveBeenCalledTimes(1)
   })
 })

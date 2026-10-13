@@ -29,7 +29,7 @@ function LazyView({
   children: ReactNode
 }) {
   return (
-    <LazyVisualBoundary fallbackLabel={loading} fallback={fallback}>
+    <LazyVisualBoundary fallback={fallback}>
       <Suspense
         fallback={
           <p className="text-sm text-muted-foreground" role="status">

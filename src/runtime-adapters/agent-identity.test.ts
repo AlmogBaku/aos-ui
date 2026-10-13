@@ -17,13 +17,13 @@ describe("native Agent identity", () => {
     expect(getAgentCreator([agent, creator])).toBe(creator)
     expect(isRosterAgent(creator)).toBe(false)
   })
-  it("rejects ambiguous creator configuration", () => {
-    expect(() =>
+  it("names no creator when two are configured", () => {
+    expect(
       getAgentCreator([
         { ...agent, role: "creator" },
         { ...agent, id: "another", role: "creator" },
       ])
-    ).toThrow("Multiple creator Agents")
+    ).toBeUndefined()
   })
   it("keeps hidden identities out of the roster without discarding them", () => {
     expect(isRosterAgent(agent)).toBe(true)

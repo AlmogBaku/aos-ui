@@ -21,21 +21,27 @@ export function useWorkspaceCatalog(
   const [muteEditableIds, setMuteEditableIds] = useState(noIds)
   const [agentsLoading, setAgentsLoading] = useState(true)
   const [agentError, setAgentError] = useState<Error | null>(null)
-  const reload = useRef(() => {})
+  const reload = useRef<() => Promise<readonly AgentSummary[] | undefined>>(
+    async () => undefined
+  )
   useEffect(() => {
     let active = true
     let generation = 0
-    let refreshing = true
     let dirty = false
+    /** The loads under way: one, then one more for any refresh it missed. */
+    let running: Promise<void> | undefined
+    /** The roster the newest load read, or undefined once one failed. */
+    let read: readonly AgentSummary[] | undefined
     const load = async (refresh: boolean) => {
       generation += 1
       const requestGeneration = generation
       // Outside `try`: React Compiler cannot compile a logical expression there.
       const isLatest = () => active && requestGeneration === generation
       try {
-        const read = await readCatalog(workspace, refresh)
-        const { agents: next, avatarEditableIds: editable } = read
+        const catalog = await readCatalog(workspace, refresh)
+        const { agents: next, avatarEditableIds: editable } = catalog
         if (isLatest()) {
+          read = next
           // Every catalog invalidation re-reads the roster, and most leave it
           // as it was: keeping the value spares the workspace a re-render.
           setAgents((previous) => (sameData(previous, next) ? previous : next))
@@ -43,15 +49,16 @@ export function useWorkspaceCatalog(
             sameData(previous, editable) ? previous : editable
           )
           setMuteEditableIds((previous) =>
-            sameData(previous, read.muteEditableIds)
+            sameData(previous, catalog.muteEditableIds)
               ? previous
-              : read.muteEditableIds
+              : catalog.muteEditableIds
           )
           setAgentError(null)
           setAgentsLoading(false)
         }
       } catch (reason) {
         if (isLatest()) {
+          read = undefined
           setAgentError(toError(reason))
           setAgents((previous) =>
             previous.map((agent) =>
@@ -64,30 +71,36 @@ export function useWorkspaceCatalog(
         }
       }
     }
-    const refreshCatalog = async () => {
-      if (!active) return
-      if (refreshing) {
-        dirty = true
-        return
-      }
-      refreshing = true
+    const loads = async (first: boolean) => {
+      let refresh = first
       do {
         dirty = false
-        await load(true)
+        await load(refresh)
+        refresh = true
       } while (active && dirty)
-      refreshing = false
+      running = undefined
     }
-    reload.current = () => void refreshCatalog()
+    /** Settles once a load that began after the call has read the catalog. */
+    const refreshCatalog = () => {
+      if (!active) return Promise.resolve()
+      if (running) {
+        dirty = true
+        return running
+      }
+      running = loads(true)
+      return running
+    }
+    reload.current = async () => {
+      await refreshCatalog()
+      return read
+    }
     const handleError = (error: Error) => {
       if (active) {
         setAgentError(error)
         setAgentsLoading(false)
       }
     }
-    void load(false).finally(() => {
-      refreshing = false
-      if (active && dirty) void refreshCatalog()
-    })
+    running = loads(false)
     // Outside `try`: React Compiler cannot compile optional chaining there.
     const subscribe = () =>
       workspace.subscribeAgentCatalog?.(() => {
@@ -105,11 +118,15 @@ export function useWorkspaceCatalog(
     return () => {
       active = false
       generation += 1
-      reload.current = () => {}
+      reload.current = async () => undefined
       unsubscribe?.()
     }
   }, [refreshKey, workspace])
-  /** Re-reads the catalog through the same guarded, coalesced refresh. */
+  /**
+   * Re-reads the catalog through the same guarded, coalesced refresh, and
+   * resolves with the roster it read, or undefined when that read failed: the
+   * failure is the catalog's own error.
+   */
   const reloadCatalog = useCallback(() => reload.current(), [])
   return {
     agents,

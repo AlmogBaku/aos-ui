@@ -190,6 +190,7 @@ export type Dictionary = {
     HGW_SESSION_BUSY: string
     HGW_SESSION_IN_USE: string
     HGW_SESSION_LIMIT: string
+    HGW_REQUEST_TOO_LARGE: string
     HGW_RESET_REQUIRED: string
     HGW_OUTCOME_UNKNOWN: string
     HGW_STOP_UNCERTAIN: string

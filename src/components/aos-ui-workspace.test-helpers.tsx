@@ -661,9 +661,14 @@ function createdAgentHandle(state: CreatedAgentState): CreatedAgentHandle {
   }
 }
 
-/** The public fixture plus an Agent with no Sessions, and no creator. */
+const noOverrides: Partial<WorkspaceAdapter> = {}
+
+/**
+ * The public fixture plus an Agent with no Sessions, and no creator, with
+ * `overrides` over its workspace; pass them from outside the render.
+ */
 export function useEmptyAgentRuntime(
-  createSession?: WorkspaceAdapter["createSession"]
+  overrides: Partial<WorkspaceAdapter> = noOverrides
 ): TestRuntime {
   const fixture = useFixtureBundle()
   return useMemo(() => {
@@ -680,11 +685,11 @@ export function useEmptyAgentRuntime(
           status: "idle",
         },
       ],
-      ...(createSession ? { createSession } : {}),
+      ...overrides,
     })
     workspace.refreshAgents = workspace.listAgents
     return { assistantRuntime: fixture.assistantRuntime, workspace }
-  }, [createSession, fixture.assistantRuntime, fixture.workspace])
+  }, [fixture.assistantRuntime, fixture.workspace, overrides])
 }
 
 type StaleTodos = { emit: () => void }

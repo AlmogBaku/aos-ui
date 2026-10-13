@@ -208,6 +208,7 @@ function rewound(
 const REFUSAL_CODES: Readonly<Record<number, string>> = {
   [HGW_JSONRPC_ERRORS.turnInProgress]: "HGW_SESSION_BUSY",
   [HGW_JSONRPC_ERRORS.temporarilyUnavailable]: "HGW_PROVIDER_UNAVAILABLE",
+  [HGW_JSONRPC_ERRORS.requestTooLarge]: "HGW_REQUEST_TOO_LARGE",
 }
 
 /** How a resume ended: replayed, refused for good, or left behind by a rebinding. */
@@ -753,30 +754,86 @@ function createAcpController({
   }
 }
 
-const threadMessages = new WeakMap<ThreadMessageLike, ThreadMessage>()
+/**
+ * Each projected revision of a turn, converted; `null` for a turn Assistant UI
+ * refused even as the parts its role accepts.
+ */
+const threadMessages = new WeakMap<ThreadMessageLike, ThreadMessage | null>()
+
+/** Turns already warned of, so a refused turn that keeps streaming warns once. */
+const warnedTurns = new Set<string | undefined>()
 
 /**
  * The linear repository of a projected transcript. Each turn converts once per
  * projected revision, so a live update re-renders only the turns it changed:
- * `fromArray` would hand Assistant UI a fresh copy of every turn instead.
+ * `fromArray` would hand Assistant UI a fresh copy of every turn instead. A
+ * turn left out hands its place in the chain to the next turn kept.
  */
-function toRepository(
+export function toRepository(
   messages: readonly ThreadMessageLike[]
 ): ExportedMessageRepository {
   let parentId: string | null = null
   return {
-    messages: messages.map((like) => {
+    messages: messages.flatMap((like) => {
       let message = threadMessages.get(like)
-      if (!message) {
-        message = ExportedMessageRepository.fromArray([like]).messages[0]!
-          .message
+      if (message === undefined) {
+        message = convertTurn(like)
         threadMessages.set(like, message)
       }
+      if (!message) return []
       const item = { parentId, message }
       parentId = message.id
-      return item
+      return [item]
     }),
   }
+}
+
+/**
+ * One turn as Assistant UI's message. Assistant UI refuses a turn carrying
+ * what its role cannot, such as a user turn carrying a thought, and throws
+ * here, in the runtime hook and outside every render boundary, so one turn's
+ * malformed parts would otherwise blank the whole app. A refused turn warns
+ * once and stays as the parts its role accepts, under its own id and role, so
+ * the chain, Retry, and Edit still name it; only a turn refused even then is
+ * left out (`null`).
+ */
+function convertTurn(like: ThreadMessageLike): ThreadMessage | null {
+  const convert = (turn: ThreadMessageLike) =>
+    ExportedMessageRepository.fromArray([turn]).messages[0]!.message
+  try {
+    return convert(like)
+  } catch {
+    if (!warnedTurns.has(like.id)) {
+      warnedTurns.add(like.id)
+      runtimeLog().warn(
+        { messageId: like.id, role: like.role },
+        "acp.message.unconvertible"
+      )
+    }
+  }
+  const { id, role, createdAt } = like
+  try {
+    return convert({ id, role, createdAt, content: acceptedParts(like) })
+  } catch {
+    return null
+  }
+}
+
+const USER_PARTS = new Set(["text", "image", "audio", "file", "data"])
+
+/**
+ * The turn's content its role accepts, per Assistant UI's own converter
+ * (`fromThreadMessageLike` in @assistant-ui/core's
+ * runtime/utils/thread-message-like): a user turn's text, image, audio, file,
+ * and data parts, an assistant turn's every part but audio, and a system
+ * turn's first text part alone.
+ */
+function acceptedParts({ role, content }: ThreadMessageLike) {
+  if (typeof content === "string") return content
+  if (role === "user") return content.filter(({ type }) => USER_PARTS.has(type))
+  if (role === "assistant")
+    return content.filter(({ type }) => type !== "audio")
+  return content.filter(({ type }) => type === "text").slice(0, 1)
 }
 
 export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {

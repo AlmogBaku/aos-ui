@@ -217,7 +217,10 @@ export function useWorkspaceNavigation({
     Readonly<Record<string, string>>
   >({})
   const tabUndo = useSessionTabUndo()
+  // An action's failure is that action's alone; a thread list that cannot
+  // reload is the workspace's, and Retry is what clears it.
   const [actionError, setActionError] = useState<Error | null>(null)
+  const [threadListError, setThreadListError] = useState<Error | null>(null)
   // The runtime's answer for one workspace and refresh; any other pair still
   // waits for its own, so its actions read null and stay hidden meanwhile.
   const [sessionActionsAnswer, setSessionActionsAnswer] = useState<{
@@ -244,7 +247,7 @@ export function useWorkspaceNavigation({
     reloadCatalog,
     agentsLoading,
     setAgentsLoading,
-    agentError: catalogError,
+    agentError,
     setAgentError,
   } = useWorkspaceCatalog(workspace, refreshKey)
   const initialNowMs = now.getTime()
@@ -272,17 +275,7 @@ export function useWorkspaceNavigation({
   const pendingSelection = useRef<symbol | null>(null)
   const appliedPathname = useRef<string | null>(null)
   const routeTransitionPathname = useRef<string | null>(null)
-  const creators = agents.filter((agent) => agent.role === "creator")
-  const agentCreator = creators.length === 1 ? creators[0] : undefined
-  const agentError =
-    catalogError ??
-    (creators.length > 1
-      ? new Error(
-          locale === "he"
-            ? "מוגדר יותר מסוכן יוצר אחד"
-            : "Multiple creator Agents are configured"
-        )
-      : null)
+  const agentCreator = getAgentCreator(agents)
   /**
    * The pending draft is the creator's own local thread while the operator is
    * on its row. An explicit creator route stays the creator's own Session.
@@ -357,8 +350,8 @@ export function useWorkspaceNavigation({
   useAvatarAllocation({
     workspace,
     agents: avatarInputs,
-    ready: !agentsLoading && !catalogError,
-    onConflict: reloadCatalog,
+    ready: !agentsLoading && !agentError,
+    onConflict: () => void reloadCatalog(),
   })
   const navigableAgents = draftProjection.agents
   const defaultAgentId = agents.find(isRosterAgent)?.id ?? null
@@ -771,7 +764,7 @@ export function useWorkspaceNavigation({
       scopedCatalogAgent.current = agentId
       workspace.scopeSessionCatalog(agentId)
       void runtime.threads.reload().catch((reason: unknown) => {
-        setActionError(toError(reason))
+        setThreadListError(toError(reason))
       })
     },
     [runtime, workspace]
@@ -936,11 +929,15 @@ export function useWorkspaceNavigation({
               ? undefined
               : lastSelected.current.get(selectedAgentId),
           })
+    // Repairing the selection is the workspace's own doing, not an action,
+    // so its failure is the workspace's, and Retry runs the repair again.
+    const repairFailed = (reason: unknown) =>
+      setThreadListError(toError(reason))
     if (nextThread) {
-      void selectRuntimeThread(nextThread).catch(setActionError)
+      void selectRuntimeThread(nextThread).catch(repairFailed)
     } else if (activeThreadId) {
       desiredThread.current = null
-      void switchToNewThread(selectedAgentId).catch(setActionError)
+      void switchToNewThread(selectedAgentId).catch(repairFailed)
     }
   }, [
     activeThreadId,
@@ -1074,7 +1071,7 @@ export function useWorkspaceNavigation({
     if (reconciledDisagreement.current === key) return
     reconciledDisagreement.current = key
     void runtime.threads.reload().catch((reason: unknown) => {
-      setActionError(toError(reason))
+      setThreadListError(toError(reason))
     })
   }, [
     catalogSessionIds,
@@ -1211,11 +1208,14 @@ export function useWorkspaceNavigation({
         ({ sessionId }) => sessionId === event.sessionId
       )?.agentId
       if (!agentCreator || owner !== agentCreator.id) return
-      let catalog = await refreshAgentCatalog()
-      if (!catalog.some(({ id }) => id === event.agentId)) {
+      let catalog = await reloadCatalog()
+      if (catalog && !catalog.some(({ id }) => id === event.agentId)) {
         await wait(CREATED_AGENT_CATALOG_RETRY_MS)
-        catalog = await refreshAgentCatalog()
+        catalog = await reloadCatalog()
       }
+      // A catalog that cannot be read reports its own error, and the draft
+      // stays exactly where the operator left it.
+      if (!catalog) return
       if (!catalog.some(({ id }) => id === event.agentId)) {
         setCreatorNotice(dictionary.creator.createdPending)
         return
@@ -1489,7 +1489,7 @@ export function useWorkspaceNavigation({
   }
 
   async function openAgentBuilder() {
-    const creator = getAgentCreator(agents)
+    const creator = agentCreator
     if (!creator)
       throw new Error("Agent creation is unavailable from this provider")
     // A provider that owns Session creation only lists the interview once its
@@ -1516,16 +1516,15 @@ export function useWorkspaceNavigation({
       title: dictionary.actions.newAgent,
     })
     await runtime.threads.reload()
-    const [nextAgents, metadata] = await Promise.all([
-      workspace.refreshAgents(),
-      workspace.getSessionMetadata([sessionId]),
-    ])
+    const metadata = await workspace.getSessionMetadata([sessionId])
     if (metadata[0]?.agentId !== creator.id) {
       throw new Error(
         "Agent creation did not confirm creator Session ownership"
       )
     }
-    setAgents(nextAgents)
+    // The roster refreshes on its own: a catalog that cannot be read reports
+    // its own error and never costs the interview.
+    void reloadCatalog()
     // The operator only ever sees the interview as its own draft Agent.
     const draftId = draftAgentId(sessionId)
     setPreferredAgentId(draftId)
@@ -1617,11 +1616,12 @@ export function useWorkspaceNavigation({
 
   function retryWorkspace() {
     setAgentError(null)
+    setThreadListError(null)
     setActionError(null)
     setAgentsLoading(true)
     setRefreshKey((key) => key + 1)
     void runtime.threads.reload().catch((reason: unknown) => {
-      setActionError(toError(reason))
+      setThreadListError(toError(reason))
     })
   }
 
@@ -1665,6 +1665,7 @@ export function useWorkspaceNavigation({
     sessionsLoading,
     agentError,
     sessionError,
+    threadListError,
     actionError,
     setActionError,
     tabUndo,

@@ -86,12 +86,8 @@ function AppUnavailable() {
 
 /** The sandboxed frame, loaded on first use; one that cannot load says so. */
 function AppFrame(props: McpAppFrameProps) {
-  const { labels } = useToolUiLocale()
   return (
-    <LazyVisualBoundary
-      fallbackLabel={labels.mcpApp.unavailable}
-      fallback={<AppUnavailable />}
-    >
+    <LazyVisualBoundary fallback={<AppUnavailable />}>
       <Suspense fallback={<AppLoading />}>
         <McpAppFrame {...props} />
       </Suspense>

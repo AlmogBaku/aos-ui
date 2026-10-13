@@ -185,6 +185,7 @@ export const he = {
     HGW_PROVIDER_UNAVAILABLE: "הספק אינו זמין באופן זמני.",
     HGW_SESSION_BUSY: "השיחה הזו עדיין עסוקה בפנייה קודמת.",
     HGW_SESSION_LIMIT: "הספק הגיע למגבלת השיחות הפעילות.",
+    HGW_REQUEST_TOO_LARGE: "ההודעה גדולה מכדי לשלוח אותה.",
     HGW_RESET_REQUIRED:
       "יש ליישב את ההרצה הזו עם היסטוריית הספק לפני שהיא תמשיך.",
     HGW_OUTCOME_UNKNOWN:
