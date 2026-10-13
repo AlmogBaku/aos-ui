@@ -1996,8 +1996,54 @@ describe("applyUpdate child Sessions", () => {
     expect(aosOf(state)?.subagent?.status).toBe(status)
   })
 
-  // The gateway stops following a child still at work when its parent's turn
-  // ends, and says so in one last report: nothing confirms how it ended.
+  // A child still at work when its parent's turn ends goes on as background
+  // activity: its reports and its own updates arrive between turns, under the
+  // turn that spawned it, and reach its card while the parent stays idle.
+  it("keeps a child that outlives its parent's turn on its card, the parent idle", () => {
+    const background = { ...TURN_META, background: true }
+    const ended = fold([
+      stateUpdate({ state: "running" }),
+      agentChunk("a1", "Delegating."),
+      spawnCall,
+      report({ title: "Research the tiers", state: { state: "running" } }),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    const later = inChild(
+      fold(
+        [
+          report(
+            { state: { state: "idle", stopReason: "end_turn" } },
+            background
+          ),
+        ],
+        ended
+      ),
+      [
+        [
+          {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "c1",
+            content: { type: "text", text: "Tiers compared." },
+          },
+          background,
+        ],
+      ]
+    )
+
+    expect(later.execution.status).toBe("idle")
+    expect(toThreadMessages(later)[0]?.status).toEqual({
+      type: "complete",
+      reason: "stop",
+    })
+    expect(aosOf(later)?.subagent?.status).toBe("completed")
+    expect(nested(later)).toMatchObject([
+      { id: "c1", content: [{ type: "text", text: "Tiers compared." }] },
+    ])
+  })
+
+  // With nobody watching, the gateway stops following a child still at work
+  // when its parent's turn ends, and says so in one last report: nothing
+  // confirms how it ended.
   it("reads a child no longer followed as unconfirmed, until a replay restates how it ended", () => {
     const unfollowed = fold(
       [report({ state: { state: "unknown" }, capabilities: {} }, TURN_META)],
