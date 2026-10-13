@@ -434,10 +434,9 @@ describe("AosUiApp fixture composition", () => {
     type User = ReturnType<typeof userEvent.setup>
     /** The fork, typed: Enter takes the command from the menu, then sends it. */
     const typed = (command: string) => async (user: User) => {
-      await user.type(
-        screen.getByRole("textbox", { name: "Message input" }),
-        `${command}{Enter}{Enter}`
-      )
+      await user.click(screen.getByRole("textbox", { name: "Message input" }))
+      await user.paste(command)
+      await user.keyboard("{Enter}{Enter}")
     }
 
     // Full mount: the row menu, `/fork` and `/branch` are the workspace's to
@@ -503,11 +502,13 @@ describe("AosUiApp fixture composition", () => {
       ).toBeNull()
       await user.keyboard("{Escape}")
 
-      await user.type(
-        screen.getByRole("textbox", { name: "Message input" }),
-        "/fo"
-      )
-      expect(screen.queryByText(en.actions.forkSessionCommand)).toBeNull()
+      await user.click(screen.getByRole("textbox", { name: "Message input" }))
+      await user.paste("/")
+      const commands = await screen.findByRole("listbox", {
+        name: "Slash commands",
+      })
+      expect(commands).toHaveTextContent(en.actions.newSessionCommand)
+      expect(commands).not.toHaveTextContent(en.actions.forkSessionCommand)
     })
   })
 
