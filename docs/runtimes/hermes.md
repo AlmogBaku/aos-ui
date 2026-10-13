@@ -279,8 +279,9 @@ Hermes guide.
   Session runs in the folder Hermes stored on its own row, which can differ.
 - After Hermes compacts a conversation, carried-forward messages get new ids;
   an open tab keeps the old ones until the page reloads.
-- Session rename, pin, archive, delete, and provider-owned read state are
-  available.
+- Session rename, pin, archive, delete, mark unread/read, and provider-owned
+  read state are available. Mark unread sends `PATCH {unread:true}` alongside
+  the existing `PATCH {unread:false}` for mark read.
 - Voice controls appear for native STT/TTS interfaces and when the gateway
   `voice` block is configured; see [Use voice](../chat-voice.md).
 - A Hermes restart resets every active run once: the in-progress indicator

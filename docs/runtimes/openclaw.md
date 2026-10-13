@@ -157,7 +157,7 @@ Each Agent's folder is the `workspace` field on its `agents.list` row.
 ## Capability limits
 
 - AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments.
-- Session creation, rename, pin, archive, delete, and Artifacts are available. Todos, Activity, edit/regenerate, steering, visibility changes, and read state are unavailable. Voice becomes available when the gateway `voice` block is configured; see [Use voice](../chat-voice.md).
+- Session creation, rename, pin, archive, delete, and Artifacts are available. Todos, Activity, edit/regenerate, steering, and visibility changes are unavailable. Read state (mark read/unread) is available when the OpenClaw server advertises `session-unread-ack-contract`. Voice becomes available when the gateway `voice` block is configured; see [Use voice](../chat-voice.md).
 - An invitation can resolve only a pre-existing reserved OpenClaw Session; a new guest invitation gets no Session.
 - Device identity and tokens are server-only. Treat pairing or authentication failures as private gateway configuration problems, never as browser credentials.
 

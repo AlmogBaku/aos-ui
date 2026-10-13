@@ -102,9 +102,9 @@ When an Agent calls a tool whose MCP server declares an App view, such as the AO
 
 An App may ask to fill the viewport, under a header that names it; close it with the header's **Exit full screen** control, which takes focus, or with Esc while focus is outside the App. An App may send a text message into the same conversation on your behalf and may open `https` links in a new tab. It cannot navigate the workspace, open pop-ups, or submit forms. Which servers provide Apps is set in the runtime's own MCP configuration; see [MCP Apps](mcp-apps.md).
 
-## Rename, pin, archive, or delete a Session
+## Rename, pin, archive, delete, or mark unread a Session
 
-Open the "…" menu on a Session row or at the top of the conversation, or right-click or long-press a Session tab or History row, to rename, pin, archive, or delete the Session. Hermes, OpenClaw, and OpenCode all perform these actions; an action the runtime does not declare stays in the menu, disabled, as "Unavailable for this runtime". Delete asks for confirmation and cannot be undone. Closing a tab offers a brief **Undo**.
+Open the "…" menu on a Session row or at the top of the conversation, or right-click or long-press a Session tab or History row, to rename, pin, archive, delete, or mark unread/read the Session. Hermes, OpenClaw, and OpenCode all perform these actions; an action the runtime does not declare stays in the menu, disabled, as "Unavailable for this runtime". Delete asks for confirmation and cannot be undone. Closing a tab offers a brief **Undo**.
 
 Right-click or long-press a message for its own menu: **Copy** on every message; **Export as Markdown** and, when voice is configured, read-aloud on an assistant message; and, where the runtime supports editing, **Retry response** on an assistant message or **Edit message** on your own. On a touch device, **Select text** lets the next press select text in that message instead of opening the menu.
 
