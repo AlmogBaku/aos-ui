@@ -330,7 +330,7 @@ A navigation row shows at most one dot. Priority, highest first:
 | ------- | -------------------------- | ------------------------------------------------------------------ |
 | Waiting | `--warning` (orange)       | Session is waiting for user input. Also covers attention.          |
 | Failed  | `--destructive`            | The last run failed.                                               |
-| Unread  | `--success` (green)        | Session has content the user has not seen. Clears on focused view. |
+| Unread  | `--success` (green)        | Session has content the user has not seen. Clears on focused view. A Session marked unread stays unread until you open it afresh, send a message, or mark it read. |
 | Running | `--info` (blue), breathing | Active model turn in progress.                                     |
 
 The row's accessible name still lists every state; only the visual dot collapses.

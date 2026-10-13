@@ -181,6 +181,10 @@ export type WorkspaceShellProps = {
     sessionId: string,
     pinned: boolean
   ) => WorkspaceActionResult
+  onSetSessionUnread?: (
+    sessionId: string,
+    unread: boolean
+  ) => WorkspaceActionResult
   onArchiveSession?: (sessionId: string) => WorkspaceActionResult
   onUnarchiveSession?: (sessionId: string) => WorkspaceActionResult
   /** Absent where the runtime does not fork Sessions. */
@@ -1124,6 +1128,7 @@ export function WorkspaceShell({
   onCreateSession,
   onRenameSession,
   onSetSessionPinned,
+  onSetSessionUnread,
   onArchiveSession,
   onUnarchiveSession,
   onForkSession,
@@ -1435,6 +1440,13 @@ export function WorkspaceShell({
               onActionError
             )
         : undefined,
+      onToggleUnread: onSetSessionUnread
+        ? (session) =>
+            runAction(
+              () => onSetSessionUnread(session.sessionId, !session.unread),
+              onActionError
+            )
+        : undefined,
       onToggleArchive:
         onArchiveSession && onUnarchiveSession
           ? (session) =>
@@ -1466,6 +1478,7 @@ export function WorkspaceShell({
       onForkSession,
       onRenameSession,
       onSetSessionPinned,
+      onSetSessionUnread,
       onUnarchiveSession,
     ]
   )

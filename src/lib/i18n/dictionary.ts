@@ -122,6 +122,7 @@ export type Dictionary = {
     cancel: string
     pinSession: string
     unpinSession: string
+    markUnread: string
     archiveSession: string
     unarchiveSession: string
     forkSession: string

@@ -116,6 +116,7 @@ export const he = {
     cancel: "ביטול",
     pinSession: "הצמדה",
     unpinSession: "ביטול ההצמדה",
+    markUnread: "סימון כלא נקרא",
     archiveSession: "העברה לארכיון",
     unarchiveSession: "הוצאה מהארכיון",
     forkSession: "פיצול",

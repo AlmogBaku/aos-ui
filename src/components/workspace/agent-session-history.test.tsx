@@ -64,6 +64,8 @@ const copy: AgentSessionHistoryCopy = {
     rename: "Rename",
     pin: "Pin",
     unpin: "Unpin",
+    markUnread: "Mark unread",
+    markRead: "Mark read",
     archive: "Archive",
     unarchive: "Unarchive",
     fork: "Fork",
@@ -79,6 +81,7 @@ const allActions = {
   archive: true,
   delete: true,
   pin: true,
+  unread: true,
 }
 
 const navigation: AgentSessionNavigation = {

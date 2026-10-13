@@ -168,7 +168,7 @@ accept connections. The browser reaches only the same-origin `/api/v1` path.
 
 ## A capability is missing
 
-Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenClaw and OpenCode catalogs are read-only; read state and Activity are Hermes-only, and Todos are available on Hermes and OpenCode. Session rename, pin, archive, and delete work on every runtime; a Session menu item the runtime does not declare stays visible, disabled, as "Unavailable for this runtime".
+Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenClaw and OpenCode catalogs are read-only; Activity is Hermes-only; Todos are available on Hermes and OpenCode; read state is available on Hermes and on OpenClaw when it advertises `session-unread-ack-contract`. Session rename, pin, archive, delete, and mark unread/read work on every runtime that declares them; a Session menu item the runtime does not declare stays visible, disabled, as "Unavailable for this runtime".
 
 ## Browser notifications do not appear
 

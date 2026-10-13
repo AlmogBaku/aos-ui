@@ -133,6 +133,7 @@ export type SessionActionCapabilities = {
   archive: boolean
   delete: boolean
   pin: boolean
+  unread: boolean
 }
 
 export type TodoStatus = "pending" | "active" | "completed" | "failed"
@@ -191,6 +192,8 @@ export type WorkspaceAdapter = {
   ) => () => void
   /** Idempotent ack that the operator has seen this Session. */
   markSessionRead?: (sessionId: string) => Promise<void>
+  /** Marks the Session unread again; optimistic, rolls back on refusal. */
+  markSessionUnread?: (sessionId: string) => Promise<void>
   /** Provider-owned pin; rename, archival, and deletion travel with threads. */
   setSessionPinned?: (sessionId: string, pinned: boolean) => Promise<void>
   /**

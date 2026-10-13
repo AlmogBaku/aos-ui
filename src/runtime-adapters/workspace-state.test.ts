@@ -57,6 +57,7 @@ describe("workspace capabilities", () => {
         archive: true,
         delete: false,
         pin: true,
+        unread: true,
       })
     ).toMatchObject({
       sessionRename: true,
