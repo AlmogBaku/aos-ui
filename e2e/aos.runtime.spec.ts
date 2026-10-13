@@ -110,6 +110,7 @@ const sessionCapabilities = {
       input: "text",
       fallback: "provider-queue",
     },
+    rewind: { status: "available", scope: "user-turn" },
     approvals: {
       status: "available",
       protocol: "acp-request",
