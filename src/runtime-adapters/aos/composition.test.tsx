@@ -27,6 +27,7 @@ import { Thread } from "../../components/assistant-ui/elements/thread.aui"
 import { en } from "../../lib/i18n/dictionaries/en"
 import type { HarnessRuntime } from "../contracts"
 import { runtimeAdapter } from "./composition"
+import { sessionCapabilities, singleInteractions } from "./test-capabilities"
 
 vi.mock("react-router", () => ({
   useLocation: () => ({ pathname: window.location.pathname }),
@@ -61,32 +62,16 @@ const SESSION_TITLES: Readonly<Record<string, string>> = {
   [BOOKMARKED_SESSION_ID]: "Bookmarked",
 }
 
-const unavailable = { status: "unavailable", reason: "not-supported" } as const
-
 /** The capability snapshot `session/resume` reports for the opened Session. */
-function capabilities() {
-  return {
-    workspace: {
-      slashCommands: unavailable,
-      models: unavailable,
-      context: unavailable,
-      todos: unavailable,
-      activity: unavailable,
-    },
+function capabilities({ rewind }: { rewind: boolean }) {
+  return sessionCapabilities({
     interactions: {
-      steering: unavailable,
-      approvals: unavailable,
-      questions: unavailable,
-      reactions: unavailable,
+      ...(rewind
+        ? { rewind: { status: "available", scope: "user-turn" } as const }
+        : {}),
+      ...singleInteractions,
     },
-    content: {
-      attachments: unavailable,
-      artifacts: unavailable,
-      mcpApps: unavailable,
-      transcription: unavailable,
-      speech: unavailable,
-    },
-  }
+  })
 }
 
 const sessionInfo = {
@@ -102,8 +87,11 @@ const catalogLatency = () =>
     setTimeout(resolve, 0)
   })
 
-/** The gateway end of the operator connection, in process. */
-function createGatewayAgent() {
+/**
+ * The gateway end of the operator connection, in process. Its Sessions report
+ * they can rewind unless `rewind` says otherwise.
+ */
+function createGatewayAgent({ rewind = true }: { rewind?: boolean } = {}) {
   let peer: AgentContext | undefined
   const prompts: PromptParams[] = []
   const cancelled: string[] = []
@@ -217,7 +205,9 @@ function createGatewayAgent() {
           {
             sessionUpdate: "available_commands_update",
             availableCommands: [],
-            _meta: { [HGW_META_KEY]: { capabilities: capabilities() } },
+            _meta: {
+              [HGW_META_KEY]: { capabilities: capabilities({ rewind }) },
+            },
           },
           {
             sessionUpdate: "session_info_update",
@@ -591,9 +581,12 @@ describe("provider-neutral AOS runtime composition", () => {
 })
 
 /** The operator workspace over the fake gateway, opened at one compact URL. */
-function mountWorkspace(pathname: string) {
+function mountWorkspace(
+  pathname: string,
+  options?: Parameters<typeof createGatewayAgent>[0]
+) {
   window.history.replaceState(null, "", pathname)
-  const gateway = createGatewayAgent()
+  const gateway = createGatewayAgent(options)
   vi.stubGlobal("WebSocket", pipedSocket(gateway.app))
   const Provider = runtimeAdapter.Provider
   const view = render(
@@ -631,7 +624,10 @@ describe("the workspace over one ACP connection", () => {
     const { gateway } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
     expect(await screen.findByText("First answer")).toBeVisible()
 
-    await user.click(screen.getByRole("button", { name: "Retry response" }))
+    // Retry waits for the Session to report it can rewind.
+    await user.click(
+      await screen.findByRole("button", { name: "Retry response" })
+    )
 
     await waitFor(() => expect(gateway.prompts).toHaveLength(1))
     expect(gateway.prompts[0]).toMatchObject({
@@ -642,13 +638,24 @@ describe("the workspace over one ACP connection", () => {
     expect(window.location.pathname).toBe(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
   })
 
+  it("offers no Retry on a Session that cannot rewind", async () => {
+    mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`, { rewind: false })
+    expect(await screen.findByText("First answer")).toBeVisible()
+    await settle()
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Retry response" })).toBeNull()
+  })
+
   it("keeps the transcript and reports a turn the provider refuses", async () => {
     const user = userEvent.setup()
     const { gateway } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
     expect(await screen.findByText("First answer")).toBeVisible()
     gateway.busy.add(SECOND_SESSION_ID)
 
-    await user.click(screen.getByRole("button", { name: "Retry response" }))
+    await user.click(
+      await screen.findByRole("button", { name: "Retry response" })
+    )
 
     expect(await screen.findByText(en.runErrors.HGW_SESSION_BUSY)).toBeVisible()
     expect(gateway.prompts).toHaveLength(0)

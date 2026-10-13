@@ -18,7 +18,6 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import {
-  INTERACTION_PROTOCOL,
   HGW_AUTH_METHOD_INVITE,
   HGW_EXTENSION_VERSION,
   HGW_META_KEY,
@@ -31,7 +30,7 @@ import { pipedSockets } from "@/runtime-adapters/aos/acp/test-socket"
 import { en } from "@/lib/i18n/dictionaries/en"
 
 import { fetchGuestRuntimeContext, GuestAosSurface } from "./guest-composition"
-import { sessionCapabilities } from "./test-capabilities"
+import { sessionCapabilities, singleInteractions } from "./test-capabilities"
 
 const AGENT_ID = "researcher"
 const REF = "guest_ref"
@@ -47,28 +46,14 @@ const steeringAvailable = {
 } as const
 
 /** What the guest lane reports for the invited Session on `session/resume`. */
-function capabilities(options: { steering?: boolean } = {}) {
+function capabilities(options: { steering?: boolean; rewind?: boolean } = {}) {
   return sessionCapabilities({
     interactions: {
       ...(options.steering ? { steering: steeringAvailable } : {}),
-      approvals: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        choices: [{ value: "once", scope: "request" }],
-        maxPending: 1,
-      },
-      questions: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        answerModes: ["single", "multiple", "free-text"],
-        cancellation: "native-cancel",
-        maxQuestions: 1,
-        maxChoicesPerQuestion: 4,
-        maxAnswerValuesPerQuestion: "complete-request",
-        maxStringBytes: 4096,
-      },
+      ...(options.rewind
+        ? { rewind: { status: "available", scope: "user-turn" } as const }
+        : {}),
+      ...singleInteractions,
     },
   })
 }
@@ -105,6 +90,8 @@ type GuestGatewayOptions = {
   token?: string
   /** Whether the invited Session reports steering as available. */
   steering?: boolean
+  /** Whether the invited Session reports it can rewind for Edit and Retry. */
+  rewind?: boolean
   /** Keeps every run going until `finishRun` settles it. */
   holdRuns?: boolean
   /** The provider no longer has the invited Session. */
@@ -511,12 +498,15 @@ describe("AOS guest browser composition", () => {
 
   it("edits an earlier turn by rewinding the provider turn it replaces", async () => {
     const user = userEvent.setup()
-    const { gateway } = mount()
+    const { gateway } = mount({ rewind: true })
     await screen.findByText("Earlier guest answer")
 
-    // An earlier turn shows its actions while the guest points at it.
+    // An earlier turn shows its actions while the guest points at it, once
+    // the invited Session reports it can rewind.
     await user.hover(screen.getByText("Earlier guest question"))
-    await user.click(screen.getByRole("button", { name: "Edit message" }))
+    await user.click(
+      await screen.findByRole("button", { name: "Edit message" })
+    )
     const editor = screen
       .getAllByRole("textbox")
       .find(
@@ -537,6 +527,18 @@ describe("AOS guest browser composition", () => {
       HgwPromptMetaSchema.safeParse(gateway.prompts[0]?._meta?.[HGW_META_KEY])
         .success
     ).toBe(true)
+  })
+
+  it("offers neither Edit nor Retry where the invited Session cannot rewind", async () => {
+    const user = userEvent.setup()
+    mount()
+    // The Session's report arrives ahead of the history it replays.
+    await screen.findByText("Earlier guest answer")
+
+    await user.hover(screen.getByText("Earlier guest question"))
+    expect(screen.getByRole("button", { name: "Copy" })).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Edit message" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Retry response" })).toBeNull()
   })
 
   it("links a staged attachment batch from the guest prompt", async () => {

@@ -432,6 +432,12 @@ describe("message context menu", () => {
     const user = userEvent.setup()
     render(<LocalThread messageRewind={false} />)
 
+    // Neither turn's action bar offers them, however it is reached.
+    await user.hover(await screen.findByText("Review this image"))
+    expect(screen.getByRole("button", { name: "Copy" })).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
+
     const assistant = await openMessageMenu("The reference is ready.")
     expect(
       within(assistant).getByRole("menuitem", { name: "Copy" })

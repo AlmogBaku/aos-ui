@@ -1,8 +1,34 @@
 import type { HgwWorkspaceCapabilities } from "@harness-gw/sdk"
+import { INTERACTION_PROTOCOL } from "@harness-gw/sdk/protocol"
 
 type Capabilities = HgwWorkspaceCapabilities
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
+
+/** Approvals and questions as a runtime that asks one at a time reports them. */
+export const singleInteractions = {
+  approvals: {
+    status: "available",
+    protocol: INTERACTION_PROTOCOL,
+    scope: "turn",
+    choices: [{ value: "once", scope: "request" }],
+    maxPending: 1,
+  },
+  questions: {
+    status: "available",
+    protocol: INTERACTION_PROTOCOL,
+    scope: "turn",
+    answerModes: ["single", "multiple", "free-text"],
+    cancellation: "native-cancel",
+    maxQuestions: 1,
+    maxChoicesPerQuestion: 4,
+    maxAnswerValuesPerQuestion: "complete-request",
+    maxStringBytes: 4096,
+  },
+} as const satisfies Pick<
+  Capabilities["interactions"],
+  "approvals" | "questions"
+>
 
 /**
  * A Session's capability snapshot as `session/resume` reports it: every
