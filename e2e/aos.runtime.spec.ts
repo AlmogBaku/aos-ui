@@ -1155,11 +1155,14 @@ test("Gateway at capacity is waited out before the browser reconnects", async ({
   await expect
     .poll(async () => (await recorded(page, "initialize")).length)
     .toBe(2)
-  // The transport is back, but the notice stays until the Session rejoins.
-  await expect(full).toBeVisible()
+  // The transport is back, so its notice ends; the Session's own notice says
+  // it is rejoining, until it has.
+  const rejoining = page.getByText("Reconnecting this Session…")
+  await expect(full).toBeHidden()
+  await expect(rejoining).toBeVisible()
   await page.evaluate(() => window.__acpStub.releaseRejoin())
   await page.clock.runFor(100)
-  await expect(full).toBeHidden()
+  await expect(rejoining).toBeHidden()
 })
 
 test("AOS shows a reconnecting notice over the conversation while a dropped link recovers", async ({
@@ -1170,11 +1173,13 @@ test("AOS shows a reconnecting notice over the conversation while a dropped link
   await page.goto("/")
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
-  const reconnecting = page.getByText("Reconnecting to AOS…")
+  const reconnecting = page.getByText("Reconnecting this Session…")
   const reconnected = page.getByText("Reconnected")
 
-  // A rejoin still held past the 2 s grace shows the notice until it lands,
-  // over the conversation it leaves in place, then says so for a moment.
+  // The link is back within its first backoff, but a rejoin still held past
+  // the 2 s grace shows the Session's notice until it lands, over the
+  // conversation it leaves in place. The link's own notice never showed, so
+  // no recovery is announced.
   await page.evaluate(() => window.__acpStub.dropSocket())
   await page.clock.runFor(1_900)
   await expect(reconnecting).toBeHidden()
@@ -1184,8 +1189,6 @@ test("AOS shows a reconnecting notice over the conversation while a dropped link
   await page.evaluate(() => window.__acpStub.releaseRejoin())
   await page.clock.runFor(100)
   await expect(reconnecting).toBeHidden()
-  await expect(reconnected).toBeVisible()
-  await page.clock.runFor(2_000)
   await expect(reconnected).toBeHidden()
 
   // A drop that recovers within the grace shows nothing.
