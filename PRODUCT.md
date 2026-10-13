@@ -32,9 +32,11 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 - Native runtimes own durable conversations and execution. Assistant UI owns their frontend projection, composer, queue, and thread lifecycle.
 - Provider data is authoritative. Session read state is provider-owned: the
   browser reports the focused Session and the runtime decides when it becomes
-  read. Client-owned state is limited to view preferences, manually opened
-  recent tabs, per-visit selection restoration, notification preferences, and a
-  content-free Activity snapshot persisted locally in the browser.
+  read; on runtimes that support it the operator can also mark a Session unread
+  or read from its row menu. Client-owned state is limited to view preferences,
+  manually opened recent tabs, per-visit selection restoration, notification
+  preferences, and a content-free Activity snapshot persisted locally in the
+  browser.
 - The Agent catalog includes visible and hidden ordinary primary Agents; only visible, selectable Agents appear in the workspace roster. Creators, native/system definitions, and Subagents are excluded from management. Visibility and creator role come from native metadata. Unsupported native mutations are read-only; AOS has no management server or Agent registry. Creator-owned Sessions are listed by the runtime like any other Session; the creator itself never appears in the roster or Manage Agents.
 - One engine is selected per deployment, with multiple Agents and Sessions. Native harnesses own execution, persistence, credentials, and Agent configuration outside this checkout. Unsupported capabilities remain explicit.
 - On configured real runtimes, Agent creation opens a creator-owned Session that the browser alone projects as a `New Agent` draft row in the Agent rail with exactly one Session, until the creator run ends with a new Agent in the provider catalog. The draft persists until the Session is deleted (Discard draft) or 48 hours since last activity; selecting a draft shows no Session tab strip and no inspector. The hidden creator identity never appears in the ordinary roster or management catalog. Creation uses the portable `aos-agent-creator` skill, and the creator writes the Agent with its harness's own CLI or files; AOS ships no creation tool. A created Agent that the harness lists as hidden is reported as not yet visible instead of resolving the draft. There is no ownership transfer and no automatic first Session for the created Agent. Public fixture/demo mode intentionally omits Agent creation. Native harnesses can initiate inbound Sessions without a browser.
@@ -42,13 +44,15 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 - Rich tools always have safe, inspectable fallbacks. Browser-side code execution is limited to MCP App views — such as the AOS UI charts, maps, stats, and artifact views — in their opaque-origin double iframe; terminal/filesystem/VCS surfaces and provider hosting are out of scope. Agent-written HTML shown inside the artifact view runs its own scripts in a frame of its own with an opaque origin, under a policy that reaches no network, frame, or form.
 - An Artifact is a provider-owned deliverable that an Agent explicitly publishes: with a `MEDIA:` line where the harness defines that convention, or a trusted provider-native delivery tool such as Hermes text-to-speech. Ordinary file edits and paths mentioned in prose are not Artifacts. Published images, audio, and video show inline in conversation; other files download. An image or a file opens in the side panel, and the inspector lists every file the Session published.
 - An Agent shows a file to the user with `present_artifact` from the AOS UI tools MCP server: the conversation shows a live card that renders PDFs (fitted to the card, with selectable text, keyboard paging, and an outline and page list the reader opens), images, plain text, and Agent-written HTML with its scripts in an isolated frame. PDFs and images zoom by pinch, Ctrl with the wheel, the zoom keys, or the controls above them. A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) offers download, and open where the browser shows that kind, instead of a preview. The card's controls are Refresh, Download, Full screen, Open in new tab, and pip; pip moves the view to the side panel, and Full screen covers the viewport under the side panel's header. Open in new tab is offered only for PDFs, images, audio, and video, which the browser shows itself; the gateway serves every other file as plain text. The gateway serves the file; the `aos-ui` MCP server never opens it. Folder rules in `mcpApps.files` govern which paths may be served.
-- Where the provider exposes it, context-window usage is surfaced per Session. Model and effort can be selected before or during a run via `session/set_config_option`. In-progress runs can be steered without creating a new run. Sessions support rename, archive, and delete.
+- Where the provider exposes it, context-window usage is surfaced per Session. Model and effort can be selected before or during a run via `session/set_config_option`. In-progress runs can be steered without creating a new run. Sessions support rename, pin, archive, delete, and mark unread/read.
 - Deep links to a specific Agent and Session resolve even when the Session is past the first catalog page, using `session/resume` with `_meta.hgw.agentId`.
 
 ## Activity and Live Notifications
 
 Session read state is provider-owned: the browser reports which Session is
-exposed, and the runtime decides when that Session becomes read. Activity
+exposed, and the runtime decides when that Session becomes read. On runtimes
+that support it, the operator can also mark a Session unread or read from its
+row menu. Activity
 presents the resulting history alongside inline conversation state, coalesced
 in-app notices, and default-on live browser notifications. Completion in the
 exact visible, focused Session is already read and suppresses alerts. Other

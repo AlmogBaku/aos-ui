@@ -105,6 +105,8 @@ const copy: MobileNavigatorCopy = {
     rename: "Rename",
     pin: "Pin",
     unpin: "Unpin",
+    markUnread: "Mark unread",
+    markRead: "Mark read",
     archive: "Archive",
     unarchive: "Unarchive",
     delete: "Delete",
@@ -362,6 +364,7 @@ describe("MobileNavigator", () => {
       archive: true,
       delete: false,
       pin: true,
+      unread: true,
     }
     const onRename = vi.fn()
     props.sessionMenu = { onRename, onDelete: vi.fn() }

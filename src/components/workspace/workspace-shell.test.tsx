@@ -111,6 +111,7 @@ const allSessionActions = {
   archive: true,
   delete: true,
   pin: true,
+  unread: true,
 }
 
 /** The inspector lists the same Sessions, so scope tab queries to the tab bar. */
@@ -944,6 +945,7 @@ describe("WorkspaceShell", () => {
       sessionActions: allSessionActions,
       onRenameSession: vi.fn(),
       onSetSessionPinned: vi.fn(),
+      onSetSessionUnread: vi.fn(),
       onArchiveSession: vi.fn(),
       onUnarchiveSession: vi.fn(),
       onDeleteSession: vi.fn(),
@@ -955,6 +957,7 @@ describe("WorkspaceShell", () => {
     expect(items.map((item) => item.textContent)).toEqual([
       "Rename",
       "Pin",
+      "Mark unread",
       "Archive",
       "Close tab",
       "Delete",
@@ -1075,6 +1078,37 @@ describe("WorkspaceShell", () => {
     expect(onSetSessionPinned).toHaveBeenCalledExactlyOnceWith(
       "thread-launch",
       true
+    )
+  })
+
+  it.each([
+    {
+      name: "read Session shows Mark unread and calls onSetSessionUnread(id, true)",
+      session: openSessions[0]!,
+      itemLabel: "Mark unread",
+      expectedUnread: true,
+    },
+    {
+      name: "unread Session shows Mark read and calls onSetSessionUnread(id, false)",
+      session: { ...openSessions[0]!, unread: true },
+      itemLabel: "Mark read",
+      expectedUnread: false,
+    },
+  ])("$name", async ({ session, itemLabel, expectedUnread }) => {
+    const user = userEvent.setup()
+    const onSetSessionUnread = vi.fn()
+    renderShell({
+      openSessions: [session, ...openSessions.slice(1)],
+      sessionActions: allSessionActions,
+      onSetSessionUnread,
+    })
+
+    await collapseInspector(user)
+    await user.click(tabSessionMenu("Market brief"))
+    await user.click(await screen.findByRole("menuitem", { name: itemLabel }))
+    expect(onSetSessionUnread).toHaveBeenCalledExactlyOnceWith(
+      "thread-market",
+      expectedUnread
     )
   })
 

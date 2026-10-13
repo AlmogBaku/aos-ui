@@ -73,6 +73,7 @@ const noSessionActions: SessionActionCapabilities = {
   archive: false,
   delete: false,
   pin: false,
+  unread: false,
 }
 
 /**
@@ -1404,6 +1405,22 @@ export function useWorkspaceNavigation({
     await workspace.setSessionPinned(sessionId, pinned)
   }
 
+  async function setSessionUnread(sessionId: string, unread: boolean) {
+    if (unread) {
+      if (!workspace.markSessionUnread)
+        throw new Error(
+          "Marking Sessions unread is unavailable from this provider"
+        )
+      await workspace.markSessionUnread(sessionId)
+    } else {
+      if (!workspace.markSessionRead)
+        throw new Error(
+          "Marking Sessions read is unavailable from this provider"
+        )
+      await workspace.markSessionRead(sessionId)
+    }
+  }
+
   async function archiveSession(sessionId: string, verifiedAgentId?: string) {
     const agentId = owningAgentId(sessionId, verifiedAgentId)
     await leaveSession(sessionId, agentId)
@@ -1641,6 +1658,7 @@ export function useWorkspaceNavigation({
     undoCloseSession,
     renameSession,
     setSessionPinned,
+    setSessionUnread,
     archiveSession,
     unarchiveSession,
     deleteSession,

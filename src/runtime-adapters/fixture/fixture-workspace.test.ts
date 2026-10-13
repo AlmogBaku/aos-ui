@@ -79,7 +79,7 @@ describe("FixtureWorkspace", () => {
     ])
   })
 
-  it("acknowledges an unread Session once and republishes its metadata", async () => {
+  it("round-trips read state and republishes its metadata once per change", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const published: SessionMetadata[][] = []
     const stop = workspace.subscribeSessionMetadata(
@@ -111,9 +111,20 @@ describe("FixtureWorkspace", () => {
     await workspace.markSessionRead("thread-lumen-roadmap")
     await workspace.markSessionRead("missing")
     expect(published).toHaveLength(1)
+
+    await workspace.markSessionUnread("thread-lumen-roadmap")
+    await workspace.markSessionUnread("thread-lumen-roadmap")
+    await expect(
+      workspace.getSessionMetadata(["thread-lumen-roadmap"])
+    ).resolves.toEqual([expect.objectContaining({ unread: true })])
+    expect(published).toHaveLength(2)
+    await expect(workspace.markSessionUnread("missing")).rejects.toThrow(
+      "Session not found"
+    )
+
     stop()
     await workspace.markSessionRead("thread-nori-copy")
-    expect(published).toHaveLength(1)
+    expect(published).toHaveLength(2)
   })
 
   it("keeps the seeded pin and archival authoritative", async () => {
