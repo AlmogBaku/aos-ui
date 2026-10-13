@@ -7,11 +7,7 @@ import type {
 import type { ToolCallMessagePart } from "@assistant-ui/core"
 import { describe, expect, it } from "vitest"
 
-import {
-  type Built,
-  HGW_PLAN_ID,
-  HGW_STOP_REASONS,
-} from "@harness-gw/sdk/protocol"
+import { type Built, HGW_PLAN_ID } from "@harness-gw/sdk/protocol"
 import type { AcpApproval } from "@harness-gw/sdk"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
@@ -44,6 +40,13 @@ import {
 
 const TURN_META = { sequence: 0, turnId: "run-1" }
 const TOOL_META = { ...TURN_META, messageId: "a1" }
+
+/** ACP's `error` stop reason, as the gateway ends a failed turn with it. */
+const ERROR_STOP = {
+  state: "idle",
+  stopReason: "error",
+  error: { code: -32603, message: "provider_error" },
+} as const
 
 type Entry = readonly [Built<SessionUpdate>, unknown?]
 
@@ -373,10 +376,7 @@ describe("applyUpdate messages", () => {
     const replayed = fold([
       stateUpdate({ state: "running" }, history),
       agentChunk("a1", "Half an answer"),
-      stateUpdate(
-        { state: "idle", stopReason: HGW_STOP_REASONS.error },
-        { ...history, ...error }
-      ),
+      stateUpdate(ERROR_STOP, { ...history, ...error }),
     ])
 
     expect(toThreadMessages(replayed)[0]?.status).toEqual({
@@ -389,7 +389,7 @@ describe("applyUpdate messages", () => {
     expect(replayed.execution).toEqual({
       status: "failed",
       turnId: "history",
-      stopReason: HGW_STOP_REASONS.error,
+      stopReason: "error",
       error,
     })
   })
@@ -1015,21 +1015,16 @@ describe("applyUpdate execution", () => {
     ],
     ["no failure detail when it named neither", {}, undefined],
   ])(
-    "fails the Session on a vendor error stop reason, carrying %s",
+    "fails the Session on the error stop reason, carrying %s",
     (_, named, error) => {
       const failed = fold(
-        [
-          stateUpdate(
-            { state: "idle", stopReason: HGW_STOP_REASONS.error },
-            { ...TURN_META, ...named }
-          ),
-        ],
+        [stateUpdate(ERROR_STOP, { ...TURN_META, ...named })],
         answering
       )
       expect(failed.execution).toEqual({
         status: "failed",
         turnId: "run-1",
-        stopReason: HGW_STOP_REASONS.error,
+        stopReason: "error",
         error,
       })
       expect(toThreadMessages(failed)[3]?.status).toEqual({
@@ -1040,12 +1035,27 @@ describe("applyUpdate execution", () => {
     }
   )
 
-  it("fails the Session on an uncertain stop reason", () => {
-    const uncertain = fold(
-      [stateUpdate({ state: "idle", stopReason: HGW_STOP_REASONS.uncertain })],
+  // Nothing tells whether such a turn failed, so it reads as one that did,
+  // with its notice: Send stays available and no Stop is offered.
+  it("fails the Session on a turn nothing observes", () => {
+    const error = {
+      code: "HGW_STOP_UNCERTAIN",
+      message: "The stop was not confirmed.",
+    }
+    const unknown = fold(
+      [stateUpdate({ state: "unknown" }, { ...TURN_META, ...error })],
       answering
     )
-    expect(uncertain.execution.status).toBe("failed")
+    expect(unknown.execution).toEqual({
+      status: "failed",
+      turnId: "run-1",
+      error,
+    })
+    expect(toThreadMessages(unknown)[3]?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error,
+    })
   })
 
   it("ignores a state it does not know", () => {

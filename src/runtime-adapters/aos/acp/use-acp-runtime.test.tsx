@@ -25,7 +25,6 @@ import {
   HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_PLAN_ID,
-  HGW_STOP_REASONS,
   type HgwHistoryCursor,
   type Built,
   type HgwInitializeMeta,
@@ -784,7 +783,7 @@ describe("useAcpRuntime", () => {
           {
             sessionUpdate: "state_update",
             state: "idle",
-            stopReason: HGW_STOP_REASONS.error,
+            stopReason: "error",
           },
           { ...TURN_META, ...FAILURE }
         )
@@ -859,7 +858,7 @@ describe("useAcpRuntime", () => {
         {
           sessionUpdate: "state_update",
           state: "idle",
-          stopReason: HGW_STOP_REASONS.error,
+          stopReason: "error",
         },
       ])
       await mount(fake)
@@ -867,15 +866,11 @@ describe("useAcpRuntime", () => {
       expect(fake.replay).toHaveBeenCalledTimes(1)
     })
 
-    it("does not reload an uncertain state restated after the replay", async () => {
+    it("does not reload an unknown state restated after the replay", async () => {
       const { fake } = await mountWithHistory()
       await act(async () => {
         fake.emit(
-          {
-            sessionUpdate: "state_update",
-            state: "idle",
-            stopReason: HGW_STOP_REASONS.uncertain,
-          },
+          { sessionUpdate: "state_update", state: "unknown" },
           TURN_META
         )
       })
@@ -893,7 +888,7 @@ describe("useAcpRuntime", () => {
           {
             sessionUpdate: "state_update",
             state: "idle",
-            stopReason: HGW_STOP_REASONS.error,
+            stopReason: "error",
           },
           { ...TURN_META, ...FAILURE }
         )
@@ -1177,7 +1172,7 @@ describe("useAcpRuntime", () => {
         {
           sessionUpdate: "state_update",
           state: "idle",
-          stopReason: HGW_STOP_REASONS.error,
+          stopReason: "error",
         },
         { sequence: 0, turnId: "run-2" }
       )

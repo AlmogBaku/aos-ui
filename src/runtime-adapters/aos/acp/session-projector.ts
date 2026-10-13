@@ -10,7 +10,6 @@ import type { z } from "zod"
 
 import {
   HGW_PLAN_ID,
-  HGW_STOP_REASONS,
   HgwArtifactDescriptorSchema,
   HgwChunkMetaSchema,
   HgwMessageMetaSchema,
@@ -608,7 +607,7 @@ function applyNotice(
   )
 }
 
-/** The vendor stop reasons carry the failure the run reported. */
+/** A failed or unobserved run's `_meta.hgw` carries the failure it reported. */
 function errorFrom(aos: TurnFailure | undefined): TurnFailure | undefined {
   const error: TurnFailure = {
     ...(aos?.code === undefined ? {} : { code: aos.code }),
@@ -668,17 +667,20 @@ const STOP_INCOMPLETE = new Map<string, IncompleteReason>([
   ["max_turn_requests", "other"],
 ])
 
+/**
+ * Settles the run. `unobserved` is a turn nothing can observe any longer: it
+ * may have failed, so it settles as one that did, offering Send and no Stop,
+ * until a recover streams it on or its deadline ends it.
+ */
 function applyIdle(
   state: ProjectorState,
   carried: { turnId?: string },
   stopReason: string | undefined,
-  aos: (TurnFailure & { at?: string }) | undefined
+  aos: (TurnFailure & { at?: string }) | undefined,
+  unobserved = false
 ): ProjectorState {
   const reported = reportedFailure(state, carried.turnId)
-  const failed =
-    reported !== undefined ||
-    stopReason === HGW_STOP_REASONS.error ||
-    stopReason === HGW_STOP_REASONS.uncertain
+  const failed = unobserved || reported !== undefined || stopReason === "error"
   const error = reported ?? (failed ? errorFrom(aos) : undefined)
   const execution: ProjectorExecution = {
     status: failed ? "failed" : "idle",
@@ -831,6 +833,7 @@ function applyState(
       activeAssistantId: id,
     }
   }
+  if (next === "unknown") return applyIdle(state, carried, undefined, aos, true)
   if (next !== "idle") return state
   return applyIdle(state, carried, text(update.stopReason), aos)
 }
@@ -1286,7 +1289,7 @@ export function failSession(
   state: ProjectorState,
   error: TurnFailure
 ): ProjectorState {
-  const ended = applyIdle(state, {}, HGW_STOP_REASONS.error, error)
+  const ended = applyIdle(state, {}, "error", error)
   return activeAssistantId(state) === undefined
     ? failLatestTurn(ended, error)
     : ended
@@ -1295,7 +1298,7 @@ export function failSession(
 /**
  * Whether the update between the two states ended a live run in a failure
  * before it wrote a reply, so no turn of its own shows the failure. A settled
- * state the gateway restates, such as an uncertain one, ends no run.
+ * state the gateway restates, such as an unknown one, ends no run.
  */
 export function failedWithoutReply(
   before: ProjectorState,
