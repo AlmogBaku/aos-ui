@@ -210,6 +210,10 @@ test("wrapped history navigation restores a nonempty draft at both visual bounda
   await expect(
     page.getByRole("group", { name: /Aster, Customer interviews/ })
   ).toBeVisible()
+  // The closing panel returns focus to its trigger once it is gone, which
+  // would take it from the input focused before then.
+  await expect(navigator).toBeHidden()
+  await expect(page.getByRole("button", { name: "Open Agents" })).toBeFocused()
 
   const input = page.getByRole("textbox", { name: "Message input" })
   const draft =
