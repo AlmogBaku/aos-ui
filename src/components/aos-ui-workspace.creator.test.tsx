@@ -422,11 +422,11 @@ describe("AosUiApp fixture composition", () => {
       })
     )
 
-    // Accepting the created Agent is what failed, not the workspace.
+    // The catalog could not be read, which is the catalog's own error.
     await waitFor(() =>
-      expect(view.nav.actionError?.message).toBe("Agent catalog refresh failed")
+      expect(view.nav.agentError?.message).toBe("Agent catalog refresh failed")
     )
-    expect(workspaceError(view.nav)).toBeUndefined()
+    expect(view.nav.actionError).toBeNull()
     expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
   })
 

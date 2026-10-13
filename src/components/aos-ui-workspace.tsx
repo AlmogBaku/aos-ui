@@ -362,20 +362,20 @@ function WorkspaceError({
   locale,
   error,
   onRetry,
+  onDismiss,
 }: {
   locale: Locale
   error: Error
   onRetry: () => void
+  onDismiss: () => void
 }) {
   const copy = workspaceCopy[locale]
-  const [dismissed, setDismissed] = useState(false)
-  if (dismissed) return null
   return (
     <ErrorToast
       locale={locale}
       title={copy.unavailable}
       message={error.message}
-      onDismiss={() => setDismissed(true)}
+      onDismiss={onDismiss}
       actions={
         <Button type="button" size="sm" variant="outline" onClick={onRetry}>
           <RotateCw data-icon="inline-start" />
@@ -570,6 +570,16 @@ function WorkspaceContent({
   // A Session action's failure costs that action alone: it never says the
   // workspace failed to load, and there is nothing for Retry to reload.
   const workspaceError = agentError ?? sessionError ?? threadListError
+  // Dismissing the workspace error holds until it changes or clears, and an
+  // action's failure shows in its place meanwhile.
+  const workspaceErrorMessage = workspaceError?.message
+  const [workspaceErrorDismissed, setWorkspaceErrorDismissed] = useState(false)
+  const [dismissalFor, setDismissalFor] = useState(workspaceErrorMessage)
+  if (dismissalFor !== workspaceErrorMessage) {
+    setDismissalFor(workspaceErrorMessage)
+    setWorkspaceErrorDismissed(false)
+  }
+  const shownWorkspaceError = workspaceErrorDismissed ? null : workspaceError
   // `/new` is the composer's spelling of the New Session action: a Session is
   // the workspace's to open, so the command runs here and never becomes a turn.
   // Text after the command seeds the new Session's draft instead of being lost.
@@ -733,12 +743,12 @@ function WorkspaceContent({
           connectionStatus={connectionStatus}
           sessionStatus={sessionStatus}
         >
-          {workspaceError ? (
+          {shownWorkspaceError ? (
             <WorkspaceError
-              key={workspaceError.message}
               locale={locale}
-              error={workspaceError}
+              error={shownWorkspaceError}
               onRetry={retryWorkspace}
+              onDismiss={() => setWorkspaceErrorDismissed(true)}
             />
           ) : actionError ? (
             <ErrorToast

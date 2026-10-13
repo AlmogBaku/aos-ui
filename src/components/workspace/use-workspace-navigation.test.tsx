@@ -424,3 +424,20 @@ it("names no creator and raises no workspace error when two are configured", asy
   expect(result.current.agentError).toBeNull()
   expect(result.current.agentCreator).toBeUndefined()
 })
+
+it("reports a failed selection repair as the workspace's, never as an action", async () => {
+  const { result, runtime } = await mountNavigation(["s-recent"], [recent])
+  runtime.threads.switchToThread = vi
+    .fn(runtime.threads.switchToThread)
+    .mockRejectedValueOnce(new Error("Thread switch failed"))
+
+  // Assistant UI leaves the Session on its own; the repair selects it again.
+  await act(async () => {
+    await runtime.threads.switchToNewThread()
+  })
+
+  await waitFor(() =>
+    expect(result.current.threadListError?.message).toBe("Thread switch failed")
+  )
+  expect(result.current.actionError).toBeNull()
+})

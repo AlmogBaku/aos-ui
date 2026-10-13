@@ -351,7 +351,7 @@ export function useWorkspaceNavigation({
     workspace,
     agents: avatarInputs,
     ready: !agentsLoading && !agentError,
-    onConflict: reloadCatalog,
+    onConflict: () => void reloadCatalog(),
   })
   const navigableAgents = draftProjection.agents
   const defaultAgentId = agents.find(isRosterAgent)?.id ?? null
@@ -929,11 +929,15 @@ export function useWorkspaceNavigation({
               ? undefined
               : lastSelected.current.get(selectedAgentId),
           })
+    // Repairing the selection is the workspace's own doing, not an action,
+    // so its failure is the workspace's, and Retry runs the repair again.
+    const repairFailed = (reason: unknown) =>
+      setThreadListError(toError(reason))
     if (nextThread) {
-      void selectRuntimeThread(nextThread).catch(setActionError)
+      void selectRuntimeThread(nextThread).catch(repairFailed)
     } else if (activeThreadId) {
       desiredThread.current = null
-      void switchToNewThread(selectedAgentId).catch(setActionError)
+      void switchToNewThread(selectedAgentId).catch(repairFailed)
     }
   }, [
     activeThreadId,
@@ -1204,11 +1208,14 @@ export function useWorkspaceNavigation({
         ({ sessionId }) => sessionId === event.sessionId
       )?.agentId
       if (!agentCreator || owner !== agentCreator.id) return
-      let catalog = await refreshAgentCatalog()
-      if (!catalog.some(({ id }) => id === event.agentId)) {
+      let catalog = await reloadCatalog()
+      if (catalog && !catalog.some(({ id }) => id === event.agentId)) {
         await wait(CREATED_AGENT_CATALOG_RETRY_MS)
-        catalog = await refreshAgentCatalog()
+        catalog = await reloadCatalog()
       }
+      // A catalog that cannot be read reports its own error, and the draft
+      // stays exactly where the operator left it.
+      if (!catalog) return
       if (!catalog.some(({ id }) => id === event.agentId)) {
         setCreatorNotice(dictionary.creator.createdPending)
         return
@@ -1517,7 +1524,7 @@ export function useWorkspaceNavigation({
     }
     // The roster refreshes on its own: a catalog that cannot be read reports
     // its own error and never costs the interview.
-    reloadCatalog()
+    void reloadCatalog()
     // The operator only ever sees the interview as its own draft Agent.
     const draftId = draftAgentId(sessionId)
     setPreferredAgentId(draftId)
