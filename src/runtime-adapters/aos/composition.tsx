@@ -153,7 +153,9 @@ function ReadyAosRuntimeProvider({
         // keeps its rows, so no Session metadata read repeats a page.
         connection: {
           listSessions: client.readSessionPage,
-          newSession: connection.newSession,
+          // The REST byte routes need a Session's owner before the catalog
+          // ever lists it, and only the workspace client records it.
+          newSession: ({ agentId }) => client.createSession(agentId),
           updateSession: connection.updateSession,
           deleteSession: connection.deleteSession,
         },
