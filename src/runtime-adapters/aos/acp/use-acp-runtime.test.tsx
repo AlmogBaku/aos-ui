@@ -39,6 +39,7 @@ import {
   type AcpSessionUpdateListener,
 } from "@harness-gw/sdk"
 
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 import { draft } from "@/components/assistant-ui/elements/thread.aui.test-helpers"
 import {
@@ -1033,24 +1034,49 @@ describe("useAcpRuntime", () => {
     expect(onComposerPrefill).toHaveBeenCalledWith("Next question?")
   })
 
-  it("holds queued sends while a run owns the Session, then sends them as one", async () => {
+  it("holds queued sends while a run owns the Session, then sends them as one, attachments and all", async () => {
     const fake = createFakeConnection()
-    const { result } = await mount(fake, { enableMessageQueue: true })
+    const stageAttachments = vi.fn(async () => ({
+      stageId: "stage-1",
+      attachments: [
+        { id: "att-1", name: "chart.png", contentType: "image/png" },
+      ],
+    }))
+    const { result } = await mount(fake, {
+      enableMessageQueue: true,
+      stageAttachments,
+    })
     act(() => {
       fake.emit(textUpdate("agent_message", "a1", "Working"))
       fake.emit({ sessionUpdate: "state_update", state: "running" })
     })
-    await queue(result.current, "Also check the logs", "And the metrics")
+    await queue(result.current, "Also check the logs")
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "And the metrics" }],
+        attachments: [CHART],
+      })
+    })
     expect(fake.prompt).not.toHaveBeenCalled()
     await ends(fake)
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
-        [{ type: "text", text: "Also check the logs\n\nAnd the metrics" }],
-        expect.objectContaining({})
+        [
+          { type: "text", text: "Also check the logs\n\nAnd the metrics" },
+          {
+            type: "resource_link",
+            uri: `${HGW_ATTACHMENT_URI_SCHEME}stage-1/att-1`,
+            name: "chart.png",
+            mimeType: "image/png",
+          },
+        ],
+        expect.objectContaining({ attachmentStageId: "stage-1" })
       )
     })
     expect(fake.prompt).toHaveBeenCalledTimes(1)
+    expect(stageAttachments).toHaveBeenCalledWith(SESSION_ID, [CHART])
   })
 
   describe("the queue's controls", () => {
@@ -1970,19 +1996,115 @@ describe("useAcpRuntime extras", () => {
   })
 })
 
-function QueueThread({ connection }: { connection: AcpConnection }) {
+function QueueThread({
+  connection,
+  steer,
+  stageAttachments,
+  exposeRuntime,
+}: {
+  connection: AcpConnection
+  steer?: NonNullable<ComposerFeatureViewModel["steer"]>
+  stageAttachments?: UseAcpRuntimeOptions["stageAttachments"]
+  exposeRuntime?: (runtime: ReturnType<typeof useAcpRuntime>) => void
+}) {
   const runtime = useAcpRuntime({
     connection,
     sessionId: SESSION_ID,
     agentId: "agent-1",
     enableMessageQueue: true,
+    stageAttachments,
   })
+  exposeRuntime?.(runtime)
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread autoFocus={false} />
+      <Thread
+        autoFocus={false}
+        composerFeatures={steer ? { steer } : undefined}
+      />
     </AssistantRuntimeProvider>
   )
 }
+
+describe("steering the queue", () => {
+  afterEach(cleanup)
+
+  it("stops the turn for a queued message holding an attachment, and sends it once the turn settles", async () => {
+    const user = userEvent.setup()
+    const fake = createFakeConnection()
+    const steer = vi.fn(async () => ({ status: "steered" as const }))
+    const stageAttachments = vi.fn(async () => ({
+      stageId: "stage-1",
+      attachments: [
+        { id: "att-1", name: "chart.png", contentType: "image/png" },
+      ],
+    }))
+    let runtime: ReturnType<typeof useAcpRuntime> | undefined
+    render(
+      <QueueThread
+        connection={fake.connection}
+        steer={steer}
+        stageAttachments={stageAttachments}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await act(async () => {
+      await fake.settleResume()
+    })
+    running(fake)
+    const { id, type, name, contentType, content } = CHART
+    await act(() =>
+      runtime!.thread.composer.addAttachment({
+        id,
+        type,
+        name,
+        contentType,
+        content,
+      })
+    )
+    draft(screen.getByRole("textbox", { name: "Message input" }), "like this")
+    await user.keyboard("{Enter}")
+
+    const region = await screen.findByRole("region", {
+      name: "Queued messages",
+    })
+    const row = within(region).getByRole("listitem")
+    expect(within(row).getByRole("img", { name: "1 attachment" })).toBeVisible()
+    expect(
+      within(row).queryByRole("button", { name: "Steer queued message" })
+    ).not.toBeInTheDocument()
+    await user.click(
+      within(row).getByRole("button", { name: "Stop and send now" })
+    )
+    expect(fake.cancel).toHaveBeenCalledWith(SESSION_ID)
+    expect(steer).not.toHaveBeenCalled()
+    expect(fake.prompt).not.toHaveBeenCalled()
+
+    await act(async () => {
+      fake.emit({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "cancelled",
+      })
+    })
+    await waitFor(() =>
+      expect(fake.prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        [
+          { type: "text", text: "like this" },
+          {
+            type: "resource_link",
+            uri: `${HGW_ATTACHMENT_URI_SCHEME}stage-1/att-1`,
+            name: "chart.png",
+            mimeType: "image/png",
+          },
+        ],
+        expect.objectContaining({ attachmentStageId: "stage-1" })
+      )
+    )
+  })
+})
 
 describe("editing the queue", () => {
   afterEach(cleanup)

@@ -16,6 +16,8 @@ export type QueueSession = {
   ) => Promise<unknown>
   readonly getState: () => { readonly execution: ProjectorExecution }
   readonly subscribe: (listener: () => void) => () => void
+  /** Stops the Session's live turn. */
+  readonly cancel: () => void
 }
 
 /** A refusal because the gateway still holds the Session for an earlier turn. */
@@ -103,7 +105,8 @@ const composable = (message: AppendMessage) =>
  * start only after the next send had already gone out.
  *
  * Every send carries all that waits, combined into one message. Its controls
- * hand the whole queue back to the composer.
+ * hand the whole queue back to the composer. Moving a message into the steer
+ * lane stops the live turn and sends it first, once that turn has settled.
  */
 export function createQueue(session: QueueSession) {
   const execution = () => session.getState().execution
@@ -150,6 +153,9 @@ export function createQueue(session: QueueSession) {
       }
       attempt(0)
     },
+    // The busy retry above holds the interrupting send until the stopped turn
+    // has settled.
+    cancel: () => session.cancel(),
   })
 
   // Each waiting message as it was queued, so the composer can take it back.
@@ -164,8 +170,8 @@ export function createQueue(session: QueueSession) {
       if (added) queued.set(added.id, message)
     }
   adapter.enqueue = remember(adapter.enqueue)
-  // With no `cancel`, the steer lane would only jump the line. An append the
-  // composer did not mark (an MCP App's) waits in the one lane instead, so
+  // A steered append would stop the live turn. An append the composer did not
+  // mark (an MCP App's) waits in the one lane instead, so it stops nothing and
   // `queueItem.move`, which cannot anchor across lanes, reorders every row.
   adapter.steer = adapter.enqueue
   queue.subscribe(() => {

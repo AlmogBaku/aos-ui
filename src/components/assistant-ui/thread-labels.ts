@@ -40,6 +40,9 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     steeringQueuedMessage: "Steering queued message",
     steeringFailed: "Could not steer the active turn",
     queuedMessageCount: (count) => `${count} queued`,
+    stopAndSendQueuedMessage: "Stop and send now",
+    queuedMessageAttachments: (count) =>
+      count === 1 ? "1 attachment" : `${count} attachments`,
     queuedMessagesSendCombined: "Sends as one message when this turn ends",
     queuedMessagesEditAll: "to edit",
     queuedMessageRowHint:
@@ -139,6 +142,9 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     steeringQueuedMessage: "ההודעה מועברת לשינוי כיוון",
     steeringFailed: "לא ניתן היה לשנות את כיוון התשובה הפעילה",
     queuedMessageCount: (count) => `${count} בתור`,
+    stopAndSendQueuedMessage: "עצירה ושליחה מיידית",
+    queuedMessageAttachments: (count) =>
+      count === 1 ? "קובץ מצורף אחד" : `${count} קבצים מצורפים`,
     queuedMessagesSendCombined: "יישלחו כהודעה אחת בסיום התשובה",
     queuedMessagesEditAll: "לעריכה",
     queuedMessageRowHint:
