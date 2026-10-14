@@ -373,6 +373,12 @@ export type HarnessRuntime = {
    * source Session keeps as it is.
    */
   forkSession?: (sessionId: string) => Promise<{ sessionId: string }>
+  /**
+   * Sends a turn into a Session whether or not a thread shows it, leaving every
+   * thread and composer as they are. Resolves once the runtime admits the
+   * prompt, never waiting for the turn to end; rejects with its refusal.
+   */
+  startTurn?: (sessionId: string, text: string) => Promise<void>
   interactions?: RuntimeInteractionAdapter
   artifacts?: {
     resolver: ArtifactAdapter

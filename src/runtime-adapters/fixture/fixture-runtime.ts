@@ -17,7 +17,7 @@ import {
   useLocalRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react"
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 
 import type { RuntimeQuestionRequest } from "@/runtime-adapters/contracts"
 import { buildFixtureScenario } from "./fixture-scenarios"
@@ -636,6 +636,64 @@ export function createFixtureChatModel(
   }
 }
 
+/**
+ * Runs the scenario's ordinary turn in a Session whether or not a thread shows
+ * it, as a provider runs a prompt it admitted: the call resolves once the
+ * Session takes the prompt, and the turn lands in the Session's history, which
+ * its thread reads when it opens.
+ */
+async function startFixtureTurn(
+  threadList: FixtureThreadListAdapter,
+  chatModel: ChatModelAdapter,
+  sessionId: string,
+  text: string
+) {
+  const [session] = await threadList.workspace.getSessionMetadata([sessionId])
+  if (!session) throw new Error(`Fixture Session not found: ${sessionId}`)
+  const history = threadList.historyFor(sessionId)
+  const { headId, messages } = await history.load()
+  const turnId = crypto.randomUUID()
+  const asMessage = (like: ThreadMessageLike) =>
+    ExportedMessageRepository.fromArray([like]).messages[0]!.message
+  const user = asMessage({
+    id: `${turnId}-user`,
+    role: "user",
+    content: text,
+    createdAt: FIXTURE_NOW,
+  })
+  await history.append({
+    parentId: headId ?? messages.at(-1)?.message.id ?? null,
+    message: user,
+  })
+  let reply: ChatModelRunResult = {}
+  const replyMessage = () =>
+    asMessage({
+      id: `${turnId}-assistant`,
+      role: "assistant",
+      content: reply.content ?? [],
+      ...(reply.status ? { status: reply.status } : {}),
+      createdAt: FIXTURE_NOW,
+    })
+  const run = chatModel.run({
+    messages: [user],
+    runConfig: {},
+    abortSignal: new AbortController().signal,
+    context: {},
+    unstable_threadId: sessionId,
+    unstable_assistantMessageId: `${turnId}-assistant`,
+    unstable_parentId: user.id,
+    unstable_getMessage: replyMessage,
+  })
+  void (async () => {
+    if (Symbol.asyncIterator in run)
+      for await (const result of run) reply = { ...reply, ...result }
+    else reply = await run
+    await history.append({ parentId: user.id, message: replyMessage() })
+  })().catch(() => {
+    // The run already reported its failure as the Session's Activity.
+  })
+}
+
 export type FixtureRuntimeBundleOptions = {
   sessionId?: string
   onThreadIdChange?: (sessionId: string | undefined) => void
@@ -695,8 +753,21 @@ export function useFixtureRuntimeBundle({
     },
   })
 
+  const startTurn = useCallback(
+    (sessionId: string, text: string) =>
+      startFixtureTurn(threadListAdapter, chatModel, sessionId, text),
+    [chatModel, threadListAdapter]
+  )
+
   return useMemo(
-    () => ({ assistantRuntime, workspace, artifacts, interactions, mcpApps }),
-    [artifacts, assistantRuntime, workspace, interactions, mcpApps]
+    () => ({
+      assistantRuntime,
+      workspace,
+      artifacts,
+      interactions,
+      mcpApps,
+      startTurn,
+    }),
+    [artifacts, assistantRuntime, workspace, interactions, mcpApps, startTurn]
   )
 }

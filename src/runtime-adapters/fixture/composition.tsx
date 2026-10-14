@@ -76,6 +76,7 @@ function FixtureRuntimeProvider({
   return children({
     assistantRuntime: bundle.assistantRuntime,
     workspace: bundle.workspace,
+    startTurn: bundle.startTurn,
     composer: composerFeatureViewModel,
     activityCoverage: "workspace",
     environmentLabel: locale === "he" ? "סביבת הדגמה" : "Demo workspace",

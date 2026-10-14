@@ -175,6 +175,56 @@ describe("useFixtureRuntimeBundle", () => {
     expect(onThreadIdChange).not.toHaveBeenCalled()
   })
 
+  it("runs a started turn in the named Session while another stays shown", async () => {
+    let bundle: ReturnType<typeof useFixtureRuntimeBundle> | undefined
+    const Harness = () => {
+      const current = useFixtureRuntimeBundle({
+        sessionId: "thread-aster-market",
+        streamDelayMs: 0,
+      })
+      useLayoutEffect(() => {
+        bundle = current
+      })
+      return (
+        <AssistantRuntimeProvider runtime={current.assistantRuntime}>
+          {null}
+        </AssistantRuntimeProvider>
+      )
+    }
+    render(<Harness />)
+    const runtime = () => bundle!.assistantRuntime
+    await waitFor(() =>
+      expect(runtime().threads.mainItem.getState().remoteId).toBe(
+        "thread-aster-market"
+      )
+    )
+    const shown = runtime().thread.getState().messages.length
+    const status = async () =>
+      (await bundle!.workspace.getSessionMetadata(["thread-nori-copy"]))[0]
+        ?.status
+
+    await act(() => bundle!.startTurn("thread-nori-copy", "Tighten the copy"))
+    await expect(bundle!.startTurn("thread-missing", "Hello")).rejects.toThrow()
+    expect(runtime().thread.getState().messages).toHaveLength(shown)
+    await waitFor(async () => expect(await status()).toBe("idle"))
+
+    await act(() => runtime().threads.switchToThread("thread-nori-copy"))
+    await waitFor(() =>
+      expect(
+        runtime()
+          .thread.getState()
+          .messages.slice(-2)
+          .map(({ role, content }) => [role, content.length > 0])
+      ).toEqual([
+        ["user", true],
+        ["assistant", true],
+      ])
+    )
+    expect(runtime().thread.getState().messages.at(-2)?.content).toEqual([
+      { type: "text", text: "Tighten the copy" },
+    ])
+  })
+
   it("keeps one workspace instance across renders", () => {
     const { result, rerender } = renderHook(
       ({ sessionId }) =>
