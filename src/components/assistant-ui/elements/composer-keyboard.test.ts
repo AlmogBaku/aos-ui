@@ -68,6 +68,36 @@ describe("composer keyboard decisions", () => {
       { isRunning: true, hasQueue: true, canSteer: true, hasAttachments: true },
       "queue",
     ],
+    [
+      "a local command on plain Enter while a queued run is busy",
+      { key: "Enter" },
+      { isRunning: true, hasQueue: true, isLocalCommand: true },
+      "send",
+    ],
+    [
+      "a local command on plain Enter while a run without a queue is busy",
+      { key: "Enter" },
+      { isRunning: true, isLocalCommand: true },
+      "send",
+    ],
+    [
+      "a local command on Shift+Enter",
+      { key: "Enter", shiftKey: true },
+      { isRunning: true, isLocalCommand: true },
+      "newline",
+    ],
+    [
+      "a local command on plain Enter on a touch-primary device",
+      { key: "Enter" },
+      { isRunning: true, isLocalCommand: true, plainEnterSends: false },
+      "newline",
+    ],
+    [
+      "a local command during an IME composition",
+      { key: "Enter", isComposing: true },
+      { isRunning: true, isLocalCommand: true },
+      "noop",
+    ],
     ["Shift+Enter", { key: "Enter", shiftKey: true }, {}, "newline"],
     ["an empty draft", { key: "Enter" }, { isEmpty: true }, "noop"],
     [

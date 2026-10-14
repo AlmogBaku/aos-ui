@@ -76,6 +76,7 @@ import { ChildSessionControlsProvider } from "@/components/tool-ui/child-session
 import {
   matchLocalCommand,
   menuSlashCommands,
+  resolveLocalCommand,
   type ComposerFeatureViewModel,
   type ComposerModelEffort,
 } from "@/components/assistant-ui/composer-features"
@@ -238,6 +239,8 @@ export type ThreadLabels = {
   removeQueuedMessage?: string | undefined
   steeringQueuedMessage?: string | undefined
   steeringFailed?: string | undefined
+  /** A slash command's usage, shown when its draft cannot run as written. */
+  commandHint: (name: string, hint: string) => string
   queuedMessageCount: (count: number) => string
   /** Names the steer button on a queued message holding an attachment. */
   stopAndSendQueuedMessage: string
@@ -344,6 +347,8 @@ const DEFAULT_LABELS: ThreadLabels = {
   removeQueuedMessage: "Remove queued message",
   steeringQueuedMessage: "Steering queued message",
   steeringFailed: "Could not steer",
+  commandHint: (name, hint) =>
+    hint ? `Usage: /${name} ${hint}` : `Usage: /${name}`,
   queuedMessageCount: (count) => `${count} queued`,
   stopAndSendQueuedMessage: "Stop and send now",
   queuedMessageAttachments: (count) =>
@@ -889,7 +894,8 @@ const Composer: FC<{
   const [historySearchOpen, setHistorySearchOpen] = useState(false)
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
-  const [steeringError, setSteeringError] = useState<string>()
+  // One line beside the composer: a failed steer, or a local command's answer.
+  const [composerNotice, setComposerNotice] = useState<string>()
   const [unconfirmedDeliveries, setUnconfirmedDeliveries] = useState<
     UnconfirmedDeliveryReceipt[]
   >([])
@@ -914,28 +920,9 @@ const Composer: FC<{
     setHistorySearchOpen(false)
     setHistorySearchQuery("")
     setHistorySearchIndex(0)
-    setSteeringError(undefined)
+    setComposerNotice(undefined)
     setUnconfirmedDeliveries([])
   })
-
-  const submitOrdinary = useCallback(() => {
-    if (voice?.media.captureActive || voiceActive) return
-    setSteeringError(undefined)
-    const draft = aui.composer.getState()
-    // A local command is the workspace's to run, so the draft that invoked it
-    // is consumed here and never becomes a turn. An attachment is content the
-    // command has no place for, so that draft is sent as written.
-    const local =
-      draft.attachments.length === 0
-        ? matchLocalCommand(draft.text, features.localCommands)
-        : undefined
-    if (local) {
-      void aui.composer.reset()
-      void local.command.run(local.args)
-      return
-    }
-    aui.composer.send({ steer: false })
-  }, [aui, features.localCommands, voice?.media.captureActive, voiceActive])
 
   const rememberUnconfirmed = useCallback(
     (delivery: UnconfirmedDelivery) => {
@@ -951,6 +938,107 @@ const Composer: FC<{
     },
     [aui]
   )
+
+  // Steers `text` into the active turn, as the steering shortcut does. The
+  // composer clears once the text lands; a turn that ended first takes it as
+  // an ordinary turn instead.
+  const steerText = useCallback(
+    (text: string) => {
+      const steer = hasPendingInteraction ? undefined : features.steer
+      if (!steer) return
+      const requestId = crypto.randomUUID()
+      const originThreadId = aui.threads.getState().mainThreadId
+      const inOrigin = () =>
+        aui.threads.getState().mainThreadId === originThreadId
+      const clearIfUnchanged = () => {
+        const current = aui.composer.getState()
+        if (current.text === text && current.attachments.length === 0)
+          void aui.composer.reset()
+      }
+      submissionLockRef.current = true
+      setComposerNotice(undefined)
+      void steer({ requestId, text })
+        .then(() => {
+          if (inOrigin()) clearIfUnchanged()
+        })
+        .catch((error: unknown) => {
+          if (!inOrigin()) return
+          if (
+            error &&
+            typeof error === "object" &&
+            (error as { code?: unknown }).code === "turn_conflict"
+          ) {
+            if (!voice?.media.captureActive && !voiceActive)
+              aui.composer.send({ steer: false })
+            return
+          }
+          if (isUncertainDelivery(error)) {
+            clearIfUnchanged()
+            rememberUnconfirmed({ requestId, text })
+            return
+          }
+          setComposerNotice(labels.steeringFailed ?? "Could not steer")
+        })
+        .finally(() => {
+          if (inOrigin()) submissionLockRef.current = false
+        })
+    },
+    [
+      aui,
+      features.steer,
+      hasPendingInteraction,
+      labels.steeringFailed,
+      rememberUnconfirmed,
+      voice?.media.captureActive,
+      voiceActive,
+    ]
+  )
+
+  // The one place a draft is submitted, from Enter and the Send button alike.
+  const submitOrdinary = useCallback(() => {
+    if (voice?.media.captureActive || voiceActive) return
+    setComposerNotice(undefined)
+    const draft = aui.composer.getState()
+    // A local command is the workspace's to run, so the draft that invoked it
+    // never becomes a turn. An attachment is content the command has no place
+    // for, so that draft is sent as written.
+    const local =
+      draft.attachments.length === 0
+        ? resolveLocalCommand(draft.text, features.localCommands)
+        : undefined
+    if (!local) {
+      aui.composer.send({ steer: false })
+      return
+    }
+    const { command, args, flags, outcome } = local
+    // A draft the command cannot run stays, with its usage, to be finished.
+    if (outcome !== "run") {
+      setComposerNotice(
+        labels.commandHint(command.name, command.argument?.hint ?? "")
+      )
+      return
+    }
+    void aui.composer.reset()
+    void Promise.resolve(command.run(args, flags)).then((result) => {
+      if (!result) return
+      if ("steer" in result) {
+        aui.composer.setText(result.steer)
+        steerText(result.steer)
+      } else if ("draft" in result) {
+        aui.composer.setText(result.draft)
+      } else {
+        setComposerNotice(result.notice)
+        if (result.keepDraft) aui.composer.setText(draft.text)
+      }
+    })
+  }, [
+    aui,
+    features.localCommands,
+    labels,
+    steerText,
+    voice?.media.captureActive,
+    voiceActive,
+  ])
 
   const visibleUnconfirmedDeliveries = useMemo(
     () =>
@@ -1292,65 +1380,35 @@ const Composer: FC<{
       if (event.key === "Enter" && triggerPopover?.getActiveAria() != null)
         return
 
+      const composer = aui.composer.getState()
       const action = resolveComposerEnterAction(
         event as unknown as ComposerEnterEvent,
         {
           isRunning: aui.thread.getState().isRunning,
           hasQueue: aui.thread.getState().capabilities.queue === true,
-          isEmpty: aui.composer.getState().isEmpty,
+          isEmpty: composer.isEmpty,
           plainEnterSends: !isTouchPrimaryInput,
           canSteer: features.steer !== undefined && !hasPendingInteraction,
-          hasAttachments: aui.composer.getState().attachments.length > 0,
+          hasAttachments: composer.attachments.length > 0,
+          isLocalCommand:
+            composer.attachments.length === 0 &&
+            matchLocalCommand(composer.text, features.localCommands) !==
+              undefined,
         }
       )
       if (action === "noop" || action === "newline") return
 
       event.preventDefault()
       if (submissionLockRef.current) return
-      submissionLockRef.current = true
-      if (action === "send" || action === "queue") {
-        submitOrdinary()
-        queueMicrotask(() => {
-          submissionLockRef.current = false
-        })
+      if (action === "steer") {
+        steerText(composer.text)
         return
       }
-
-      const snapshot = aui.composer.getState()
-      const text = snapshot.text
-      const requestId = crypto.randomUUID()
-      const originThreadId = aui.threads.getState().mainThreadId
-      setSteeringError(undefined)
-      void features.steer!({ requestId, text })
-        .then(() => {
-          if (aui.threads.getState().mainThreadId !== originThreadId) return
-          const current = aui.composer.getState()
-          if (current.text === text && current.attachments.length === 0)
-            void aui.composer.reset()
-        })
-        .catch((error: unknown) => {
-          if (aui.threads.getState().mainThreadId !== originThreadId) return
-          if (
-            error &&
-            typeof error === "object" &&
-            (error as { code?: unknown }).code === "turn_conflict"
-          ) {
-            submitOrdinary()
-            return
-          }
-          if (isUncertainDelivery(error)) {
-            const current = aui.composer.getState()
-            if (current.text === text && current.attachments.length === 0)
-              void aui.composer.reset()
-            rememberUnconfirmed({ requestId, text })
-            return
-          }
-          setSteeringError(labels.steeringFailed ?? "Could not steer")
-        })
-        .finally(() => {
-          if (aui.threads.getState().mainThreadId === originThreadId)
-            submissionLockRef.current = false
-        })
+      submissionLockRef.current = true
+      submitOrdinary()
+      queueMicrotask(() => {
+        submissionLockRef.current = false
+      })
     },
     [
       aui,
@@ -1360,11 +1418,10 @@ const Composer: FC<{
       openHistorySearch,
       features,
       hasPendingInteraction,
-      labels.steeringFailed,
       pullQueueIn,
       queueControls,
-      rememberUnconfirmed,
       restoreDraft,
+      steerText,
       submitOrdinary,
       triggerPopover,
     ]
@@ -1472,13 +1529,13 @@ const Composer: FC<{
           </span>
         </div>
       ))}
-      {steeringError ? (
+      {composerNotice ? (
         <div
           role="status"
           aria-live="polite"
           className="mb-1.5 px-3 text-sm text-destructive"
         >
-          {steeringError}
+          {composerNotice}
         </div>
       ) : null}
       <AuiIf
@@ -1607,6 +1664,19 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
   )
   const { locale } = useToolUiLocale()
   const followed = useFollowedModel(features.model)
+  const [modelOpen, setModelOpen] = useState(false)
+  const contextTriggerRef = useRef<HTMLButtonElement>(null)
+  const surface = features.surface
+  const hasModel = features.model !== undefined
+  // Only a mounted selector opens, so a request never lingers until one is.
+  useEffect(
+    () =>
+      surface?.subscribe((kind) => {
+        if (kind === "openModel" && hasModel) setModelOpen(true)
+        else if (kind === "focusContext") contextTriggerRef.current?.focus()
+      }),
+    [hasModel, surface]
+  )
   if (!features.model && !features.context) return null
 
   const selectedId = followed?.selectedId ?? features.model?.selectedId
@@ -1635,6 +1705,8 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             effortUnset: labels.effortUnset,
           }}
           models={models}
+          open={modelOpen}
+          onOpenChange={setModelOpen}
           value={selectedId ?? features.model.selectedId}
           selection={
             features.model.selection?.status === "error"
@@ -1672,6 +1744,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
           lastTurn={features.context.lastTurn}
           cost={features.context.cost}
           locale={locale}
+          triggerRef={contextTriggerRef}
           labels={{
             trigger: labels.contextUsage,
             title: labels.contextTitle,

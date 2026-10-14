@@ -39,6 +39,8 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     removeQueuedMessage: "Remove queued message",
     steeringQueuedMessage: "Steering queued message",
     steeringFailed: "Could not steer the active turn",
+    commandHint: (name, hint) =>
+      hint ? `Usage: /${name} ${hint}` : `Usage: /${name}`,
     queuedMessageCount: (count) => `${count} queued`,
     stopAndSendQueuedMessage: "Stop and send now",
     queuedMessageAttachments: (count) =>
@@ -141,6 +143,9 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     removeQueuedMessage: "הסרת הודעה מהתור",
     steeringQueuedMessage: "ההודעה מועברת לשינוי כיוון",
     steeringFailed: "לא ניתן היה לשנות את כיוון התשובה הפעילה",
+    // The isolate keeps the command line left to right, its slash first.
+    commandHint: (name, hint) =>
+      `שימוש: \u2066/${name}${hint ? ` ${hint}` : ""}\u2069`,
     queuedMessageCount: (count) => `${count} בתור`,
     stopAndSendQueuedMessage: "עצירה ושליחה מיידית",
     queuedMessageAttachments: (count) =>

@@ -601,6 +601,15 @@ describe("Thread accessibility", () => {
           slashCommands: [{ name: "new", description: "Provider's /new" }],
           localCommands: [
             { name: "new", description: "Start a new Session", run: open },
+            {
+              name: "stop",
+              run: async () => ({ notice: "Nothing to stop", keepDraft: true }),
+            },
+            {
+              name: "clear",
+              acceptsTrailingText: true,
+              run: async (args) => ({ draft: args }),
+            },
           ],
         }}
       />
@@ -618,9 +627,73 @@ describe("Thread accessibility", () => {
     await user.type(input, "/New   first prompt ")
     await user.keyboard("{Enter}")
 
-    await waitFor(() => expect(open).toHaveBeenCalledWith("first prompt"))
-    expect(run).not.toHaveBeenCalled()
+    await waitFor(() => expect(open).toHaveBeenCalledWith("first prompt", {}))
     expect(input).toHaveValue("")
+
+    // A notice answers beside the composer and can hand the draft back.
+    draft(input, "/stop now")
+    await user.keyboard("{Enter}")
+    expect(await screen.findByText("Nothing to stop")).toBeVisible()
+    expect(input).toHaveValue("/stop now")
+
+    // A draft answer becomes the composer's text.
+    draft(input, "/clear keep this")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(input).toHaveValue("keep this"))
+    expect(screen.queryByText("Nothing to stop")).toBeNull()
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it("runs a local slash command on Enter during a run on a thread without a queue", async () => {
+    const user = userEvent.setup()
+    const stopCommand = vi.fn()
+    render(
+      <LocalThread
+        model={parkedRun(vi.fn())}
+        initialMessages={[]}
+        composerFeatures={{
+          localCommands: [{ name: "stop", run: stopCommand }],
+        }}
+      />
+    )
+    const input = await startParkedRun(user)
+
+    draft(input, "/stop ")
+    await user.keyboard("{Enter}")
+
+    await waitFor(() => expect(stopCommand).toHaveBeenCalledWith("", {}))
+    expect(input).toHaveValue("")
+    expect(screen.queryByText("/stop")).toBeNull()
+  })
+
+  it("shows a local command's usage and sends nothing when its argument is missing", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async () => ({ content: [] }))
+    const choose = vi.fn()
+    render(
+      <LocalThread
+        model={{ run }}
+        initialMessages={[]}
+        composerFeatures={{
+          localCommands: [
+            {
+              name: "model",
+              argument: { required: true, hint: "<model>" },
+              run: choose,
+            },
+          ],
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+
+    draft(input, "/model ")
+    await user.keyboard("{Enter}")
+
+    expect(await screen.findByText("Usage: /model <model>")).toBeVisible()
+    expect(input).toHaveValue("/model ")
+    expect(choose).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
   })
 
   it("localizes attachment controls and image descriptions through Thread labels", async () => {

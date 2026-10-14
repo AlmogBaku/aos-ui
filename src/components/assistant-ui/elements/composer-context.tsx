@@ -1,6 +1,6 @@
 "use client"
 
-import type { ComponentProps } from "react"
+import type { ComponentProps, Ref } from "react"
 
 import type { ComposerSessionCost } from "@/components/assistant-ui/composer-features"
 import type { ComposerTurnUsage } from "@/runtime-adapters/contracts"
@@ -96,6 +96,7 @@ export function ComposerContext({
   cost,
   locale = "en",
   labels = DEFAULT_LABELS,
+  triggerRef,
   className,
   ...props
 }: Omit<ComponentProps<"div">, "children"> & {
@@ -106,6 +107,8 @@ export function ComposerContext({
   /** Formats token counts and the cost; the popover copy comes from `labels`. */
   locale?: string
   labels?: ComposerContextLabels
+  /** Focusing the trigger is what reveals the panel; there is no open state. */
+  triggerRef?: Ref<HTMLButtonElement> | undefined
 }) {
   const turnUsage = lastTurn ? formatTurnUsage(lastTurn, labels, locale) : ""
   const accounting = [
@@ -243,6 +246,7 @@ export function ComposerContext({
         ))}
       </div>
       <button
+        ref={triggerRef}
         type="button"
         aria-label={labels.trigger}
         data-slot="composer-context-trigger"

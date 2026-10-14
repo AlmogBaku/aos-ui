@@ -3,25 +3,87 @@ import { describe, expect, it } from "vitest"
 import {
   matchLocalCommand,
   menuSlashCommands,
+  resolveLocalCommand,
   type ComposerLocalCommand,
+  type LocalCommandResolution,
 } from "./composer-features"
 
 const open: ComposerLocalCommand = { name: "new", run: () => {} }
+const model: ComposerLocalCommand = {
+  name: "model",
+  argument: { required: true, hint: "<model>" },
+  knownFlags: [{ name: "reasoning", takesValue: true }],
+  run: () => {},
+}
+const branch: ComposerLocalCommand = {
+  name: "branch",
+  aliases: ["fork"],
+  knownFlags: [
+    { name: "here", takesValue: false },
+    { name: "title", takesValue: true },
+  ],
+  run: () => {},
+}
 
-describe("matchLocalCommand", () => {
-  it("matches the command alone, case-insensitively, with surrounding space", () => {
-    expect(matchLocalCommand("  /New \n", [open])).toEqual({
-      command: open,
-      args: "",
+describe("resolveLocalCommand", () => {
+  it.each<[string, string, Omit<LocalCommandResolution, "command">, string]>([
+    [
+      "hands the trimmed trailing text over as arguments",
+      "  /new  plan the launch \n",
+      { args: "plan the launch", flags: {}, outcome: "run" },
+      "new",
+    ],
+    [
+      "holds back a command whose required argument is missing",
+      "/model",
+      { args: "", flags: {}, outcome: "missing-argument" },
+      "model",
+    ],
+    [
+      "records a flag that takes no value",
+      "/branch --here",
+      { args: "", flags: { here: true }, outcome: "run" },
+      "branch",
+    ],
+    [
+      "gives a flag the word after it as its value",
+      "/model --reasoning high sonnet",
+      { args: "sonnet", flags: { reasoning: "high" }, outcome: "run" },
+      "model",
+    ],
+    [
+      "counts a value flag with no value as a missing argument",
+      "/branch --title",
+      { args: "", flags: {}, outcome: "missing-argument" },
+      "branch",
+    ],
+    [
+      "stops at the first unknown flag",
+      "/branch --here --fast name",
+      { args: "--fast name", flags: { here: true }, outcome: "unknown-flag" },
+      "branch",
+    ],
+    [
+      "matches an alias",
+      "/fork notes",
+      { args: "notes", flags: {}, outcome: "run" },
+      "branch",
+    ],
+    [
+      "matches a name case-insensitively",
+      "/MODEL sonnet",
+      { args: "sonnet", flags: {}, outcome: "run" },
+      "model",
+    ],
+  ])("%s", (_case, text, expected, name) => {
+    expect(resolveLocalCommand(text, [open, model, branch])).toEqual({
+      command: [open, model, branch].find((command) => command.name === name),
+      ...expected,
     })
   })
+})
 
-  it("hands the trimmed rest of the draft to the command as arguments", () => {
-    expect(matchLocalCommand("/new  plan the launch ", [open])?.args).toBe(
-      "plan the launch"
-    )
-  })
-
+describe("matchLocalCommand", () => {
   it("leaves other slash commands and prose to the runtime", () => {
     expect(matchLocalCommand("/newer thing", [open])).toBeUndefined()
     expect(matchLocalCommand("/review", [open])).toBeUndefined()
@@ -31,17 +93,22 @@ describe("matchLocalCommand", () => {
 })
 
 describe("menuSlashCommands", () => {
-  it("lists local commands first and drops a provider namesake", () => {
+  it("lists local commands first, once each by name, and drops a provider namesake of any alias", () => {
     expect(
       menuSlashCommands({
         slashCommands: [
           { name: "New", description: "provider" },
+          { name: "Fork", description: "provider" },
           { name: "review", description: "Review the diff" },
         ],
-        localCommands: [{ ...open, description: "Start a new Session" }],
+        localCommands: [
+          { ...open, description: "Start a new Session" },
+          { ...branch, description: "Fork this Session" },
+        ],
       })
     ).toEqual([
       { name: "new", description: "Start a new Session" },
+      { name: "branch", description: "Fork this Session" },
       { name: "review", description: "Review the diff" },
     ])
   })
