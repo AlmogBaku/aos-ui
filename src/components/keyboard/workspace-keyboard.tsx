@@ -12,6 +12,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+import type { WorkspaceSurfaceRequests } from "@/components/workspace/surface-requests"
+import {
+  toPaletteCommands,
+  type WorkspaceCommand,
+} from "@/components/workspace/workspace-commands"
+
 import { CommandPalette, type KeyboardCommand } from "./command-palette"
 import { KEYBOARD_UI_CATALOG } from "./keyboard-actions"
 import {
@@ -49,7 +55,19 @@ export type WorkspaceKeyboardProps = {
   onOpenSession: (sessionId: string) => void | Promise<unknown>
   onCreateSession: (agentId: string) => void | Promise<unknown>
   onOpenAgentBuilder: () => void | Promise<unknown>
+  /**
+   * The workspace's slash commands: an entry twinning a built-in action lends
+   * it its spelling, and the rest join the palette as actions of their own.
+   */
+  commands?: readonly WorkspaceCommand[] | undefined
+  /** Requests to open the palette or the reference, as `/palette` makes. */
+  surface?: WorkspaceSurfaceRequests | undefined
 }
+
+/** The built-in actions a slash command can twin, by their catalog id. */
+const BUILT_IN_ACTION_IDS = new Set<string>(
+  KEYBOARD_UI_CATALOG.map((action) => action.id)
+)
 
 const localCopy = {
   en: {
@@ -141,6 +159,8 @@ export function WorkspaceKeyboard({
   onOpenSession,
   onCreateSession,
   onOpenAgentBuilder,
+  commands: slashCommands = [],
+  surface,
 }: WorkspaceKeyboardProps) {
   const settings = useKeyboardSettings(locale)
   const [commandOpen, setCommandOpen] = React.useState(false)
@@ -267,8 +287,20 @@ export function WorkspaceKeyboard({
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [execute, settings.overrides])
+  React.useEffect(
+    () =>
+      surface?.subscribe((kind) => {
+        if (kind === "openPalette") execute("commands.open")
+        else if (kind === "openKeyboardReference") execute("keyboard.reference")
+      }),
+    [execute, surface]
+  )
 
   const commands = ((): KeyboardCommand[] => {
+    const slashActions = toPaletteCommands(slashCommands)
+    const slashById = new Map(
+      slashActions.map((command) => [command.id, command.slash])
+    )
     const actionBinding = (id: string) => {
       const action = settings.effectiveBindings.find((item) => item.id === id)
       return action?.bindings[0]
@@ -285,6 +317,7 @@ export function WorkspaceKeyboard({
       unavailableReason: reason,
       onRun: reason ? undefined : () => execute(id),
       binding: actionBinding(id),
+      slash: slashById.get(id),
     })
     const sessionsByThreadId = new Map<string, WorkspaceKeyboardSession>()
     for (const session of [...openSessions, ...olderSessions]) {
@@ -390,6 +423,7 @@ export function WorkspaceKeyboard({
         title: `${localCopy[locale].selectAgent}: ${agent.name}`,
         onRun: () => onSelectAgent(agent.id),
       })),
+      ...slashActions.filter(({ id }) => !BUILT_IN_ACTION_IDS.has(id)),
       ...Array.from(sessionsByThreadId.values(), (session) => ({
         id: `session:${session.sessionId}`,
         title: `${localCopy[locale].openSession}: ${session.title}`,
@@ -436,6 +470,7 @@ export function WorkspaceKeyboard({
         open={referenceOpen}
         locale={locale}
         actions={settings.effectiveBindings}
+        commands={slashCommands}
         onOpenChange={setReferenceOpen}
       />
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
