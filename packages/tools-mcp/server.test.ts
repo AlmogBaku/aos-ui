@@ -106,13 +106,24 @@ describe("MCP App views", () => {
       { csp: { connectDomains: ["https://tiles.openfreemap.org"] } },
     ],
     ["render_stats", "ui://aos-ui/stats", "stats", { csp: {} }],
-    // The page adds each call's own file addresses to this view's policy;
-    // its Copy button writes the clipboard.
+    // The page adds each call's own file addresses to this view's policy,
+    // which declares only the CDNs the Agent HTML it previews may load from,
+    // named here so that adding one is deliberate; its Copy button writes the
+    // clipboard.
     [
       "present_artifact",
       "ui://aos-ui/artifact",
       "artifact",
-      { csp: {}, permissions: { clipboardWrite: {} } },
+      {
+        csp: {
+          resourceDomains: [
+            "https://fonts.googleapis.com",
+            "https://fonts.gstatic.com",
+            "https://cdn.tailwindcss.com",
+          ],
+        },
+        permissions: { clipboardWrite: {} },
+      },
     ],
   ] as const
 

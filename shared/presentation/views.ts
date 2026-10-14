@@ -15,6 +15,19 @@ export type PresentationView = {
 }
 
 /**
+ * The public CDNs Agent HTML may load scripts, styles, and fonts from: Google
+ * Fonts' stylesheets and font files, and Tailwind's Play CDN. Only their
+ * owners publish to them, and no one else reads who asked, so a page that
+ * loads from them signals nothing to anyone. A host anyone may publish to,
+ * such as an npm mirror whose per-file hit counts are public, would.
+ */
+export const AGENT_HTML_DOMAINS = [
+  "https://fonts.googleapis.com",
+  "https://fonts.gstatic.com",
+  "https://cdn.tailwindcss.com",
+]
+
+/**
  * The view each `aos-ui` tool declares. The `aos-ui` server serves them as
  * `ui://` resources and the fixture preview renders them through the same host.
  */
@@ -28,12 +41,14 @@ export const presentationViews: Record<AosUiToolName, PresentationView> = {
     csp: { connectDomains: ["https://tiles.openfreemap.org"] },
   },
   render_stats: { name: "stats", resourceUri: "ui://aos-ui/stats", csp: {} },
-  // The page adds each call's own file addresses to this view's policy, so
-  // it declares no origin of its own. Its Copy button writes the clipboard.
+  // The page adds each call's own file addresses to this view's policy. The
+  // view declares only the CDNs the Agent HTML it previews may load from,
+  // since that frame inherits this policy. Its Copy button writes the
+  // clipboard.
   present_artifact: {
     name: "artifact",
     resourceUri: "ui://aos-ui/artifact",
-    csp: {},
+    csp: { resourceDomains: AGENT_HTML_DOMAINS },
     permissions: { clipboardWrite: {} },
   },
 }

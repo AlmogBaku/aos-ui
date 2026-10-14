@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 
+import { AGENT_HTML_DOMAINS } from "../../../../shared/presentation/views"
 import type { ViewLabels } from "../locale"
 import { Tabs } from "../ui/tabs"
 import type { ViewApp } from "../view"
@@ -9,22 +10,25 @@ import { MAX_ZOOM } from "./zoom"
 
 const TABS = ["preview", "source"] as const
 
+const CDNS = AGENT_HTML_DOMAINS.join(" ")
+
 /**
- * What Agent HTML may do: run its own inline scripts and styles, and show
- * images and media from `data:` and `blob:` addresses. It reaches no network,
- * frame, form, or plugin. Its frame also inherits the view's own policy, which
- * only narrows this one.
+ * What Agent HTML may do: run its own inline scripts and styles, load scripts,
+ * styles, and fonts from the public CDNs `AGENT_HTML_DOMAINS` names, and show
+ * images and media from `data:` and `blob:` addresses. It connects to nothing
+ * and reaches no other host, frame, form, or plugin. Its frame also inherits
+ * the view's own policy, which only narrows this one.
  */
 export const AGENT_HTML_CSP = [
   "default-src 'none'",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
-  "script-src 'unsafe-inline'",
-  "style-src 'unsafe-inline'",
+  `script-src 'unsafe-inline' ${CDNS}`,
+  `style-src 'unsafe-inline' ${CDNS}`,
   "img-src data: blob:",
   "media-src data: blob:",
-  "font-src data:",
+  `font-src data: ${CDNS}`,
   "connect-src 'none'",
   "frame-src 'none'",
 ].join("; ")

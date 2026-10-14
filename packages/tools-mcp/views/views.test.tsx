@@ -781,6 +781,13 @@ describe("artifact view", () => {
     expect(policy?.getAttribute("http-equiv")).toBe("Content-Security-Policy")
     expect(policy?.getAttribute("content")).toContain("connect-src 'none'")
     expect(policy?.getAttribute("content")).toContain("frame-src 'none'")
+    // It loads Google Fonts and Tailwind's Play CDN, and connects to neither.
+    expect(policy?.getAttribute("content")).toContain(
+      "style-src 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.tailwindcss.com"
+    )
+    expect(policy?.getAttribute("content")).toContain(
+      "font-src data: https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.tailwindcss.com"
+    )
     expect(document.querySelector("h1")?.textContent).toBe("Launch plan")
     expect(screen.queryByRole("heading", { name: "Launch plan" })).toBeNull()
   })
