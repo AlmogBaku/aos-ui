@@ -17,6 +17,8 @@ export type KeyboardCommand = {
   readonly title: string
   readonly description?: string
   readonly binding?: string
+  /** The slash command that runs the same action, shown beside its binding. */
+  readonly slash?: string
   readonly unavailableReason?: string
   readonly onRun?: () => void | Promise<unknown>
 }
@@ -45,7 +47,7 @@ export function CommandPalette({
     const normalized = query.trim().toLocaleLowerCase(locale)
     if (!normalized) return commands
     return commands.filter((command) =>
-      `${command.title} ${command.description ?? ""} ${command.unavailableReason ?? ""}`
+      `${command.title} ${command.slash ?? ""} ${command.description ?? ""} ${command.unavailableReason ?? ""}`
         .toLocaleLowerCase(locale)
         .includes(normalized)
     )
@@ -133,6 +135,14 @@ export function CommandPalette({
                       </span>
                     ) : null}
                   </span>
+                  {command.slash ? (
+                    <code
+                      className="shrink-0 text-xs text-muted-foreground"
+                      dir="ltr"
+                    >
+                      {command.slash}
+                    </code>
+                  ) : null}
                   {command.binding ? (
                     <kbd className="shrink-0 rounded border bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                       {command.binding}
