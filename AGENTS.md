@@ -150,7 +150,10 @@ the guest lane. An external TLS reverse proxy is optional.
   in a nested `sandbox="allow-scripts"` frame: an opaque origin with no
   same-origin access, popups, forms, or top navigation, under a policy whose
   `connect-src`, `frame-src`, `base-uri`, and `form-action` are `'none'`, so it
-  reaches no network or file.
+  reaches no file and no network beyond the scripts, styles, and fonts it may
+  load from the public CDNs `AGENT_HTML_DOMAINS` names (Google Fonts and
+  Tailwind's Play CDN). Add a host there only if no one but its owner
+  publishes to it and no one else can read who asked.
 - Preserve the separation between compact, inspectable execution history and
   first-class assistant outcomes. Final prose and meaningful rich UI remain
   visible message content; follow `DESIGN.md` for the governing principles.

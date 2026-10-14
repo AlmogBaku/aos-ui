@@ -72,8 +72,15 @@ view shows Agent-written HTML that way, in a frame sandboxed with
 in an opaque origin of their own that reaches neither the view nor the page.
 The view also injects a policy into that document allowing only inline scripts
 and styles, `data:` fonts, and `data:` and `blob:` images and media, with
-`connect-src` and `frame-src` set to `'none'`. Because the inherited view CSP
-grants images and media `data:` only, `blob:` images stay blank.
+`connect-src` and `frame-src` set to `'none'`. Its one exception is the public
+CDNs `AGENT_HTML_DOMAINS` names: Google Fonts (`fonts.googleapis.com`,
+`fonts.gstatic.com`) and Tailwind's Play CDN (`cdn.tailwindcss.com`), from
+which the document may load scripts, styles, and fonts. The view declares the
+same hosts as its `resourceDomains`, since the inherited view CSP would
+otherwise refuse them. Only their owners publish to these hosts and no one
+else reads who asked, so a page that loads from them signals nothing; a host
+anyone may publish to, such as an npm mirror, stays out. Because the inherited
+view CSP grants images and media `data:` only, `blob:` images stay blank.
 
 ## Host requests
 
