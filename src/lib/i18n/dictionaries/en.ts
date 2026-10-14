@@ -145,6 +145,103 @@ export const en = {
     switchToEnglish: "Switch to English",
     switchToHebrew: "Switch to Hebrew",
   },
+  commands: {
+    resume: {
+      title: "Resume a Session",
+      description: "Open one of this Agent's Sessions by its id or title",
+      hint: "<id or title>",
+    },
+    branch: { hint: "[name]" },
+    btw: {
+      title: "Ask on the side",
+      description: "Ask in a fork of this Session and stay here",
+      hint: "<question>",
+    },
+    bg: {
+      title: "Start in the background",
+      description: "Send a prompt in a new Session and stay here",
+      hint: "<prompt>",
+    },
+    title: { description: "Rename this Session", hint: "<name>" },
+    stop: {
+      title: "Stop",
+      description: "Stop the running reply, or this Session's background work",
+    },
+    steer: {
+      title: "Steer",
+      description: "Steer the running reply with a message",
+      hint: "<message>",
+    },
+    queue: {
+      title: "Queue a message",
+      description: "Send after the running reply, or now when there is none",
+      hint: "<message>",
+    },
+    model: {
+      title: "Choose model",
+      description: "Switch the model, or open the model selector",
+      hint: "[--reasoning <level>] [model]",
+    },
+    reasoning: {
+      title: "Choose reasoning effort",
+      description: "Set the reasoning effort, or open the model selector",
+      hint: "[level]",
+    },
+    retry: { title: "Retry", description: "Regenerate the last reply" },
+    undo: {
+      title: "Edit an earlier message",
+      description: "Edit your last message, or the N-th last, and resend it",
+      hint: "[N]",
+    },
+    copy: {
+      title: "Copy reply",
+      description: "Copy the last reply, or the N-th last",
+      hint: "[N]",
+    },
+    context: {
+      title: "Show context usage",
+      description: "Show how much of the context window this Session uses",
+    },
+    help: {
+      title: "Show commands and shortcuts",
+      description: "List the workspace's commands and keyboard shortcuts",
+    },
+    palette: {
+      title: "Open Commands",
+      description: "Search the workspace's actions",
+    },
+    quit: { description: "Close this Session's tab" },
+    voice: {
+      title: "Voice input",
+      description: "Start or finish voice input",
+    },
+    notices: {
+      alreadyNew: "This Session is already new.",
+      noAgent: "Select an Agent first.",
+      noSession: "Open a Session first.",
+      emptySession: "This Session has no messages yet.",
+      cannotFork: "This runtime cannot fork Sessions.",
+      cannotStartTurn: "This runtime cannot start a turn in another Session.",
+      cannotRename: "This runtime cannot rename Sessions.",
+      cannotRewind: "This Session cannot rewind.",
+      waitForRun: "Wait for the reply to finish.",
+      answerPending: "Answer the pending request first.",
+      nothingRunning: "Nothing is running.",
+      noSessionNamed: 'No Session matches "{query}".',
+      severalSessionsNamed:
+        'Several Sessions match "{query}". Use the Session\'s id instead.',
+      noSuchModel: 'No model matches "{query}".',
+      severalModels: 'Several models match "{query}".',
+      noSuchEffort: 'This model has no reasoning effort "{level}".',
+      noSuchMessage: "There is no such message.",
+      copied: "Copied the reply.",
+      copyFailed: "The reply could not be copied.",
+      sidePromptIsCommand: "A prompt sent elsewhere cannot be a command.",
+      startedInBackground: "Started in a new Session.",
+      backgroundTurnRefused: "The new Session could not start: {reason}",
+      voiceUnavailable: "Voice input is not available here.",
+    },
+  },
   appearance: {
     label: "Appearance",
     light: "Light",
@@ -209,6 +306,7 @@ export const en = {
     HGW_COMMAND_WITH_ATTACHMENTS: "Commands cannot be sent with attachments.",
     HGW_REWIND_CONFLICT:
       "This response can no longer be regenerated because the Session history changed.",
+    HGW_COMMAND_UNSUPPORTED: "This command is not available here.",
     temporarily_unavailable:
       "The service is temporarily unavailable. Please try again.",
     rate_limited: "Too many requests. Please try again shortly.",

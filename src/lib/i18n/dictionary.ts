@@ -1,3 +1,5 @@
+type CommandCopy = { title: string; description: string }
+
 export type Dictionary = {
   productName: string
   artifacts: {
@@ -149,6 +151,58 @@ export type Dictionary = {
     switchToEnglish: string
     switchToHebrew: string
   }
+  /**
+   * The workspace's slash commands: a title for the palette and the keyboard
+   * reference, a description for the `/` menu, and the usage hint shown when a
+   * draft cannot run as written. `/new` and `/branch` reuse `actions`.
+   */
+  commands: {
+    resume: CommandCopy & { hint: string }
+    /** `/branch` and `/fork`, after the optional name they take. */
+    branch: { hint: string }
+    btw: CommandCopy & { hint: string }
+    bg: CommandCopy & { hint: string }
+    title: { description: string; hint: string }
+    stop: CommandCopy
+    steer: CommandCopy & { hint: string }
+    queue: CommandCopy & { hint: string }
+    model: CommandCopy & { hint: string }
+    reasoning: CommandCopy & { hint: string }
+    retry: CommandCopy
+    undo: CommandCopy & { hint: string }
+    copy: CommandCopy & { hint: string }
+    context: CommandCopy
+    help: CommandCopy
+    palette: CommandCopy
+    quit: { description: string }
+    voice: CommandCopy
+    /** A command's answer beside the composer; `{…}` is substituted. */
+    notices: {
+      alreadyNew: string
+      noAgent: string
+      noSession: string
+      emptySession: string
+      cannotFork: string
+      cannotStartTurn: string
+      cannotRename: string
+      cannotRewind: string
+      waitForRun: string
+      answerPending: string
+      nothingRunning: string
+      noSessionNamed: string
+      severalSessionsNamed: string
+      noSuchModel: string
+      severalModels: string
+      noSuchEffort: string
+      noSuchMessage: string
+      copied: string
+      copyFailed: string
+      sidePromptIsCommand: string
+      startedInBackground: string
+      backgroundTurnRefused: string
+      voiceUnavailable: string
+    }
+  }
   appearance: {
     label: string
     light: string
@@ -201,6 +255,7 @@ export type Dictionary = {
     HGW_STREAM_OVERFLOW: string
     HGW_COMMAND_WITH_ATTACHMENTS: string
     HGW_REWIND_CONFLICT: string
+    HGW_COMMAND_UNSUPPORTED: string
     // Generic codes the guest boundary substitutes for a private failure.
     temporarily_unavailable: string
     rate_limited: string
