@@ -26,6 +26,7 @@ import type {
   ComposerFeatureViewModel,
   LocalCommandResult,
 } from "@/components/assistant-ui/composer-features"
+import { createSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import {
   setTouchPrimary,
   resetThreadTestEnvironment,
@@ -56,7 +57,8 @@ async function sendEach(user: User, input: HTMLElement, ...texts: string[]) {
  */
 async function startBusyQueue(
   user: User,
-  steer: NonNullable<ComposerFeatureViewModel["steer"]>
+  steer: NonNullable<ComposerFeatureViewModel["steer"]>,
+  features: ComposerFeatureViewModel = {}
 ) {
   let runtime: AssistantRuntime | undefined
   const run = vi.fn(async () => {
@@ -68,7 +70,7 @@ async function startBusyQueue(
       model={{ run }}
       enableMessageQueue
       initialMessages={[]}
-      composerFeatures={{ steer }}
+      composerFeatures={{ ...features, steer }}
       exposeRuntime={(value) => {
         runtime = value
       }}
@@ -611,8 +613,14 @@ describe("Thread accessibility", () => {
             },
             {
               name: "clear",
-              acceptsTrailingText: true,
+              argument: { required: false, hint: "[text]" },
               run: async (args) => ({ draft: args }),
+            },
+            {
+              name: "boom",
+              run: async () => {
+                throw new Error("The runtime refused")
+              },
             },
             {
               name: "later",
@@ -639,7 +647,8 @@ describe("Thread accessibility", () => {
     await user.keyboard("{Enter}")
 
     await waitFor(() => expect(open).toHaveBeenCalledWith("first prompt", {}))
-    expect(input).toHaveValue("")
+    // A command that takes no argument hands what followed it back.
+    await waitFor(() => expect(input).toHaveValue("first prompt"))
 
     // A notice answers beside the composer and can hand the draft back.
     draft(input, "/stop now")
@@ -653,6 +662,11 @@ describe("Thread accessibility", () => {
     await waitFor(() => expect(input).toHaveValue("keep this"))
     expect(screen.queryByText("Nothing to stop")).toBeNull()
 
+    // A command that fails says why.
+    draft(input, "/boom ")
+    await user.keyboard("{Enter}")
+    expect(await screen.findByText("The runtime refused")).toBeVisible()
+
     // An answer that comes late leaves a draft typed since alone.
     draft(input, "/later ")
     await user.keyboard("{Enter}")
@@ -661,6 +675,40 @@ describe("Thread accessibility", () => {
     expect(await screen.findByText("Too late")).toBeVisible()
     expect(input).toHaveValue("typed since")
     expect(run).not.toHaveBeenCalled()
+  })
+
+  it("opens the model selector, focuses context usage, and shows an answer when a command asks", async () => {
+    const surface = createSurfaceRequests()
+    render(
+      <LocalThread
+        initialMessages={[]}
+        composerFeatures={{
+          surface,
+          model: {
+            options: [
+              { id: "alpha", label: "Alpha" },
+              { id: "beta", label: "Beta" },
+            ],
+            selectedId: "alpha",
+            update: vi.fn(async () => undefined),
+          },
+          context: { usage: { system: 1, tools: 1, messages: 2, total: 200 } },
+        }}
+      />
+    )
+    await screen.findByRole("textbox", { name: "Message input" })
+    expect(screen.queryByRole("listbox")).toBeNull()
+
+    act(() => surface.request("openModel"))
+    expect(await screen.findByRole("option", { name: "Beta" })).toBeVisible()
+
+    act(() => surface.request("focusContext"))
+    expect(screen.getByRole("button", { name: "Context usage" })).toHaveFocus()
+
+    act(() =>
+      surface.request({ kind: "notice", notice: "Copied", tone: "info" })
+    )
+    expect(screen.getByText("Copied")).toHaveAttribute("role", "status")
   })
 
   it("runs a local slash command on Enter during a run on a thread without a queue", async () => {
@@ -1539,6 +1587,45 @@ describe("Thread accessibility", () => {
     await waitFor(() => expect(input).toHaveValue(""))
   })
 
+  it("steers through Enter when a command answers with a steer, holding further sends until it lands", async () => {
+    const user = userEvent.setup()
+    let land: () => void = () => {}
+    const steer = vi.fn(
+      () =>
+        new Promise<{ status: "steered" }>((resolve) => {
+          land = () => resolve({ status: "steered" })
+        })
+    )
+    const { input, runtime } = await startBusyQueue(user, steer, {
+      localCommands: [
+        {
+          name: "steer",
+          argument: { required: true, hint: "<message>" },
+          run: async (text) => ({ steer: text }),
+        },
+      ],
+    })
+
+    draft(input, "/steer correct now")
+    await user.keyboard("{Enter}")
+    await waitFor(() =>
+      expect(steer).toHaveBeenCalledExactlyOnceWith({
+        requestId: expect.any(String),
+        text: "correct now",
+      })
+    )
+    expect(runtime.thread.composer.getState().queue).toHaveLength(0)
+
+    // The steer in flight holds the composer, as the steering shortcut's does.
+    draft(input, "/steer once more")
+    await user.keyboard("{Enter}")
+    expect(steer).toHaveBeenCalledOnce()
+
+    act(() => land())
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(steer).toHaveBeenCalledTimes(2))
+  })
+
   it("cancels from the transcript while leaving a queued follow-up parked", async () => {
     const user = userEvent.setup()
     let runtime: AssistantRuntime | undefined
@@ -1657,6 +1744,52 @@ describe("Thread accessibility", () => {
     await user.keyboard("{ArrowUp}")
     await waitFor(() => expect(input).toHaveValue("recover me"))
   })
+
+  // A notice or a kept draft is the Session's the command ran on; a draft is
+  // the operator's next one wherever they are, as `/new` opening one wants.
+  it.each<readonly [string, LocalCommandResult, string]>([
+    ["drops an answer", { notice: "Started elsewhere", keepDraft: true }, ""],
+    ["keeps a next draft", { draft: "next prompt" }, "next prompt"],
+  ])(
+    "%s that arrives after another Session is shown",
+    async (_, answer, shown) => {
+      let runtime: AssistantRuntime | undefined
+      let settle: (result: LocalCommandResult) => void = () => {}
+      render(
+        <MultiSessionThread
+          exposeRuntime={(value) => {
+            runtime = value
+          }}
+          composerFeatures={{
+            localCommands: [
+              {
+                name: "bg",
+                argument: { required: true, hint: "<prompt>" },
+                run: () =>
+                  new Promise<LocalCommandResult>((resolve) => {
+                    settle = resolve
+                  }),
+              },
+            ],
+          }}
+        />
+      )
+      const input = await screen.findByRole("textbox", {
+        name: "Message input",
+      })
+      draft(input, "/bg draft the brief")
+      fireEvent.keyDown(input, { key: "Enter" })
+      await waitFor(() => expect(input).toHaveValue(""))
+
+      await act(async () => {
+        await runtime!.threads.switchToThread("session-two")
+      })
+      await act(async () => settle(answer))
+
+      expect(input).toHaveValue(shown)
+      expect(screen.queryByText("Started elsewhere")).toBeNull()
+    }
+  )
 
   it("does not restore a cleared draft after switching sessions", async () => {
     const user = userEvent.setup()

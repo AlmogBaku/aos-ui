@@ -9,7 +9,7 @@ import {
 } from "react"
 import { XIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import type { WorkspaceSurfaceRequests } from "@/components/workspace/surface-requests"
+import type { WorkspaceSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import {
   ComposerSend,
   ComposerVoice,

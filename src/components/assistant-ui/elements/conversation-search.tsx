@@ -159,7 +159,7 @@ function scrollOccurrenceIntoView(occurrence: Range) {
 }
 
 /** Centers a message whose rendered text holds no match to highlight. */
-function scrollMessageIntoView(messageId: string) {
+export function scrollMessageIntoView(messageId: string) {
   document
     .querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)
     ?.scrollIntoView?.({ block: "center", behavior: "auto" })
@@ -167,6 +167,32 @@ function scrollMessageIntoView(messageId: string) {
 
 /** Frames to wait for a virtualized thread to mount a message it scrolled to. */
 const REVEAL_FRAMES = 10
+
+/**
+ * Asks the thread to bring a message into its mounted window, frame after
+ * frame until it is there or the frames run out, then runs `revealed`.
+ * Returns the cancel.
+ */
+export function revealMessageThen(
+  messageId: string,
+  revealMessage: (messageId: string) => boolean,
+  revealed: () => void
+) {
+  let attempts = 0
+  let frame: number | null = null
+  const reveal = () => {
+    frame = null
+    if (!revealMessage(messageId) && ++attempts < REVEAL_FRAMES) {
+      frame = requestAnimationFrame(reveal)
+      return
+    }
+    revealed()
+  }
+  reveal()
+  return () => {
+    if (frame !== null) cancelAnimationFrame(frame)
+  }
+}
 
 const ALWAYS_MOUNTED = () => true
 
@@ -357,22 +383,11 @@ export function ConversationSearch({
   // Moving to a match brings its message in, then centers the match.
   useEffect(() => {
     if (!activeMessageId) return
-    let attempts = 0
-    let frame: number | null = null
-    const reveal = () => {
-      frame = null
-      if (!revealMessage(activeMessageId) && ++attempts < REVEAL_FRAMES) {
-        frame = requestAnimationFrame(reveal)
-        return
-      }
+    return revealMessageThen(activeMessageId, revealMessage, () => {
       const activeOccurrence = paint()
       if (activeOccurrence) scrollOccurrenceIntoView(activeOccurrence)
       else scrollMessageIntoView(activeMessageId)
-    }
-    reveal()
-    return () => {
-      if (frame !== null) cancelAnimationFrame(frame)
-    }
+    })
     // Only a different active match moves the thread; new matches repaint.
     // oxlint-disable-next-line react/exhaustive-deps
   }, [activeMessageId, activeOrdinal, needle, revealMessage])

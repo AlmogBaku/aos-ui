@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 
-import { createSurfaceRequests } from "@/components/workspace/surface-requests"
+import { createSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import type { WorkspaceCommand } from "@/components/workspace/workspace-commands"
 import {
   WorkspaceShell,

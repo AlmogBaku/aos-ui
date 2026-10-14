@@ -1,4 +1,4 @@
-import type { WorkspaceSurfaceRequests } from "@/components/workspace/surface-requests"
+import type { WorkspaceSurfaceRequests } from "./surface-requests"
 import type {
   ComposerModelFeed,
   ComposerTurnUsage,
@@ -84,7 +84,9 @@ export type LocalCommandFlags = Readonly<Record<string, string | true>>
  * `keepDraft` puts back the draft the command consumed unless something was
  * typed since; `draft` becomes the composer's text; `steer` goes into the
  * active turn through the composer's own steering, as the steering shortcut
- * would send it.
+ * would send it. A notice or a kept draft belongs to the Session the command
+ * ran on, so neither reaches another one shown by the time it arrives; a
+ * `draft` does, as `/new` opening a Session wants.
  */
 export type LocalCommandResult =
   | {
@@ -99,7 +101,8 @@ export type LocalCommandResult =
  * A slash command the workspace runs itself instead of sending to the runtime:
  * `/new` opens a Session, which no provider turn can do. `args` is whatever
  * followed the command name and its leading flags, trimmed; empty when the
- * command stood alone.
+ * command stood alone. A command without an `argument` takes none, so any
+ * text after it becomes the next draft once it has run.
  */
 export type ComposerLocalCommand = ComposerSlashCommand & {
   /** A required argument the draft lacks shows `hint` instead of running. */
@@ -107,10 +110,10 @@ export type ComposerLocalCommand = ComposerSlashCommand & {
     | { readonly required: boolean; readonly hint: string }
     | undefined
   /**
-   * The command takes no argument and hands any text after it back as
-   * `{ draft }`. Callers read it; the resolver only carries it.
+   * The text after the name is taken as written, with no flag read and no
+   * argument required: a command that only answers why it cannot run does.
    */
-  readonly acceptsTrailingText?: boolean | undefined
+  readonly unparsed?: boolean | undefined
   /** `--name` flags the command reads before its argument. */
   readonly knownFlags?:
     | readonly { readonly name: string; readonly takesValue: boolean }[]
@@ -173,6 +176,8 @@ export function resolveLocalCommand(
   const match = matchLocalCommand(text, commands)
   if (!match) return undefined
   const { command } = match
+  if (command.unparsed)
+    return { command, args: match.args, flags: {}, outcome: "run" }
   const flags: Record<string, string | true> = {}
   const resolution = (
     outcome: LocalCommandResolution["outcome"],

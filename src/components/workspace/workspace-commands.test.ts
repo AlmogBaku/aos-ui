@@ -38,8 +38,9 @@ function setup(overrides: Partial<WorkspaceCommandInput> = {}) {
     visibleThreadId: "session-1",
     isThreadEmpty: false,
     isRunning: false,
-    hasPendingInteraction: false,
+    hasPendingInteraction: () => false,
     canQueue: true,
+    canSteer: true,
     loadedSessions: [
       { sessionId: "session-1", title: "Market brief" },
       { sessionId: "session-2", title: "Pricing" },
@@ -57,7 +58,7 @@ function setup(overrides: Partial<WorkspaceCommandInput> = {}) {
     startTurn: vi.fn(async () => undefined),
     reportActionError: vi.fn(),
     cancelRun: vi.fn(),
-    runningChildren: 0,
+    childrenRunning: false,
     cancelRunningChildren: vi.fn(),
     messages: () => MESSAGES,
     rewindAvailable: true,
@@ -88,8 +89,10 @@ function setup(overrides: Partial<WorkspaceCommandInput> = {}) {
     "model.update": input.model?.update,
     "surface.request": input.surface.request,
   }
+  const localCommands = toLocalCommands(commands)
   return {
     commands,
+    localCommands,
     /** Each action a command called, with its calls. */
     calls: () =>
       Object.fromEntries(
@@ -101,16 +104,18 @@ function setup(overrides: Partial<WorkspaceCommandInput> = {}) {
       ),
     /** Submits a draft the way the composer does, and returns its answer. */
     type: async (draft: string) => {
-      const local = resolveLocalCommand(draft, toLocalCommands(commands))
+      const local = resolveLocalCommand(draft, localCommands)
       expect(local?.outcome).toBe("run")
       return (await local!.command.run(local!.args, local!.flags)) ?? undefined
     },
+    /** Whether the `/` menu offers the command a draft names. */
+    listed: (draft: string) =>
+      resolveLocalCommand(draft, localCommands)?.command.available !== false,
   }
 }
 
 describe("workspace commands", () => {
   it.each<readonly [string, Partial<WorkspaceCommandInput>, string]>([
-    ["/new", { isThreadEmpty: true }, notices.alreadyNew],
     ["/branch", { isThreadEmpty: true }, notices.emptySession],
     ["/btw what now?", { isThreadEmpty: true }, notices.emptySession],
     [
@@ -123,24 +128,38 @@ describe("workspace commands", () => {
       { forkSession: undefined, forkSessionInBackground: undefined },
       notices.cannotFork,
     ],
+    // Whatever follows the name, the reason answers: no usage first.
+    [
+      "/btw --side what now?",
+      { forkSession: undefined, forkSessionInBackground: undefined },
+      notices.cannotFork,
+    ],
     ["/btw what now?", { startTurn: undefined }, notices.cannotStartTurn],
     ["/bg draft it", { startTurn: undefined }, notices.cannotStartTurn],
     ["/title Q3", { canRename: false }, notices.cannotRename],
     ["/retry", { isRunning: true }, notices.waitForRun],
     ["/undo", { isRunning: true }, notices.waitForRun],
     ["/copy", { isRunning: true }, notices.waitForRun],
-    ["/retry", { hasPendingInteraction: true }, notices.answerPending],
+    ["/retry", { isThreadEmpty: true }, notices.emptySession],
+    ["/undo", { isThreadEmpty: true }, notices.emptySession],
+    ["/copy", { isThreadEmpty: true }, notices.emptySession],
     ["/undo 2", { rewindAvailable: false }, notices.cannotRewind],
+    [
+      "/steer go left",
+      { isRunning: true, canSteer: false },
+      notices.cannotSteer,
+    ],
     ["/queue later", { isRunning: true, canQueue: false }, notices.waitForRun],
     ["/exit", { visibleThreadId: null }, notices.noSession],
     ["/voice", { voiceAvailable: false }, notices.voiceUnavailable],
-    // Available, so it answers itself: neither a turn nor a child runs.
+    // Neither a turn nor a child Session runs.
     ["/stop", {}, notices.nothingRunning],
   ])(
-    "answers %s in place, keeping the draft and calling nothing, where it cannot act",
+    "leaves %s out of the menu and answers it in place, keeping the draft and calling nothing",
     async (draft, overrides, notice) => {
-      const { type, calls } = setup(overrides)
+      const { type, calls, listed } = setup(overrides)
 
+      expect(listed(draft)).toBe(false)
       expect(await type(draft)).toEqual(unmoved(notice))
       expect(calls()).toEqual({})
     }
@@ -154,12 +173,8 @@ describe("workspace commands", () => {
       LocalCommandResult | undefined,
     ]
   >([
-    [
-      "/reset plan the launch",
-      {},
-      { createSession: [["agent-1"]] },
-      { draft: "plan the launch" },
-    ],
+    // The composer hands the text after the name back as the next draft.
+    ["/reset plan the launch", {}, { createSession: [["agent-1"]] }, undefined],
     // The opening fork, renamed when named; `--here` means nothing here.
     [
       "/branch --here Pricing ideas",
@@ -197,18 +212,26 @@ describe("workspace commands", () => {
       undefined,
     ],
     [
-      "/stop keep this",
-      { isRunning: true, runningChildren: 2 },
+      "/stop",
+      { isRunning: true, childrenRunning: true },
       { cancelRun: [[]] },
-      { draft: "keep this" },
+      undefined,
     ],
     [
       "/stop",
-      { runningChildren: 2 },
+      { childrenRunning: true },
       { cancelRunningChildren: [[]] },
       undefined,
     ],
-    ["/steer go left", {}, {}, { steer: "go left" }],
+    ["/steer go left", { isRunning: true }, {}, { steer: "go left" }],
+    // With no reply to steer, the message is the next turn.
+    ["/steer go left", {}, { queueText: [["go left"]] }, undefined],
+    [
+      "/steer go left",
+      { isRunning: true, hasPendingInteraction: () => true },
+      {},
+      unmoved(notices.answerPending),
+    ],
     [
       "/queue /reset",
       { isRunning: true },
@@ -216,6 +239,12 @@ describe("workspace commands", () => {
       undefined,
     ],
     ["/retry", {}, { reloadMessage: [["answer-2"]] }, undefined],
+    [
+      "/retry",
+      { hasPendingInteraction: () => true },
+      {},
+      unmoved(notices.answerPending),
+    ],
     ["/undo 2", {}, { beginEdit: [["user-1"]] }, undefined],
     [
       "/copy 2",
@@ -379,6 +408,8 @@ describe("workspace commands", () => {
       },
     ],
     ["/btw /reset", {}, {}, unmoved(notices.sidePromptIsCommand)],
+    // The gateway strips zero-width padding before it reads a command.
+    ["/bg \u200B\u2060/reset", {}, {}, unmoved(notices.sidePromptIsCommand)],
   ])(
     "answers %s about the Session it would start elsewhere",
     async (draft, overrides, called, result) => {
@@ -388,6 +419,15 @@ describe("workspace commands", () => {
       expect(calls()).toEqual(called)
     }
   )
+
+  it("keeps /new out of the menu on a Session that is already new, yet runs it there", async () => {
+    const { type, listed, calls } = setup({ isThreadEmpty: true })
+
+    expect(listed("/new")).toBe(false)
+    // Nothing opens; the composer seeds this Session's draft with the text.
+    expect(await type("/new plan the launch")).toBeUndefined()
+    expect(calls()).toEqual({})
+  })
 
   it("shadows the runtime's namesake with an unavailable command and leaves the rest to it", () => {
     const { commands } = setup({
@@ -414,7 +454,7 @@ describe("workspace commands", () => {
 
   it("offers the palette each command it can run with nothing typed, under its slash spelling", async () => {
     const { commands, calls } = setup({ isRunning: true })
-    const palette = toPaletteCommands(commands)
+    const palette = toPaletteCommands(commands, undefined)
     const entry = (id: string) => palette.find((command) => command.id === id)
 
     // Twins carry the built-in action's id, so the palette merges them.
@@ -430,5 +470,20 @@ describe("workspace commands", () => {
 
     await entry("command.stop")?.onRun?.()
     expect(calls()).toEqual({ cancelRun: [[]] })
+  })
+
+  it("shows a command's palette answer beside the composer", async () => {
+    const { commands, calls } = setup({
+      copyMessage: vi.fn(async () => Promise.reject(new Error("Denied"))),
+    })
+    const surface = { request: vi.fn(), subscribe: () => () => undefined }
+    const palette = toPaletteCommands(commands, surface)
+
+    await palette.find(({ id }) => id === "command.copy")?.onRun?.()
+
+    expect(calls()).toEqual({ copyMessage: [["answer-2"]] })
+    expect(surface.request.mock.calls).toEqual([
+      [{ kind: "notice", notice: notices.copyFailed, tone: "error" }],
+    ])
   })
 })

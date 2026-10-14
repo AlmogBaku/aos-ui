@@ -13,6 +13,7 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { createRef } from "react"
+import { createSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   resetThreadTestEnvironment,
@@ -436,6 +437,29 @@ describe("virtualized thread", () => {
       expect(
         await screen.findByText("The zephyr checkpoint")
       ).toBeInTheDocument()
+      expect(mountedMessageCount()).toBeLessThanOrEqual(30)
+    }
+  )
+
+  // `/undo` asks for a message the window may not hold, as search does.
+  layoutIt(
+    "brings a message outside the mounted window in when a command asks",
+    async ({ settle }) => {
+      const surface = createSurfaceRequests()
+      render(
+        <LocalThread
+          initialMessages={longThread({ index: 12, text: "The early brief" })}
+          composerFeatures={{ surface }}
+        />
+      )
+      await settle()
+      expect(screen.queryByText("The early brief")).not.toBeInTheDocument()
+
+      act(() =>
+        surface.request({ kind: "revealMessage", messageId: "long-12" })
+      )
+
+      expect(await screen.findByText("The early brief")).toBeInTheDocument()
       expect(mountedMessageCount()).toBeLessThanOrEqual(30)
     }
   )

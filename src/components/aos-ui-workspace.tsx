@@ -54,7 +54,7 @@ import {
   useHasSessionOutputs,
 } from "@/components/artifacts"
 import { ManageAgents } from "@/components/workspace/manage-agents"
-import { createSurfaceRequests } from "@/components/workspace/surface-requests"
+import { createSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import { useWorkspaceCommands } from "@/components/workspace/use-workspace-commands"
 import { toLocalCommands } from "@/components/workspace/workspace-commands"
 import { useWorkspaceNavigation } from "@/components/workspace/use-workspace-navigation"

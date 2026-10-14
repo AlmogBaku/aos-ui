@@ -178,13 +178,12 @@ export type Dictionary = {
     voice: CommandCopy
     /** A command's answer beside the composer; `{…}` is substituted. */
     notices: {
-      alreadyNew: string
-      noAgent: string
       noSession: string
       emptySession: string
       cannotFork: string
       cannotStartTurn: string
       cannotRename: string
+      cannotSteer: string
       cannotRewind: string
       waitForRun: string
       answerPending: string

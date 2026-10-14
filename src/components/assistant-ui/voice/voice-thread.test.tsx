@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createSurfaceRequests,
   type WorkspaceSurfaceRequests,
-} from "@/components/workspace/surface-requests"
+} from "@/components/assistant-ui/surface-requests"
 import { Thread } from "../elements/thread.aui"
 import { VoiceMediaController } from "./voice-media"
 import { VoiceMediaProvider } from "./voice-context"

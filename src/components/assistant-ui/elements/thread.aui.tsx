@@ -52,6 +52,8 @@ import { ComposerSlashCommands } from "@/components/assistant-ui/elements/compos
 import {
   ConversationSearch,
   DEFAULT_CONVERSATION_SEARCH_LABELS,
+  revealMessageThen,
+  scrollMessageIntoView,
   type ConversationSearchLabels,
 } from "@/components/assistant-ui/elements/conversation-search"
 import { Button } from "@/components/ui/button"
@@ -555,6 +557,34 @@ const threadRootStyle = {
   "--composer-bg": "var(--color-card)",
 } as CSSProperties
 
+/**
+ * A command such as `/undo` asks for a message the windowed list may not have
+ * mounted, so it is revealed the way conversation search reveals one. Its own
+ * component, so the thread root does not re-render with the composer features.
+ */
+const RevealRequests: FC<{
+  revealMessage: (messageId: string) => boolean
+}> = ({ revealMessage }) => {
+  const { surface } = useContext(ThreadComposerFeaturesContext)
+  useEffect(() => {
+    let cancelReveal: (() => void) | undefined
+    const unsubscribe = surface?.subscribe((request) => {
+      if (typeof request !== "object" || request.kind !== "revealMessage")
+        return
+      const { messageId } = request
+      cancelReveal?.()
+      cancelReveal = revealMessageThen(messageId, revealMessage, () =>
+        scrollMessageIntoView(messageId)
+      )
+    })
+    return () => {
+      unsubscribe?.()
+      cancelReveal?.()
+    }
+  }, [revealMessage, surface])
+  return null
+}
+
 const ThreadRoot: FC<{
   isEmpty: boolean
   autoFocus: boolean
@@ -639,6 +669,7 @@ const ThreadRoot: FC<{
           viewportRef={viewportRef}
           labels={labels.conversationSearch}
         />
+        <RevealRequests revealMessage={revealMessage} />
         <div
           className={cn(
             "mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col px-3 pt-4 @md:px-8 @md:pt-6",
@@ -871,7 +902,9 @@ const Composer: FC<{
   const isTouchPrimaryInput = useTouchPrimaryInput()
   const aui = useAui()
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const submissionLockRef = useRef(false)
+  // Who holds the submission lock: an Enter press for its own tick, or a steer
+  // until it settles. Each releases only its own hold.
+  const submissionLockRef = useRef<object | null>(null)
   const escapeRef = useRef<number | null>(null)
   const clearUndoRef = useRef<RecoverableDraft | null>(null)
   const searchSnapshotRef = useRef<RecoverableDraft | null>(null)
@@ -915,8 +948,19 @@ const Composer: FC<{
     undefined
   )
 
+  // A command run from the palette answers here, as a typed one does.
+  const surface = features.surface
+  useEffect(
+    () =>
+      surface?.subscribe((request) => {
+        if (typeof request === "object" && request.kind === "notice")
+          setComposerNotice({ text: request.notice, tone: request.tone })
+      }),
+    [surface]
+  )
+
   useAuiEvent("threads.selectionChanged", () => {
-    submissionLockRef.current = false
+    submissionLockRef.current = null
     clearUndoRef.current = null
     searchSnapshotRef.current = null
     historyBrowseRef.current = null
@@ -958,7 +1002,8 @@ const Composer: FC<{
         if (current.text === text && current.attachments.length === 0)
           void aui.composer.reset()
       }
-      submissionLockRef.current = true
+      const hold = {}
+      submissionLockRef.current = hold
       setComposerNotice(undefined)
       void steer({ requestId, text })
         .then(() => {
@@ -986,7 +1031,8 @@ const Composer: FC<{
           })
         })
         .finally(() => {
-          if (inOrigin()) submissionLockRef.current = false
+          if (submissionLockRef.current === hold)
+            submissionLockRef.current = null
         })
     },
     [
@@ -1026,20 +1072,48 @@ const Composer: FC<{
       return
     }
     void aui.composer.reset()
-    void Promise.resolve(command.run(args, flags)).then((result) => {
-      if (!result) return
-      if ("steer" in result) {
-        aui.composer.setText(result.steer)
-        steerText(result.steer)
-      } else if ("draft" in result) {
-        aui.composer.setText(result.draft)
-      } else {
-        setComposerNotice({ text: result.notice, tone: result.tone ?? "info" })
-        // An answer that arrives late never overwrites a draft typed since.
-        if (result.keepDraft && aui.composer.getState().isEmpty)
-          aui.composer.setText(draft.text)
-      }
-    })
+    // An answer belongs to the Session the command ran on; the next draft
+    // follows the operator, as `/new` opening a Session wants.
+    const originThreadId = aui.threads.getState().mainThreadId
+    const inOrigin = () =>
+      aui.threads.getState().mainThreadId === originThreadId
+    void Promise.resolve(command.run(args, flags))
+      .then((result) => {
+        if (result && "steer" in result) {
+          if (!inOrigin()) return
+          aui.composer.setText(result.steer)
+          steerText(result.steer)
+          return
+        }
+        if (result && "notice" in result) {
+          if (!inOrigin()) return
+          setComposerNotice({
+            text: result.notice,
+            tone: result.tone ?? "info",
+          })
+          if (result.keepDraft) {
+            // An answer that arrives late never overwrites a draft typed since.
+            if (aui.composer.getState().isEmpty)
+              aui.composer.setText(draft.text)
+            return
+          }
+        }
+        // A command that takes no argument hands its trailing text back.
+        const next =
+          result && "draft" in result
+            ? result.draft
+            : command.argument
+              ? ""
+              : args
+        if (next) aui.composer.setText(next)
+      })
+      .catch((error: unknown) => {
+        if (!inOrigin()) return
+        setComposerNotice({
+          text: error instanceof Error ? error.message : String(error),
+          tone: "error",
+        })
+      })
   }, [
     aui,
     features.localCommands,
@@ -1413,10 +1487,11 @@ const Composer: FC<{
         steerText(composer.text)
         return
       }
-      submissionLockRef.current = true
+      const hold = {}
+      submissionLockRef.current = hold
       submitOrdinary()
       queueMicrotask(() => {
-        submissionLockRef.current = false
+        if (submissionLockRef.current === hold) submissionLockRef.current = null
       })
     },
     [

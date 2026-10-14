@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
-import type { WorkspaceSurfaceRequests } from "@/components/workspace/surface-requests"
+import type { WorkspaceSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import {
   toPaletteCommands,
   type WorkspaceCommand,
@@ -297,7 +297,7 @@ export function WorkspaceKeyboard({
   )
 
   const commands = ((): KeyboardCommand[] => {
-    const slashActions = toPaletteCommands(slashCommands)
+    const slashActions = toPaletteCommands(slashCommands, surface)
     const slashById = new Map(
       slashActions.map((command) => [command.id, command.slash])
     )

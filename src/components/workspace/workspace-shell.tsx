@@ -65,7 +65,7 @@ import {
   type BrowserSettingsView,
 } from "./activity"
 import type { ActivityView } from "./use-activity-coordinator"
-import type { WorkspaceSurfaceRequests } from "./surface-requests"
+import type { WorkspaceSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import type { WorkspaceCommand } from "./workspace-commands"
 import { WorkspaceKeyboard } from "@/components/keyboard/workspace-keyboard"
 import {

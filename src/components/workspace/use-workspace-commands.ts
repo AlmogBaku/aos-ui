@@ -1,25 +1,27 @@
 "use client"
 
-import type { AssistantRuntime, ThreadState } from "@assistant-ui/react"
-import { useCallback, useMemo, useSyncExternalStore } from "react"
+import type { ThreadRuntimeState } from "@assistant-ui/react"
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react"
 
-import { answerText } from "@/components/assistant-ui/elements/turn-fold"
+import {
+  copyMessage,
+  retryMessage,
+} from "@/components/assistant-ui/elements/message-actions"
+import type { WorkspaceSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import { useVoiceState } from "@/components/assistant-ui/voice/voice-context"
 import {
   canAttemptSpeech,
   type VoiceMediaState,
 } from "@/components/assistant-ui/voice/voice-media"
 import { awaitsApproval } from "@/components/runtime-interactions/pending-interaction-context"
-import { useHasPendingInteraction } from "@/components/runtime-interactions/use-has-pending-interaction"
-import { copyMarkdownToClipboard } from "@/lib/clipboard"
 import type { Dictionary } from "@/lib/i18n/dictionary"
+import { sameData } from "@/lib/utils"
 import { childSessionExtras } from "@/runtime-adapters/child-sessions"
 import type {
   HarnessRuntime,
   SessionActionCapabilities,
 } from "@/runtime-adapters/contracts"
 
-import type { WorkspaceSurfaceRequests } from "./surface-requests"
 import {
   buildWorkspaceCommands,
   type CommandSession,
@@ -39,42 +41,50 @@ export type WorkspaceCommandNavigation = {
   readonly forkSession: (sessionId: string) => Promise<string>
 }
 
+const childSessionsOf = (state: ThreadRuntimeState) =>
+  childSessionExtras.tryGet(state.extras)?.childSessions
+
+/** The thread facts the commands' availability reads, one bit each. */
+const EMPTY = 1
+const RUNNING = 2
+const QUEUES = 4
+const DICTATES = 8
+const CHILDREN_RUNNING = 16
+
 /**
- * One reading of the thread as a primitive, so a change re-renders and the
- * snapshot stays stable between changes.
+ * One cheap reading per thread change, packed into a number so the snapshot
+ * is stable between changes and the workspace re-renders only when a fact
+ * flips. Nothing here scans the messages.
  */
-function useThreadValue<T extends boolean | number>(
-  runtime: AssistantRuntime,
-  select: (state: ThreadState) => T
-): T {
-  const subscribe = useCallback(
-    (onChange: () => void) => runtime.thread.subscribe(onChange),
-    [runtime]
-  )
-  return useSyncExternalStore(subscribe, () =>
-    select(runtime.thread.getState())
+function threadFacts(state: ThreadRuntimeState) {
+  return (
+    (state.messages.length === 0 ? EMPTY : 0) |
+    (state.isRunning ? RUNNING : 0) |
+    (state.capabilities.queue === true ? QUEUES : 0) |
+    (state.capabilities.dictation ? DICTATES : 0) |
+    ((childSessionsOf(state)?.runningCount() ?? 0) > 0 ? CHILDREN_RUNNING : 0)
   )
 }
 
-const childSessionsOf = (state: ThreadState) =>
-  childSessionExtras.tryGet(state.extras)?.childSessions
-const isEmpty = (state: ThreadState) => state.messages.length === 0
-const isRunning = (state: ThreadState) => state.isRunning
-const canQueue = (state: ThreadState) => state.capabilities.queue === true
-const canDictate = (state: ThreadState) => state.capabilities.dictation
-const awaitsOperator = (state: ThreadState) => awaitsApproval(state.messages)
-const runningChildrenOf = (state: ThreadState) =>
-  childSessionsOf(state)?.runningCount() ?? 0
 const transcribes = (state: VoiceMediaState | undefined) =>
   canAttemptSpeech(state?.availability.transcription)
 
-/** Centers a message the thread has mounted; the editor's focus did the rest. */
-function revealMessage(messageId: string) {
-  requestAnimationFrame(() =>
-    document
-      .querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)
-      ?.scrollIntoView?.({ block: "center" })
+const sessionNames = (sessions: readonly CommandSession[]) =>
+  sessions.map(({ sessionId, title, agentId }) => [sessionId, title, agentId])
+
+/**
+ * The Sessions `/resume` names, held while their ids and titles stay the
+ * same: the workspace lists them afresh on every render, and the registry
+ * would be rebuilt, and the composer re-rendered, with each list.
+ */
+function useNamedSessions(sessions: readonly CommandSession[]) {
+  const [held, setHeld] = useState(sessions)
+  if (
+    held !== sessions &&
+    !sameData(sessionNames(held), sessionNames(sessions))
   )
+    setHeld(sessions)
+  return held
 }
 
 /**
@@ -98,30 +108,30 @@ export function useWorkspaceCommands({
   const {
     assistantRuntime: runtime,
     workspace,
+    interactions,
     forkSession: forkSessionInBackground,
     startTurn,
     messageRewind,
     media,
     composer,
   } = bundle
-  const isThreadEmpty = useThreadValue(runtime, isEmpty)
-  const running = useThreadValue(runtime, isRunning)
-  const queues = useThreadValue(runtime, canQueue)
-  const dictates = useThreadValue(runtime, canDictate)
-  const awaitingApproval = useThreadValue(runtime, awaitsOperator)
-  const runningChildren = useThreadValue(runtime, runningChildrenOf)
-  const pendingQuestion = useHasPendingInteraction(
-    bundle.interactions,
-    navigation.visibleThreadId ?? undefined
+  const subscribeThread = useCallback(
+    (onChange: () => void) => runtime.thread.subscribe(onChange),
+    [runtime]
+  )
+  const facts = useSyncExternalStore(subscribeThread, () =>
+    threadFacts(runtime.thread.getState())
   )
   const transcriptionReady = useVoiceState(transcribes)
   const voiceAvailable =
-    dictates && transcriptionReady && Boolean(media?.recordingSupported)
+    (facts & DICTATES) !== 0 &&
+    transcriptionReady &&
+    Boolean(media?.recordingSupported)
+  const loadedSessions = useNamedSessions(navigation.loadedSessions)
   const {
     selectedAgentId,
     selectedAgentIsDraft,
     visibleThreadId,
-    loadedSessions,
     sessionActions,
     openSession,
     renameSession,
@@ -135,10 +145,15 @@ export function useWorkspaceCommands({
       dictionary,
       selectedAgentId,
       visibleThreadId,
-      isThreadEmpty,
-      isRunning: running,
-      hasPendingInteraction: pendingQuestion || awaitingApproval,
-      canQueue: queues,
+      isThreadEmpty: (facts & EMPTY) !== 0,
+      isRunning: (facts & RUNNING) !== 0,
+      // The pending request the composer follows, read once as a command runs.
+      hasPendingInteraction: () =>
+        (visibleThreadId !== null &&
+          interactions?.getPending(visibleThreadId) !== undefined) ||
+        awaitsApproval(runtime.thread.getState().messages),
+      canQueue: (facts & QUEUES) !== 0,
+      canSteer: composer?.steer !== undefined,
       loadedSessions,
       searchSessions: workspace.searchSessions,
       openSession,
@@ -155,31 +170,25 @@ export function useWorkspaceCommands({
       startTurn,
       reportActionError,
       cancelRun: () => runtime.thread.cancelRun(),
-      runningChildren,
+      childrenRunning: (facts & CHILDREN_RUNNING) !== 0,
       cancelRunningChildren: () => {
         childSessionsOf(runtime.thread.getState())?.cancelRunning()
       },
       messages: () => runtime.thread.getState().messages,
       rewindAvailable: messageRewind !== false,
-      // As the message's own Retry does: a rewinding runtime replays from the
-      // user turn the answer came from, and reading aloud stops.
-      reloadMessage: (messageId) => {
-        if (messageRewind === false) return
-        const message = runtime.thread.getMessageById(messageId)
-        const sourceId = message.getState().parentId
-        if (!messageRewind) message.reload()
-        else if (sourceId)
-          message.reload({ runConfig: messageRewind.runConfig(sourceId) })
-        media?.stopSpeech()
-        media?.disarm()
-      },
+      // The message's own Retry and Copy, run on the message the command names.
+      reloadMessage: (messageId) =>
+        retryMessage(
+          runtime.thread.getMessageById(messageId),
+          messageRewind,
+          media
+        ),
       beginEdit: (messageId) => {
         runtime.thread.getMessageById(messageId).composer.beginEdit()
-        revealMessage(messageId)
+        surface.request({ kind: "revealMessage", messageId })
       },
       copyMessage: async (messageId) => {
-        const { content } = runtime.thread.getMessageById(messageId).getState()
-        await copyMarkdownToClipboard(answerText(content))
+        await copyMessage(runtime.thread.getMessageById(messageId).getState())
       },
       // Sent through Assistant UI's own send, so the text is never read as a
       // command again: `/queue /reset` reaches the runtime as written.
@@ -193,24 +202,21 @@ export function useWorkspaceCommands({
       surface,
     })
   }, [
-    awaitingApproval,
     composer?.context,
     composer?.model,
+    composer?.steer,
     createSession,
     dictionary,
+    facts,
     forkSession,
     forkSessionInBackground,
-    isThreadEmpty,
+    interactions,
     loadedSessions,
     media,
     messageRewind,
     openSession,
-    pendingQuestion,
-    queues,
     renameSession,
     reportActionError,
-    running,
-    runningChildren,
     runtime,
     selectedAgentId,
     selectedAgentIsDraft,

@@ -5,11 +5,10 @@ import type {
   LocalCommandFlags,
   LocalCommandResult,
 } from "@/components/assistant-ui/composer-features"
+import type { WorkspaceSurfaceRequests } from "@/components/assistant-ui/surface-requests"
 import type { KeyboardCommand } from "@/components/keyboard/command-palette"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import type { SessionSearchResult } from "@/runtime-adapters/contracts"
-
-import type { WorkspaceSurfaceRequests } from "./surface-requests"
 
 /**
  * One workspace action under its slash spellings: the composer runs it instead
@@ -23,12 +22,15 @@ export type WorkspaceCommand = {
   readonly title: string
   readonly description: string
   readonly argument?: ComposerLocalCommand["argument"]
-  /** Text after the command becomes the next draft, as `/new`'s does. */
-  readonly acceptsTrailingText?: boolean
   readonly knownFlags?: ComposerLocalCommand["knownFlags"]
   readonly available: boolean
   /** Why the entry cannot run now; a typed command reads it in place. */
   readonly unavailableReason?: string | undefined
+  /**
+   * `false` keeps an entry that still runs out of the `/` menu, as `/new` on a
+   * Session that is already new.
+   */
+  readonly listed?: boolean | undefined
   /** The palette cannot take a typed argument, so it offers no such entry. */
   readonly palette: boolean
   readonly run: (
@@ -59,9 +61,15 @@ export type WorkspaceCommandInput = {
   readonly visibleThreadId: string | null
   readonly isThreadEmpty: boolean
   readonly isRunning: boolean
-  readonly hasPendingInteraction: boolean
+  /**
+   * Whether the Session waits on the operator's answer, read when a command
+   * runs: the composer already follows it as it changes.
+   */
+  readonly hasPendingInteraction: () => boolean
   /** Whether a message sent during a run waits in the thread's queue. */
   readonly canQueue: boolean
+  /** Whether the runtime steers a running reply. */
+  readonly canSteer: boolean
   /** The Agent's Sessions as the workspace lists them, open and older. */
   readonly loadedSessions: readonly CommandSession[]
   readonly searchSessions?:
@@ -92,8 +100,8 @@ export type WorkspaceCommandInput = {
   /** The workspace's alert for an action that failed. */
   readonly reportActionError: (error: unknown) => void
   readonly cancelRun: () => void
-  /** Child Sessions of this one still at work that stop alone. */
-  readonly runningChildren: number
+  /** Whether child Sessions of this one still at work stop alone. */
+  readonly childrenRunning: boolean
   readonly cancelRunningChildren: () => void
   /** The thread's messages, read when a command runs. */
   readonly messages: () => readonly CommandMessage[]
@@ -148,6 +156,13 @@ function fill(template: string, name: string, value: string) {
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
+/**
+ * Whether text reads as a command once the padding the gateway strips before
+ * reading one is gone: whitespace and zero-width characters.
+ */
+const isCommand = (text: string) =>
+  text.replace(/^[\s\u200B\u2060\uFEFF]+/u, "").startsWith("/")
+
 /** The items one of whose keys equals `query`, ignoring case. */
 function named<T>(
   items: readonly T[],
@@ -191,36 +206,35 @@ type StopInput = Pick<
   "dictionary" | "isRunning" | "cancelRun"
 > &
   Partial<
-    Pick<WorkspaceCommandInput, "runningChildren" | "cancelRunningChildren">
+    Pick<WorkspaceCommandInput, "childrenRunning" | "cancelRunningChildren">
   >
 
 /**
- * `/stop`: the running turn, else the Session's child Sessions still at work,
- * else an answer. Text after it becomes the next draft. The guest lane builds
- * it alone, with no children to stop.
+ * `/stop`: the running turn, else the Session's child Sessions still at work.
+ * With neither it is unavailable. The guest lane builds it alone, with no
+ * children to stop.
  */
 export function stopCommand({
   dictionary,
   isRunning,
   cancelRun,
-  runningChildren = 0,
+  childrenRunning = false,
   cancelRunningChildren,
 }: StopInput): WorkspaceCommand {
   const copy = dictionary.commands
-  return entry({
-    id: "command.stop",
-    names: ["stop"],
-    title: copy.stop.title,
-    description: copy.stop.description,
-    acceptsTrailingText: true,
-    run: async (text) => {
-      if (isRunning) cancelRun()
-      else if (runningChildren > 0 && cancelRunningChildren)
-        cancelRunningChildren()
-      else return unmoved(copy.notices.nothingRunning)
-      return text ? { draft: text } : undefined
+  return entry(
+    {
+      id: "command.stop",
+      names: ["stop"],
+      title: copy.stop.title,
+      description: copy.stop.description,
+      run: async () => {
+        if (isRunning) cancelRun()
+        else cancelRunningChildren?.()
+      },
     },
-  })
+    blockedBy([isRunning || childrenRunning, copy.notices.nothingRunning])
+  )
 }
 
 /** The model the selector shows: the provider's report unless a pick waits. */
@@ -319,13 +333,15 @@ export function buildWorkspaceCommands(
   const copy = dictionary.commands
   const notices = copy.notices
   const conversation = Boolean(visibleThreadId) && !isThreadEmpty
-  // Rewinding replaces the turns after the message, so it waits for the run
-  // and for the operator's answer to a pending request.
+  const conversing = [conversation, notices.emptySession] as const
+  // Rewinding replaces the turns after the message, so it waits for the run;
+  // a pending request is checked as it runs.
   const rewinding = blockedBy(
     [input.rewindAvailable, notices.cannotRewind],
-    [!isRunning, notices.waitForRun],
-    [!hasPendingInteraction, notices.answerPending]
+    conversing,
+    [!isRunning, notices.waitForRun]
   )
+  const answerPending = unmoved(notices.answerPending)
   // A side prompt goes into a Session nobody watches, so a command typed as
   // one is refused before anything is made, and any failure answers here.
   const startElsewhere = async (
@@ -333,7 +349,7 @@ export function buildWorkspaceCommands(
     make: () => Promise<{ readonly sessionId: string }>
   ): Promise<LocalCommandResult | void> => {
     if (!startTurn) return
-    if (text.startsWith("/")) return unmoved(notices.sidePromptIsCommand)
+    if (isCommand(text)) return unmoved(notices.sidePromptIsCommand)
     try {
       const { sessionId } = await make()
       await startTurn(sessionId, text)
@@ -351,25 +367,23 @@ export function buildWorkspaceCommands(
       surface.request(kind)
 
   return [
-    entry(
-      {
-        id: "workspace.newSession",
-        names: ["new", "reset", "clear"],
-        title: dictionary.actions.newSession,
-        description: dictionary.actions.newSessionCommand,
-        acceptsTrailingText: true,
-        run: async (text) => {
-          try {
-            await input.createSession(selectedAgentId)
-          } catch (error) {
-            input.reportActionError(error)
-            return
-          }
-          return text ? { draft: text } : undefined
-        },
+    // A Session with no conversation is already new: there the command
+    // leaves the menu and only seeds its draft with the text after it.
+    entry({
+      id: "workspace.newSession",
+      names: ["new", "reset", "clear"],
+      title: dictionary.actions.newSession,
+      description: dictionary.actions.newSessionCommand,
+      listed: !isThreadEmpty,
+      run: async () => {
+        if (isThreadEmpty) return
+        try {
+          await input.createSession(selectedAgentId)
+        } catch (error) {
+          input.reportActionError(error)
+        }
       },
-      blockedBy([!isThreadEmpty, notices.alreadyNew])
-    ),
+    }),
     entry({
       id: "command.resume",
       names: ["resume", "sessions"],
@@ -485,14 +499,22 @@ export function buildWorkspaceCommands(
       )
     ),
     stopCommand(input),
-    entry({
-      id: "command.steer",
-      names: ["steer"],
-      title: copy.steer.title,
-      description: copy.steer.description,
-      argument: { required: true, hint: copy.steer.hint },
-      run: async (text) => ({ steer: text }),
-    }),
+    // With no reply running, the message is simply the next turn.
+    entry(
+      {
+        id: "command.steer",
+        names: ["steer"],
+        title: copy.steer.title,
+        description: copy.steer.description,
+        argument: { required: true, hint: copy.steer.hint },
+        run: async (text) => {
+          if (!isRunning) return input.queueText(text)
+          if (hasPendingInteraction()) return answerPending
+          return { steer: text }
+        },
+      },
+      blockedBy([!isRunning || input.canSteer, notices.cannotSteer])
+    ),
     entry(
       {
         id: "command.queue",
@@ -514,6 +536,7 @@ export function buildWorkspaceCommands(
         run: async () => {
           const id = nthLast(messages(), "assistant", "")
           if (!id) return unmoved(notices.noSuchMessage)
+          if (hasPendingInteraction()) return answerPending
           input.reloadMessage(id)
         },
       },
@@ -529,6 +552,7 @@ export function buildWorkspaceCommands(
         run: async (count) => {
           const id = nthLast(messages(), "user", count)
           if (!id) return unmoved(notices.noSuchMessage)
+          if (hasPendingInteraction()) return answerPending
           input.beginEdit(id)
         },
       },
@@ -552,7 +576,7 @@ export function buildWorkspaceCommands(
           }
         },
       },
-      blockedBy([!isRunning, notices.waitForRun])
+      blockedBy(conversing, [!isRunning, notices.waitForRun])
     ),
     ...(input.contextAvailable
       ? [
@@ -605,37 +629,46 @@ export function buildWorkspaceCommands(
 
 /**
  * The composer's local commands. An unavailable entry stays, out of the menu,
- * so a typed one still shadows the runtime's namesake and answers in place
- * with the draft kept; it calls nothing and asks for no argument first.
+ * so a typed one still shadows the runtime's namesake; it takes its draft as
+ * written, so its reason answers whatever follows the name, keeps the draft,
+ * and calls nothing.
  */
 export function toLocalCommands(
   commands: readonly WorkspaceCommand[]
 ): ComposerLocalCommand[] {
   return commands.map(
-    ({
-      names: [name, ...aliases],
-      available,
-      unavailableReason,
-      ...command
-    }) => ({
-      name,
-      aliases,
-      description: command.description,
-      argument: available ? command.argument : undefined,
-      acceptsTrailingText: command.acceptsTrailingText,
-      knownFlags: command.knownFlags,
-      available,
-      run: available
-        ? command.run
-        : async () => unmoved(unavailableReason ?? ""),
-    })
+    ({ names: [name, ...aliases], description, ...command }) =>
+      command.available
+        ? {
+            name,
+            aliases,
+            description,
+            argument: command.argument,
+            knownFlags: command.knownFlags,
+            available: command.listed !== false,
+            run: command.run,
+          }
+        : {
+            name,
+            aliases,
+            description,
+            unparsed: true,
+            available: false,
+            run: async () => unmoved(command.unavailableReason ?? ""),
+          }
   )
 }
 
-/** The palette's entries, each with its slash spelling beside it. */
+/**
+ * The palette's entries, each with its slash spelling beside it. What one
+ * answers shows beside the composer, as a typed command's answer does.
+ */
 export function toPaletteCommands(
-  commands: readonly WorkspaceCommand[]
+  commands: readonly WorkspaceCommand[],
+  surface: WorkspaceSurfaceRequests | undefined
 ): KeyboardCommand[] {
+  const answer = (notice: string, tone: "info" | "error") =>
+    surface?.request({ kind: "notice", notice, tone })
   return commands
     .filter((command) => command.palette)
     .map((command) => ({
@@ -646,6 +679,15 @@ export function toPaletteCommands(
       unavailableReason: command.available
         ? undefined
         : command.unavailableReason,
-      onRun: command.available ? () => command.run("", {}) : undefined,
+      onRun: command.available
+        ? () =>
+            command.run("", {}).then(
+              (result) => {
+                if (result && "notice" in result)
+                  answer(result.notice, result.tone ?? "info")
+              },
+              (error: unknown) => answer(errorText(error), "error")
+            )
+        : undefined,
     }))
 }
