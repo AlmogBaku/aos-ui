@@ -11,7 +11,6 @@ import {
   type ToolCallTiming,
 } from "@assistant-ui/core"
 
-import type { HgwSubagent } from "@harness-gw/sdk/protocol"
 import type { AcpApproval } from "@harness-gw/sdk"
 
 import {
@@ -19,6 +18,7 @@ import {
   readAosToolArtifact,
   withAosToolArtifact,
   type AosDiff,
+  type AosSubagent,
   type AosTerminal,
   type AosToolArtifact,
 } from "@/lib/tool-artifact"
@@ -56,10 +56,8 @@ export type ProjectedToolCall = {
   readonly startedAt?: number
   readonly completedAt?: number
   readonly durationMs?: number
-  /** The subagent this call spawned, patched by id. */
-  readonly subagent?: HgwSubagent
-  /** The subagent's own turns, keyed by its id. */
-  readonly messages?: readonly ProjectedMessage[]
+  /** The child Session this call spawned, as its parent last projected it. */
+  readonly child?: ProjectedChild
   /** The terminals the call's content names, as the projector last saw them. */
   readonly terminals?: readonly ProjectedTerminal[]
   /** The tool declares an MCP App view; once seen, the call keeps it. */
@@ -78,6 +76,15 @@ export type ToolCallPatch = {
   readonly rawOutput?: unknown
 }
 
+/**
+ * A child Session's card on the call that spawned it: the facts it reports,
+ * and its own transcript as the thread messages it projects to.
+ */
+export type ProjectedChild = {
+  readonly subagent: AosSubagent
+  readonly messages: readonly ThreadMessageLike[]
+}
+
 /** What `_meta.hgw` adds to a call beyond its ACP fields. */
 export type ToolMetaPatch = {
   readonly argsText?: string
@@ -85,7 +92,6 @@ export type ToolMetaPatch = {
   readonly startedAt?: number
   readonly completedAt?: number
   readonly durationMs?: number
-  readonly subagent?: HgwSubagent
   readonly app?: true
 }
 
@@ -143,25 +149,21 @@ export function latestAssistantId(messages: readonly ProjectedMessage[]) {
   return messages.findLast((message) => message.role === "assistant")?.id
 }
 
-/** The first call that matches, its subagents' calls included. */
-export function findCall(
+/** The first call of the turns that matches. */
+function findCall(
   messages: readonly ProjectedMessage[],
   matches: (call: ProjectedToolCall) => boolean
 ): ProjectedToolCall | undefined {
   for (const message of messages)
-    for (const part of message.parts) {
-      if (part.source !== "tool") continue
-      if (matches(part.call)) return part.call
-      const nested = findCall(part.call.messages ?? [], matches)
-      if (nested) return nested
-    }
+    for (const part of message.parts)
+      if (part.source === "tool" && matches(part.call)) return part.call
   return undefined
 }
 
 const byId = (toolCallId: string) => (call: ProjectedToolCall) =>
   call.toolCallId === toolCallId
 
-/** The turn that holds the call, at whatever depth a subagent nests it. */
+/** The turn that holds the call. */
 export function toolCallOwner(
   messages: readonly ProjectedMessage[],
   toolCallId: string
@@ -170,8 +172,8 @@ export function toolCallOwner(
 }
 
 /**
- * Passes every call of the turn, its subagents' calls included, through `fn`,
- * keeping the turn's identity when nothing changed.
+ * Passes every call of the turn through `fn`, keeping the turn's identity when
+ * nothing changed.
  */
 export function mapCalls(
   message: ProjectedMessage,
@@ -180,33 +182,12 @@ export function mapCalls(
   let changed = false
   const parts = message.parts.map((part) => {
     if (part.source !== "tool") return part
-    const children = part.call.messages
-    const nested = children?.map((child) => mapCalls(child, fn))
-    const call =
-      nested && nested.some((child, index) => child !== children![index])
-        ? { ...part.call, messages: nested }
-        : part.call
-    const next = fn(call)
+    const next = fn(part.call)
     if (next === part.call) return part
     changed = true
     return { ...part, call: next }
   })
   return changed ? { ...message, parts } : message
-}
-
-/** Upserts the subagent's own turn inside the call that spawned it. */
-export function withChildMessage(
-  call: ProjectedToolCall,
-  subagentId: string,
-  patch: (message: ProjectedMessage) => ProjectedMessage
-): ProjectedToolCall {
-  const messages = withMessage(
-    call.messages ?? [],
-    subagentId,
-    "assistant",
-    patch
-  )
-  return messages === call.messages ? call : { ...call, messages }
 }
 
 /**
@@ -333,15 +314,6 @@ export function countChunk(message: ProjectedMessage): ProjectedMessage {
     : { ...message, timing: { ...timing, chunks: timing.chunks + 1 } }
 }
 
-/** A later report restates only what changed about the same subagent. */
-function mergeSubagent(
-  current: HgwSubagent | undefined,
-  next: HgwSubagent | undefined
-) {
-  if (next === undefined) return current
-  return current?.id === next.id ? { ...current, ...next } : next
-}
-
 function mergeCall(
   current: ProjectedToolCall,
   patch: ToolCallPatch,
@@ -366,15 +338,11 @@ function mergeCall(
     startedAt: meta.startedAt ?? current.startedAt,
     completedAt: meta.completedAt ?? current.completedAt,
     durationMs: meta.durationMs ?? current.durationMs,
-    subagent: mergeSubagent(current.subagent, meta.subagent),
     ...(current.app || meta.app ? { app: true } : {}),
   }
 }
 
-/**
- * Creates the tool call on first sight, then patches it in place, at whatever
- * depth a subagent nests it.
- */
+/** Creates the tool call on first sight, then patches it in place. */
 export function patchToolCall(
   message: ProjectedMessage,
   patch: ToolCallPatch,
@@ -538,7 +506,7 @@ function toolArtifact(
     ...(locations.length === 0 ? {} : { locations }),
     ...(diffs.length === 0 ? {} : { diffs }),
     ...(terminals.length === 0 ? {} : { terminals }),
-    ...(call.subagent === undefined ? {} : { subagent: call.subagent }),
+    ...(call.child === undefined ? {} : { subagent: call.child.subagent }),
     ...(call.app ? { app: appState(call, result, turn) } : {}),
   }
   return Object.keys(artifact).length === 0 ? undefined : artifact
@@ -563,15 +531,21 @@ function toolTiming(call: ProjectedToolCall): ToolCallTiming | undefined {
   return end === undefined ? { startedAt } : { startedAt, completedAt: end }
 }
 
-/** A subagent's turn, as the nested thread message the call part carries. */
-function childMessage(message: ProjectedMessage, call: ProjectedToolCall) {
-  const status: MessageStatus =
-    call.status === "failed"
+/**
+ * A child Session's turn, as the nested thread message the call part carries.
+ * A turn its own projection left unsettled reads as its child's work does.
+ */
+function childMessage(like: ThreadMessageLike, child: ProjectedChild) {
+  const { status } = child.subagent
+  const settled: MessageStatus =
+    status === "failed" || status === "cancelled"
       ? { type: "incomplete", reason: "error" }
-      : call.status === "completed"
-        ? { type: "complete", reason: "stop" }
-        : { type: "running" }
-  return fromThreadMessageLike(toThreadMessage(message), message.id, status)
+      : status === "running" || status === "waiting"
+        ? { type: "running" }
+        : status === "unknown"
+          ? { type: "incomplete", reason: "other" }
+          : { type: "complete", reason: "stop" }
+  return fromThreadMessageLike(like, like.id ?? child.subagent.id, settled)
 }
 
 /** Why an App call cannot produce a result anymore, if it cannot. */
@@ -632,7 +606,7 @@ function toolPart(
   const result = call.rawOutput ?? contentResult(call.content)
   const artifact = toolArtifact(call, result, turn)
   const timing = toolTiming(call)
-  const messages = call.messages ?? []
+  const { child } = call
   return {
     type: "tool-call",
     toolCallId: call.toolCallId,
@@ -645,9 +619,13 @@ function toolPart(
       ? {}
       : { artifact: withAosToolArtifact(undefined, artifact) }),
     ...(timing === undefined ? {} : { timing }),
-    ...(messages.length === 0
+    ...(child === undefined || child.messages.length === 0
       ? {}
-      : { messages: messages.map((message) => childMessage(message, call)) }),
+      : {
+          messages: child.messages.map((message) =>
+            childMessage(message, child)
+          ),
+        }),
     ...(approval === undefined
       ? {}
       : {

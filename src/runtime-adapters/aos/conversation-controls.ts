@@ -1,5 +1,7 @@
 import type { ThreadRuntime } from "@assistant-ui/react"
 
+import type { HgwWorkspaceCapabilities } from "@harness-gw/sdk"
+
 import type { MessageRewind } from "@/components/assistant-ui/elements/thread.aui"
 
 /**
@@ -21,6 +23,17 @@ export const aosMessageRewind: MessageRewind = {
   runConfig(sourceUserId: string) {
     return { custom: { "aos.rewindSourceId": sourceUserId } }
   },
+}
+
+/**
+ * Edit and Retry where the Session reports it can rewind, read as steering is:
+ * what a rewind undoes is the runtime's, and one it cannot take fails. A
+ * Session that has not reported yet offers neither.
+ */
+export function sessionMessageRewind(
+  rewind: HgwWorkspaceCapabilities["interactions"]["rewind"] | undefined
+): MessageRewind {
+  return rewind?.status === "available" ? aosMessageRewind : false
 }
 
 /**

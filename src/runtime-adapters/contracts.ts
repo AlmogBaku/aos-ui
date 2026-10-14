@@ -367,6 +367,12 @@ export type HarnessRuntime = {
   workspace: WorkspaceAdapter
   /** Creates a provider-owned local draft without performing a remote write. */
   createSessionDraft?: (agentId: string) => Promise<string>
+  /**
+   * Present only where the runtime forks Sessions for this operator: a new
+   * Session of the same Agent holding the conversation so far, which the
+   * source Session keeps as it is.
+   */
+  forkSession?: (sessionId: string) => Promise<{ sessionId: string }>
   interactions?: RuntimeInteractionAdapter
   artifacts?: {
     resolver: ArtifactAdapter

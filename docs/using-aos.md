@@ -60,7 +60,7 @@ capacity.
 
 - A **Plan** belongs to the assistant message that produced it. Inspect it with that message.
 - **Todos** describe work in the current Session. Changing Sessions changes the Todo list.
-- A **Subagent** is a nested delegated run, not a primary Agent and not an item in the Agent-management catalog.
+- A **Subagent** is a nested delegated run, not a primary Agent and not an item in the Agent-management catalog. Where the runtime gives it a Session of its own, its card answers that Session's permission requests and questions, offers **Stop subagent** when the subagent can be stopped alone, and **Open session** shows its transcript to read only.
 
 ## Open published Artifacts
 

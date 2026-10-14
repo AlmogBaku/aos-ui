@@ -10,9 +10,8 @@ import type { z } from "zod"
 
 import {
   HGW_PLAN_ID,
-  HGW_STOP_REASONS,
   HgwArtifactDescriptorSchema,
-  HgwChunkMetaSchema,
+  HgwChildSessionMetaSchema,
   HgwMessageMetaSchema,
   HgwNoticeMetaSchema,
   HgwPlanMetaSchema,
@@ -30,6 +29,7 @@ import {
   type AosCompaction,
   type AosNotice,
 } from "@/lib/message-parts"
+import type { AosSubagent, AosSubagentApproval } from "@/lib/tool-artifact"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
 import {
@@ -38,7 +38,6 @@ import {
   appendToolContent,
   completeTiming,
   countChunk,
-  findCall,
   isContentBlock,
   isRecord,
   isToolCallContent,
@@ -52,10 +51,10 @@ import {
   terminalIds,
   toolCallOwner,
   toThreadMessage,
-  withChildMessage,
   withMessage,
   withStatus,
   type MessageRole,
+  type ProjectedChild,
   type ProjectedMessage,
   type ProjectedToolCall,
   type ToolCallPatch,
@@ -133,9 +132,56 @@ export type ProjectorState = {
    * collide when the transcript is cleared and notices arrive again.
    */
   readonly noticeCounter?: number
+  /** The child Sessions this one announced, by id. */
+  readonly children?: ReadonlyMap<string, ChildSession>
+  /** How deep in child Sessions this projection is: none for the Session's own. */
+  readonly depth?: number
+  /**
+   * What reached a child Session no report has announced yet, by its id: an
+   * older page announces its children on the page itself.
+   */
+  readonly orphans?: ReadonlyMap<string, readonly EarlyUpdate[]>
 }
 
 type EarlyUpdate = { readonly update: SessionUpdate; readonly meta: unknown }
+
+/**
+ * How far a child Session's work has got, from its latest state snapshot:
+ * `unknown` is a child nothing observes, so how it ended is unconfirmed.
+ */
+export type ChildStatus =
+  | "running"
+  | "waiting"
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "unknown"
+
+/**
+ * A child Session this one spawned, as ACP v2's `subagent_update` reports it on
+ * its parent and as its own updates, sent under its id, project it.
+ */
+export type ChildSession = {
+  readonly sessionId: string
+  /** The parent's call that spawned it, when the runtime names one. */
+  readonly toolCallId?: string
+  readonly title?: string
+  readonly description?: string
+  readonly status?: ChildStatus
+  /** What the child's own settled state counted: its own, never its parent's. */
+  readonly tokens?: number
+  /** Whether the child can be stopped alone; unset permits nothing. */
+  readonly cancellable: boolean
+  readonly model?: string
+  readonly filesRead?: readonly string[]
+  readonly filesWritten?: readonly string[]
+  readonly durationMs?: number
+  readonly summary?: string
+  /** 1 for this Session's own child, 2 for that child's, and so on. */
+  readonly depth: number
+  /** The child's own transcript, projected as any Session's is. */
+  readonly transcript: ProjectorState
+}
 
 export const initialProjectorState: ProjectorState = {
   messages: [],
@@ -209,6 +255,7 @@ function onMessage(
   // Re-keying the host keeps its place and the pending status it carries; the
   // run's own state settles it under the id the provider streamed.
   const renamed = host === undefined ? state : renameMessage(state, host, id)
+  const ownHost = host !== undefined && host === state.activeAssistantId
   const opened = fresh && state.execution.status === "running"
   // A run moves on from the turn it had open only when that turn was one a
   // resume reopened, so that turn has written all it will.
@@ -241,9 +288,7 @@ function onMessage(
       )
     )
   )
-  return opened || host !== undefined
-    ? { ...next, activeAssistantId: id }
-    : next
+  return opened || ownHost ? { ...next, activeAssistantId: id } : next
 }
 
 /** The role of the message `id` follows, or would follow once appended. */
@@ -293,22 +338,39 @@ const requestHostId = (turnId: string | undefined) =>
   `${REQUEST_HOST_PREFIX}${turnId ?? "current"}`
 
 /**
- * The hosted turn the run's own first turn takes over: one this projection
- * synthesized for a request and the run has written nothing into. A host
- * that already carries content is the run's turn, so it stays where it is.
+ * The hosted turn a fresh assistant turn takes over: one this projection
+ * synthesized and nothing has written into. While a run has one open, it is
+ * the run's own first turn that takes it over. Outside a run, it is the
+ * compaction the transcript ends on, which a replay places ahead of the reply
+ * to the prompt it follows, as the live run did. A host that already carries
+ * content is a turn of its own, so it stays where it is.
  */
 function emptyRequestHostId(state: ProjectorState): string | undefined {
-  const id = state.activeAssistantId
-  if (id === undefined || !id.startsWith(REQUEST_HOST_PREFIX)) return undefined
-  const host = state.messages.find((message) => message.id === id)
-  return host?.parts.every(isHostedStatus) ? id : undefined
+  const active = state.activeAssistantId
+  if (active !== undefined) return emptyHost(state, active, isHostedStatus)
+  const last = state.messages.at(-1)
+  return state.execution.status === "running" || last === undefined
+    ? undefined
+    : emptyHost(state, last.id, isCompaction)
 }
+
+function emptyHost(
+  state: ProjectorState,
+  id: string,
+  isHosted: (part: ProjectedMessage["parts"][number]) => boolean
+) {
+  if (!id.startsWith(REQUEST_HOST_PREFIX)) return undefined
+  const host = state.messages.find((message) => message.id === id)
+  return host?.parts.every(isHosted) ? id : undefined
+}
+
+const isCompaction = (part: ProjectedMessage["parts"][number]) =>
+  part.source === "data" && part.name === COMPACTION_DATA_PART_NAME
 
 /** A compaction or notice the host shows ahead of the run's turn moves with it. */
 const isHostedStatus = (part: ProjectedMessage["parts"][number]) =>
-  part.source === "data" &&
-  (part.name === COMPACTION_DATA_PART_NAME ||
-    part.name === NOTICE_DATA_PART_NAME)
+  isCompaction(part) ||
+  (part.source === "data" && part.name === NOTICE_DATA_PART_NAME)
 
 /**
  * A tool call belongs to the turn that already holds it: a provider settles a
@@ -329,12 +391,6 @@ function applyToolCall(
   const aos = parsed.success ? parsed.data : undefined
   const toolMeta = toolMetaPatch(aos)
   const owner = toolCallOwner(state.messages, patch.toolCallId)
-  // A subagent's call nests under the call that spawned it; one already
-  // projected is patched where it is, however the update attributes it.
-  if (!owner && aos?.subagentId !== undefined)
-    return applyChild(state, { update, meta }, aos, aos.messageId, (message) =>
-      patchToolCall(message, patch, toolMeta)
-    )
   const named =
     owner?.id ?? (aos ? aos.messageId : latestAssistantId(state.messages))
   if (named === undefined) return state
@@ -353,54 +409,339 @@ function toolMetaPatch(aos: ToolMeta | undefined): ToolMetaPatch {
     startedAt: epochOf(aos.startedAt),
     completedAt: epochOf(aos.completedAt),
     durationMs: aos.durationMs,
-    subagent: aos.subagent,
     ...(aos.app ? { app: true as const } : {}),
   }
 }
 
 const SUBAGENT_CALL_PREFIX = "aos-subagent-"
 
+/** The call a child Session's card sits on: its spawning call, or its own. */
+const childCallId = (child: ChildSession) =>
+  child.toolCallId ?? `${SUBAGENT_CALL_PREFIX}${child.sessionId}`
+
+/** ACP's state snapshot as the child's progress; an unknown state has none. */
+function childStatusOf(state: UpdatePayload): ChildStatus | undefined {
+  switch (state.state) {
+    case "running":
+      return "running"
+    case "requires_action":
+      return "waiting"
+    // Nothing observes the child: the gateway stops following one still at
+    // work when its parent's turn ends, so it may still run, or be done.
+    case "unknown":
+      return "unknown"
+    case "idle":
+      return state.stopReason === "cancelled"
+        ? "cancelled"
+        : state.stopReason === "error"
+          ? "failed"
+          : "completed"
+    default:
+      return undefined
+  }
+}
+
+/** The tokens a settled state counted, where it reports usage. */
+function tokensOf(state: UpdatePayload): number | undefined {
+  const usage = isRecord(state.usage) ? state.usage : undefined
+  return typeof usage?.totalTokens === "number" ? usage.totalTokens : undefined
+}
+
 /**
- * Applies what a subagent produced inside its own turn, under the call that
- * spawned it. A named spawning call not seen yet holds the update until it
- * appears; a subagent whose spawning call the stream never names gets one, so
- * its work still reads under a call rather than as the turn's own.
+ * A child's state snapshot: a concrete one replaces the last, and `null`
+ * leaves its progress unconfirmed. Its usage is the child's own.
  */
-function applyChild(
+function withChildState(child: ChildSession, state: unknown): ChildSession {
+  if (state === undefined) return child
+  if (!isRecord(state))
+    return state === null ? withoutKey(child, "status") : child
+  const status = childStatusOf(state)
+  const tokens = tokensOf(state)
+  return {
+    ...child,
+    ...(status === undefined ? {} : { status }),
+    ...(tokens === undefined ? {} : { tokens }),
+  }
+}
+
+/** ACP's patch of a display field: omitted keeps, `null` clears it. */
+function withText(
+  child: ChildSession,
+  key: "title" | "description",
+  next: unknown
+): ChildSession {
+  const value = textPatch(next)
+  if (value === undefined) return child
+  return value === null ? withoutKey(child, key) : { ...child, [key]: value }
+}
+
+/** The child with `transcript`, or itself when that is the one it has. */
+const withTranscript = (child: ChildSession, transcript: ProjectorState) =>
+  transcript === child.transcript ? child : { ...child, transcript }
+
+/**
+ * One report of a child Session on this one: the first for an id announces
+ * it, and each later one patches what it restates. Capabilities are replaced
+ * whole, and a child whose capabilities are unset permits nothing.
+ */
+function applyChildReport(
   state: ProjectorState,
-  pending: EarlyUpdate,
-  attribution: { subagentId?: string; parentToolCallId?: string },
-  hostId: string,
-  patch: (message: ProjectedMessage) => ProjectedMessage
+  update: UpdatePayload,
+  meta: unknown
 ): ProjectorState {
-  const { subagentId, parentToolCallId } = attribution
-  if (subagentId === undefined) return state
-  const spawn = findCall(state.messages, (call) =>
-    parentToolCallId === undefined
-      ? call.subagent?.id === subagentId
-      : call.toolCallId === parentToolCallId
+  const sessionId = text(update.sessionId)
+  if (sessionId === undefined) return state
+  const parsed = HgwChildSessionMetaSchema.safeParse(meta)
+  const aos = parsed.success ? parsed.data : undefined
+  const known = state.children?.get(sessionId)
+  const depth = (state.depth ?? 0) + 1
+  const base: ChildSession = known ?? {
+    sessionId,
+    cancellable: false,
+    depth,
+    transcript: { ...initialProjectorState, depth },
+  }
+  const toolCallId = base.toolCallId ?? aos?.toolCallId
+  const titled = withText(
+    withText(base, "title", update.title),
+    "description",
+    update.description
   )
-  if (!spawn && parentToolCallId !== undefined)
-    return holdEarly(state, parentToolCallId, pending)
-  const spawnId = spawn?.toolCallId ?? `${SUBAGENT_CALL_PREFIX}${subagentId}`
-  const hosted = spawn
-    ? state
-    : onMessage(state, hostId, "assistant", (message) =>
-        patchToolCall(
-          message,
-          { toolCallId: spawnId, name: "subagent", status: "in_progress" },
-          { subagent: { id: subagentId } }
-        )
-      )
-  const owner = toolCallOwner(hosted.messages, spawnId)
-  if (!owner) return state
-  return onMessage(hosted, owner.id, owner.role, (message) =>
-    mapCalls(message, (call) =>
-      call.toolCallId === spawnId
-        ? withChildMessage(call, subagentId, patch)
-        : call
+  const capabilities = update.capabilities
+  const next: ChildSession = withChildState(
+    {
+      ...titled,
+      ...(toolCallId === undefined ? {} : { toolCallId }),
+      cancellable:
+        capabilities === undefined
+          ? titled.cancellable
+          : isRecord(capabilities) && isRecord(capabilities.cancel),
+      ...(aos?.model === undefined ? {} : { model: aos.model }),
+      ...(aos?.filesRead === undefined ? {} : { filesRead: aos.filesRead }),
+      ...(aos?.filesWritten === undefined
+        ? {}
+        : { filesWritten: aos.filesWritten }),
+      ...(aos?.durationMs === undefined ? {} : { durationMs: aos.durationMs }),
+      ...(aos?.summary === undefined ? {} : { summary: aos.summary }),
+    },
+    update.state
+  )
+  const placed = known ? state : placeChild(state, next)
+  return stampChild(withChild(placed, next), sessionId)
+}
+
+/** The value without one of its optional keys. */
+function withoutKey<T extends object>(value: T, key: keyof T): T {
+  const copy = { ...value }
+  delete copy[key]
+  return copy
+}
+
+/**
+ * A child no call names gets one of its own, in the turn it was announced
+ * beside, so its card still reads under a call rather than as the turn's own.
+ */
+function placeChild(state: ProjectorState, child: ChildSession) {
+  if (child.toolCallId !== undefined) return state
+  const host =
+    activeAssistantId(state) ??
+    latestAssistantId(state.messages) ??
+    requestHostId(state.execution.turnId)
+  return onMessage(state, host, "assistant", (message) =>
+    patchToolCall(
+      message,
+      {
+        toolCallId: childCallId(child),
+        name: "subagent",
+        status: "in_progress",
+      },
+      {}
     )
   )
+}
+
+function withChild(state: ProjectorState, child: ChildSession): ProjectorState {
+  const children = new Map(state.children)
+  children.set(child.sessionId, child)
+  return { ...state, children }
+}
+
+const childViews = new WeakMap<ChildSession, ProjectedChild>()
+
+/** The card a child shows on its call, once per state of the child. */
+function childView(child: ChildSession): ProjectedChild {
+  const cached = childViews.get(child)
+  if (cached) return cached
+  const goal = child.title ?? child.description
+  // A request no turn of the child's transcript can hold reads on its card.
+  const approvals = unplacedApprovals(child.transcript).map(cardApproval)
+  const subagent: AosSubagent = {
+    id: child.sessionId,
+    childSessionId: child.sessionId,
+    depth: child.depth,
+    cancellable: child.cancellable,
+    ...(goal === undefined ? {} : { goal }),
+    ...(child.status === undefined ? {} : { status: child.status }),
+    ...(child.tokens === undefined ? {} : { tokens: child.tokens }),
+    ...(child.model === undefined ? {} : { model: child.model }),
+    ...(child.filesRead === undefined
+      ? {}
+      : { filesRead: [...child.filesRead] }),
+    ...(child.filesWritten === undefined
+      ? {}
+      : { filesWritten: [...child.filesWritten] }),
+    ...(child.durationMs === undefined ? {} : { durationMs: child.durationMs }),
+    ...(child.summary === undefined ? {} : { summary: child.summary }),
+    ...(approvals.length === 0 ? {} : { approvals }),
+  }
+  const view = { subagent, messages: toThreadMessages(child.transcript) }
+  childViews.set(child, view)
+  return view
+}
+
+/**
+ * Re-reads the child onto the call that shows it, so its card re-renders with
+ * it; a call this transcript has not seen yet takes it when it appears.
+ */
+function stampChild(state: ProjectorState, sessionId: string): ProjectorState {
+  const child = state.children?.get(sessionId)
+  if (!child) return state
+  const callId = childCallId(child)
+  const owner = toolCallOwner(state.messages, callId)
+  if (!owner) return state
+  const view = childView(child)
+  return withMessages(
+    state,
+    withMessage(state.messages, owner.id, owner.role, (message) =>
+      mapCalls(message, (call) =>
+        call.toolCallId === callId && call.child !== view
+          ? { ...call, child: view }
+          : call
+      )
+    )
+  )
+}
+
+/** The children whose spawning call this is, now that it is projected. */
+function stampChildrenOf(
+  state: ProjectorState,
+  toolCallId: string
+): ProjectorState {
+  let next = state
+  for (const child of state.children?.values() ?? [])
+    if (childCallId(child) === toolCallId)
+      next = stampChild(next, child.sessionId)
+  return next
+}
+
+/** The ids from this projection's own child down to `sessionId`, if it has it. */
+function childPath(
+  state: ProjectorState,
+  sessionId: string
+): readonly string[] | undefined {
+  if (state.children?.has(sessionId)) return [sessionId]
+  for (const child of state.children?.values() ?? []) {
+    const path = childPath(child.transcript, sessionId)
+    if (path) return [child.sessionId, ...path]
+  }
+  return undefined
+}
+
+/** Changes the child at the end of `path`, re-reading each card on the way. */
+function withinChild(
+  state: ProjectorState,
+  [sessionId, ...rest]: readonly string[],
+  change: (child: ChildSession) => ChildSession
+): ProjectorState {
+  const child =
+    sessionId === undefined ? undefined : state.children?.get(sessionId)
+  if (!child) return state
+  const next =
+    rest.length === 0
+      ? change(child)
+      : withTranscript(child, withinChild(child.transcript, rest, change))
+  return next === child
+    ? state
+    : stampChild(withChild(state, next), child.sessionId)
+}
+
+/** A child's own update, from its transcript to the card its state shows. */
+function applyOwnUpdate(
+  child: ChildSession,
+  update: SessionUpdate,
+  meta: unknown
+): ChildSession {
+  const stated =
+    update.sessionUpdate === "state_update"
+      ? withChildState(child, update)
+      : child
+  return withTranscript(stated, applyUpdate(child.transcript, update, meta))
+}
+
+/**
+ * Applies an update a child Session sent under its own id, a child's child
+ * included, wherever it sits below this Session. One no report has announced
+ * waits for the report that does.
+ */
+export function applyChildUpdate(
+  state: ProjectorState,
+  childSessionId: string,
+  update: SessionUpdate,
+  meta: unknown
+): ProjectorState {
+  const path = childPath(state, childSessionId)
+  if (!path) {
+    const orphans = new Map(state.orphans)
+    orphans.set(childSessionId, [
+      ...(orphans.get(childSessionId) ?? []),
+      { update, meta },
+    ])
+    return { ...state, orphans }
+  }
+  return withinChild(state, path, (child) =>
+    applyOwnUpdate(child, update, meta)
+  )
+}
+
+/** Applies what waited for a child the projection now knows. */
+function adoptOrphans(state: ProjectorState): ProjectorState {
+  if (!state.orphans) return state
+  let next: ProjectorState = state
+  for (const [sessionId, pending] of state.orphans) {
+    const path = childPath(next, sessionId)
+    if (!path) continue
+    const orphans = new Map(next.orphans)
+    orphans.delete(sessionId)
+    next = pending.reduce<ProjectorState>(
+      (adopted, { update, meta }) =>
+        withinChild(adopted, path, (child) =>
+          applyOwnUpdate(child, update, meta)
+        ),
+      { ...next, orphans: orphans.size === 0 ? undefined : orphans }
+    )
+  }
+  return next
+}
+
+/** Takes a child Session's current permission requests onto its transcript. */
+export function applyChildApprovals(
+  state: ProjectorState,
+  childSessionId: string,
+  approvals: readonly AcpApproval[]
+): ProjectorState {
+  const path = childPath(state, childSessionId)
+  if (!path) return state
+  return withinChild(state, path, (child) =>
+    withTranscript(child, applyApprovals(child.transcript, approvals))
+  )
+}
+
+/** Every child Session below this one, a child's own included. */
+export function childSessions(state: ProjectorState): readonly ChildSession[] {
+  return [...(state.children?.values() ?? [])].flatMap((child) => [
+    child,
+    ...childSessions(child.transcript),
+  ])
 }
 
 function holdEarly(
@@ -490,7 +831,11 @@ const compactionOf = (id: string) => (name: string, data: unknown) =>
 /**
  * A compaction reads where it happened: at first sight it takes its place
  * among the turn's parts, and every later report updates that one divider. A
- * cancelled one compacted nothing, so its divider leaves the turn.
+ * cancelled one compacted nothing, so its divider leaves the turn. One that
+ * comes before a turn's first part leads that turn: the run's own host, live,
+ * and outside a run, as a replay or an older page sends a stored one, a host
+ * of its own that the reply to the prompt before it takes over. That host is
+ * named for the compaction, so no two pages share it.
  */
 function applyCompaction(
   state: ProjectorState,
@@ -524,12 +869,14 @@ function applyCompaction(
     )
   const parsed = HgwTurnMetaSchema.safeParse(meta)
   const turnId = parsed.success ? parsed.data.turnId : state.execution.turnId
+  const last = state.messages.at(-1)
   const id =
     activeAssistantId(state) ??
     (state.execution.status === "running"
-      ? undefined
-      : latestAssistantId(state.messages)) ??
-    requestHostId(turnId)
+      ? requestHostId(turnId)
+      : last?.role === "assistant"
+        ? last.id
+        : requestHostId(compactionId))
   return onMessage(state, id, "assistant", (message) =>
     appendData(message, COMPACTION_DATA_PART_NAME, data)
   )
@@ -608,7 +955,7 @@ function applyNotice(
   )
 }
 
-/** The vendor stop reasons carry the failure the run reported. */
+/** A failed or unobserved run's `_meta.hgw` carries the failure it reported. */
 function errorFrom(aos: TurnFailure | undefined): TurnFailure | undefined {
   const error: TurnFailure = {
     ...(aos?.code === undefined ? {} : { code: aos.code }),
@@ -668,17 +1015,20 @@ const STOP_INCOMPLETE = new Map<string, IncompleteReason>([
   ["max_turn_requests", "other"],
 ])
 
+/**
+ * Settles the run. `unobserved` is a turn nothing can observe any longer: it
+ * may have failed, so it settles as one that did, offering Send and no Stop,
+ * until a recover streams it on or its deadline ends it.
+ */
 function applyIdle(
   state: ProjectorState,
   carried: { turnId?: string },
   stopReason: string | undefined,
-  aos: (TurnFailure & { at?: string }) | undefined
+  aos: (TurnFailure & { at?: string }) | undefined,
+  unobserved = false
 ): ProjectorState {
   const reported = reportedFailure(state, carried.turnId)
-  const failed =
-    reported !== undefined ||
-    stopReason === HGW_STOP_REASONS.error ||
-    stopReason === HGW_STOP_REASONS.uncertain
+  const failed = unobserved || reported !== undefined || stopReason === "error"
   const error = reported ?? (failed ? errorFrom(aos) : undefined)
   const execution: ProjectorExecution = {
     status: failed ? "failed" : "idle",
@@ -831,6 +1181,7 @@ function applyState(
       activeAssistantId: id,
     }
   }
+  if (next === "unknown") return applyIdle(state, carried, undefined, aos, true)
   if (next !== "idle") return state
   return applyIdle(state, carried, text(update.stopReason), aos)
 }
@@ -1003,18 +1354,12 @@ function linkedArtifact(block: ContentBlock) {
 
 function applyChunk(
   state: ProjectorState,
-  update: SessionUpdate & UpdatePayload,
-  meta: unknown
+  update: SessionUpdate & UpdatePayload
 ): ProjectorState {
   const kind = update.sessionUpdate
   const named = text(update.messageId)
   const block = update.content
   if (named === undefined || !isContentBlock(block)) return state
-  const aos = HgwChunkMetaSchema.safeParse(meta)
-  if (aos.success && aos.data.subagentId !== undefined)
-    return applyChild(state, { update, meta }, aos.data, named, (message) =>
-      appendBlock(message, sourceOf(kind), block)
-    )
   const artifact = linkedArtifact(block)
   return onMessage(state, named, roleOf(kind), (message) =>
     artifact === undefined
@@ -1064,7 +1409,10 @@ function applyToolContent(
   )
 }
 
-/** A call's update also re-reads its terminals and releases what waited. */
+/**
+ * A call's update also re-reads its terminals and the child it spawned, and
+ * releases what waited.
+ */
 function afterToolCall(
   state: ProjectorState,
   update: UpdatePayload
@@ -1075,7 +1423,7 @@ function afterToolCall(
     state,
     (call) => call.toolCallId === toolCallId
   )
-  return flushEarly(stamped, toolCallId)
+  return flushEarly(stampChildrenOf(stamped, toolCallId), toolCallId)
 }
 
 function applyTitle(
@@ -1089,6 +1437,15 @@ function applyTitle(
 
 /** `meta` is the update's `_meta.hgw`; unknown kinds and payloads are ignored. */
 export function applyUpdate(
+  state: ProjectorState,
+  update: SessionUpdate,
+  meta: unknown
+): ProjectorState {
+  const next = settleKind(state, update, meta)
+  return update.sessionUpdate === "subagent_update" ? adoptOrphans(next) : next
+}
+
+function settleKind(
   state: ProjectorState,
   update: SessionUpdate,
   meta: unknown
@@ -1115,7 +1472,7 @@ function applyKind(
     case "user_message_chunk":
     case "agent_message_chunk":
     case "agent_thought_chunk":
-      return applyChunk(state, update, meta)
+      return applyChunk(state, update)
     case "tool_call_update":
       return afterToolCall(applyToolCall(state, update, meta), update)
     case "tool_call_content_chunk":
@@ -1131,6 +1488,8 @@ function applyKind(
       return applyState(state, update, meta)
     case "plan_update":
       return applyPlan(state, update, meta)
+    case "subagent_update":
+      return applyChildReport(state, update, meta)
     // Usage belongs to the composer's Session projection, not the transcript.
     case "session_info_update":
       return applyTitle(state, update)
@@ -1202,14 +1561,16 @@ export function replacedTurns(state: ProjectorState): ReadonlySet<string> {
 /**
  * Drops the turns a replay replaces. The replay's parts arrive as chunks, so
  * the ones already projected would be doubled rather than replaced; the
- * Session's own state stays, because the replay restates that itself.
+ * Session's own state stays, because the replay restates that itself. The
+ * replay announces every child Session again, with its whole transcript.
  */
 export function clearTranscript(
   state: ProjectorState,
   replaced = replacedTurns(state)
 ): ProjectorState {
   const kept = state.messages.filter((message) => !replaced.has(message.id))
-  const bare = !state.terminals && !state.early
+  const bare =
+    !state.terminals && !state.early && !state.children && !state.orphans
   if (kept.length === state.messages.length && bare) return state
   return {
     ...state,
@@ -1217,23 +1578,34 @@ export function clearTranscript(
     activeAssistantId: undefined,
     terminals: undefined,
     early: undefined,
+    children: undefined,
+    orphans: undefined,
   }
 }
 
 /**
- * Puts an older page's turns ahead of the transcript. A turn that landed
- * between two reads can sit on both pages, so a turn the thread already holds
- * keeps its current copy and the page's is skipped.
+ * Puts an older page's turns ahead of the transcript, with the child Sessions
+ * the page announced. A turn that landed between two reads can sit on both
+ * pages, so a turn the thread already holds keeps its current copy and the
+ * page's is skipped, as does a child it already knows.
  */
 export function prependMessages(
   state: ProjectorState,
-  older: readonly ProjectedMessage[]
+  older: ProjectorState
 ): ProjectorState {
   const known = new Set(state.messages.map((message) => message.id))
-  const unseen = older.filter((message) => !known.has(message.id))
-  return unseen.length === 0
-    ? state
-    : withMessages(state, [...unseen, ...state.messages])
+  const unseen = older.messages.filter((message) => !known.has(message.id))
+  const adopted = [...(older.children?.values() ?? [])].filter(
+    (child) => !state.children?.has(child.sessionId)
+  )
+  if (unseen.length === 0 && adopted.length === 0) return state
+  const prepended = withMessages(state, [...unseen, ...state.messages])
+  return adoptOrphans(
+    adopted.reduce<ProjectorState>(
+      (next, child) => stampChild(withChild(next, child), child.sessionId),
+      prepended
+    )
+  )
 }
 
 /**
@@ -1286,7 +1658,7 @@ export function failSession(
   state: ProjectorState,
   error: TurnFailure
 ): ProjectorState {
-  const ended = applyIdle(state, {}, HGW_STOP_REASONS.error, error)
+  const ended = applyIdle(state, {}, "error", error)
   return activeAssistantId(state) === undefined
     ? failLatestTurn(ended, error)
     : ended
@@ -1295,7 +1667,7 @@ export function failSession(
 /**
  * Whether the update between the two states ended a live run in a failure
  * before it wrote a reply, so no turn of its own shows the failure. A settled
- * state the gateway restates, such as an uncertain one, ends no run.
+ * state the gateway restates, such as an unknown one, ends no run.
  */
 export function failedWithoutReply(
   before: ProjectorState,
@@ -1365,6 +1737,40 @@ function approvalsByTurn(state: ProjectorState) {
       byTurn.set(turn, [...(byTurn.get(turn) ?? []), approval])
   }
   return byTurn
+}
+
+/**
+ * An approval as a card reads it, asking with the explanation when the
+ * provider gives one, beside the operation it asks for.
+ */
+function cardApproval({
+  id,
+  action,
+  description,
+  options,
+  optionId,
+  approved,
+  resolution,
+}: AcpApproval): AosSubagentApproval {
+  return {
+    id,
+    action,
+    prompt: description ?? action,
+    options: options.map((option) => ({ ...option })),
+    ...(optionId === undefined ? {} : { optionId }),
+    ...(approved === undefined ? {} : { approved }),
+    ...(resolution === undefined ? {} : { resolution }),
+  }
+}
+
+/** The approvals no turn of the transcript holds, which no turn shows. */
+function unplacedApprovals(state: ProjectorState): readonly AcpApproval[] {
+  const placed = new Set(
+    [...approvalsByTurn(state).values()].flatMap((approvals) =>
+      approvals.map(({ id }) => id)
+    )
+  )
+  return (state.approvals ?? []).filter(({ id }) => !placed.has(id))
 }
 
 export function toThreadMessages(state: ProjectorState): ThreadMessageLike[] {

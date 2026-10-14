@@ -95,9 +95,9 @@ describe("run error messages", () => {
   it("keeps the gateway description for an unknown or absent run error code", async () => {
     const english = await getDictionary("en")
 
-    expect(runErrorMessage(english, "HGW_NOT_A_CODE", "Gateway said this")).toBe(
-      "Gateway said this"
-    )
+    expect(
+      runErrorMessage(english, "HGW_NOT_A_CODE", "Gateway said this")
+    ).toBe("Gateway said this")
     expect(runErrorMessage(english, undefined, "Gateway said this")).toBe(
       "Gateway said this"
     )

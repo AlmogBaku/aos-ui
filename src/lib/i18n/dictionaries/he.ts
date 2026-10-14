@@ -119,6 +119,8 @@ export const he = {
     markUnread: "סימון כלא נקרא",
     archiveSession: "העברה לארכיון",
     unarchiveSession: "הוצאה מהארכיון",
+    forkSession: "פיצול",
+    forkSessionCommand: "פיצול השיחה הזו לשיחה חדשה",
     deleteSession: "מחיקה",
     deleteSessionTitle: "למחוק את השיחה?",
     deleteSessionDescription:

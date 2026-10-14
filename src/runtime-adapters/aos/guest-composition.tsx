@@ -29,6 +29,7 @@ import {
 } from "@/components/artifacts"
 import {
   Thread,
+  type MessageRewind,
   type ThreadComponents,
 } from "@/components/assistant-ui/elements/thread.aui"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
@@ -78,9 +79,9 @@ import {
 import { AosArtifactAdapter } from "./aos-artifacts"
 import { AosMcpAppAdapter } from "./aos-mcp-apps"
 import {
-  aosMessageRewind,
   applyComposerPrefill,
   rewindSource,
+  sessionMessageRewind,
 } from "./conversation-controls"
 import { createGatewayClient } from "./gateway-client"
 import {
@@ -180,6 +181,7 @@ function GuestArtifactShell({
   logoUrl,
   composerFeatures,
   composer,
+  messageRewind,
   connectionStatus,
   sessionStatus,
 }: {
@@ -194,6 +196,7 @@ function GuestArtifactShell({
   logoUrl: string
   composerFeatures: ComposerFeatureViewModel
   composer: ThreadComponents["Composer"]
+  messageRewind: MessageRewind
   connectionStatus?: ConnectionNotice
   sessionStatus?: SessionNotice
 }) {
@@ -224,6 +227,7 @@ function GuestArtifactShell({
           logoUrl={logoUrl}
           composerFeatures={composerFeatures}
           composer={composer}
+          messageRewind={messageRewind}
           connectionStatus={connectionStatus}
           sessionStatus={sessionStatus}
         />
@@ -240,6 +244,7 @@ function GuestConversationShell({
   logoUrl,
   composerFeatures,
   composer,
+  messageRewind,
   connectionStatus,
   sessionStatus,
 }: {
@@ -250,6 +255,7 @@ function GuestConversationShell({
   logoUrl: string
   composerFeatures: ComposerFeatureViewModel
   composer: ThreadComponents["Composer"]
+  messageRewind: MessageRewind
   connectionStatus?: ConnectionNotice
   sessionStatus?: SessionNotice
 }) {
@@ -304,7 +310,7 @@ function GuestConversationShell({
               ...threadLabels[locale],
               ...(message ? { welcome: message } : {}),
             }}
-            messageRewind={aosMessageRewind}
+            messageRewind={messageRewind}
             components={{
               ToolFallback: AosToolPresentation,
               Composer: composer,
@@ -482,6 +488,8 @@ function ReadyGuestAosSurface({
     stageAttachments,
     // An invitation exposes one conversation, so no turn queues behind a run.
     enableMessageQueue: false,
+    // A guest is shown nothing of a child Session and acts for none.
+    childSessionControls: false,
     adapters: { attachments, ...mediaAdapters },
     messageRewind: rewindSource,
     onComposerPrefill,
@@ -541,6 +549,9 @@ function ReadyGuestAosSurface({
               logoUrl={logoUrl}
               composerFeatures={composerFeatures}
               composer={composer}
+              messageRewind={sessionMessageRewind(
+                capabilities?.interactions.rewind
+              )}
               connectionStatus={connectionOutage}
               sessionStatus={sessionNotice}
             />

@@ -24,7 +24,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
-import { useLocation } from "react-router"
 
 import {
   Thread,
@@ -33,18 +32,12 @@ import {
 import type { ComposerLocalCommand } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
-import { workspaceHref } from "@/lib/workspace-routing"
 import {
   McpAppPipPanel,
   useMcpAppPip,
 } from "@/components/mcp-apps/mcp-app-card"
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
-import {
-  AosToolPresentation,
-  ToolUiLocaleProvider,
-  ToolUiSessionLinkProvider,
-  type ToolUiSessionLinkResolver,
-} from "@/components/tool-ui"
+import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
@@ -500,7 +493,6 @@ function WorkspaceContent({
   composer?: ThreadComponents["Composer"]
 }) {
   const { assistantRuntime: runtime, workspace } = bundle
-  const location = useLocation()
   const {
     environmentLabel,
     activityCoverage,
@@ -565,6 +557,7 @@ function WorkspaceContent({
     unarchiveSession,
     deleteSession,
     createSession,
+    forkSession,
     openAgentBuilder,
     discardDraft,
     hideAgent,
@@ -607,35 +600,61 @@ function WorkspaceContent({
     subscribeThread,
     () => runtime.thread.getState().messages.length === 0
   )
-  const localCommands = useMemo<readonly ComposerLocalCommand[] | undefined>(
-    () =>
-      selectedAgentId && !selectedAgentIsDraft
-        ? [
-            {
-              name: "new",
-              description: dictionary.actions.newSessionCommand,
-              available: !threadIsEmpty,
-              run: async (args) => {
-                try {
-                  if (!threadIsEmpty) await createSession(selectedAgentId)
-                  if (args) runtime.thread.composer.setText(args)
-                } catch (reason) {
-                  setActionError(toError(reason))
-                }
-              },
-            },
-          ]
-        : undefined,
-    [
-      createSession,
-      dictionary,
-      runtime,
-      selectedAgentId,
-      selectedAgentIsDraft,
-      setActionError,
-      threadIsEmpty,
+  // `/fork` and `/branch` are the composer's spelling of the Fork action, run
+  // here for the same reason: the fork opens as the Session in view, and no
+  // turn is sent. ACP's fork takes no title, so a name typed after the command
+  // names the fork as Rename does; one it cannot take leaves the fork as it
+  // is. A Session not created yet has nothing to fork.
+  const forksSessions = Boolean(bundle.forkSession)
+  const localCommands = useMemo<
+    readonly ComposerLocalCommand[] | undefined
+  >(() => {
+    if (!selectedAgentId || selectedAgentIsDraft) return undefined
+    const fork = async (title: string) => {
+      if (!visibleThreadId) return
+      try {
+        const forked = await forkSession(visibleThreadId)
+        if (title) await renameSession(forked, title)
+      } catch (reason) {
+        setActionError(toError(reason))
+      }
+    }
+    return [
+      {
+        name: "new",
+        description: dictionary.actions.newSessionCommand,
+        available: !threadIsEmpty,
+        run: async (args) => {
+          try {
+            if (!threadIsEmpty) await createSession(selectedAgentId)
+            if (args) runtime.thread.composer.setText(args)
+          } catch (reason) {
+            setActionError(toError(reason))
+          }
+        },
+      },
+      ...(forksSessions
+        ? ["fork", "branch"].map((name) => ({
+            name,
+            description: dictionary.actions.forkSessionCommand,
+            available: Boolean(visibleThreadId),
+            run: fork,
+          }))
+        : []),
     ]
-  )
+  }, [
+    createSession,
+    dictionary,
+    forkSession,
+    forksSessions,
+    renameSession,
+    runtime,
+    selectedAgentId,
+    selectedAgentIsDraft,
+    setActionError,
+    threadIsEmpty,
+    visibleThreadId,
+  ])
   const threadComposerFeatures = useMemo(
     () => ({ ...composerFeatures, localCommands }),
     [composerFeatures, localCommands]
@@ -676,29 +695,6 @@ function WorkspaceContent({
     onOpenAgent: selectAgent,
     onActionError: (reason) => setActionError(toError(reason)),
   })
-
-  // A subagent's child Session opens in place when the catalog knows its Agent.
-  // The resolver follows the URL text, not the router's location object, which
-  // is replaced by navigations that leave the URL as it was.
-  const currentPath = `${location.pathname}${location.search}${location.hash}`
-  const toolSessionLink: ToolUiSessionLinkResolver = (sessionId) => {
-    const agentId = sessions.find(
-      (session) => session.sessionId === sessionId
-    )?.agentId
-    if (!agentId) return undefined
-    return {
-      href: workspaceHref(`${window.location.origin}${currentPath}`, {
-        agentId,
-        sessionId,
-      }),
-      open: () => {
-        setPreferredAgentId(agentId)
-        openSession(sessionId, agentId).catch((reason: unknown) =>
-          setActionError(toError(reason))
-        )
-      },
-    }
-  }
 
   return (
     <AssistantRuntimeProvider runtime={runtime} config={assistantConfig}>
@@ -749,6 +745,7 @@ function WorkspaceContent({
         onSetSessionUnread={setSessionUnread}
         onArchiveSession={archiveSession}
         onUnarchiveSession={unarchiveSession}
+        onForkSession={bundle.forkSession ? forkSession : undefined}
         onDeleteSession={deleteSession}
         sessionActions={sessionActions}
         onSearchSessions={workspace.searchSessions}
@@ -792,30 +789,28 @@ function WorkspaceContent({
               </div>
             ) : selectedAgent && conversationThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
-                <ToolUiSessionLinkProvider sessionLink={toolSessionLink}>
-                  {/* A reset key, not a React key: a key would remount the
-                      Thread on every switch and lose its composer state. */}
-                  <LazyVisualBoundary
-                    resetKey={conversationThreadId}
-                    fallback={
-                      <p
-                        className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
-                        role="alert"
-                      >
-                        {workspaceCopy[locale].sessionUnavailable}
-                      </p>
-                    }
-                  >
-                    <Thread
-                      autoFocus={false}
-                      direction={getLocaleDirection(locale)}
-                      labels={threadLabels[locale]}
-                      composerFeatures={threadComposerFeatures}
-                      messageRewind={bundle.messageRewind}
-                      components={activeThreadComponents}
-                    />
-                  </LazyVisualBoundary>
-                </ToolUiSessionLinkProvider>
+                {/* A reset key, not a React key: a key would remount the
+                    Thread on every switch and lose its composer state. */}
+                <LazyVisualBoundary
+                  resetKey={conversationThreadId}
+                  fallback={
+                    <p
+                      className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
+                      role="alert"
+                    >
+                      {workspaceCopy[locale].sessionUnavailable}
+                    </p>
+                  }
+                >
+                  <Thread
+                    autoFocus={false}
+                    direction={getLocaleDirection(locale)}
+                    labels={threadLabels[locale]}
+                    composerFeatures={threadComposerFeatures}
+                    messageRewind={bundle.messageRewind}
+                    components={activeThreadComponents}
+                  />
+                </LazyVisualBoundary>
               </WorkspaceThreadChromeContext.Provider>
             ) : (
               <NoAgentEmpty

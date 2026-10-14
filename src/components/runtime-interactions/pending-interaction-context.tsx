@@ -29,6 +29,11 @@ export function PendingInteractionProvider({
   )
 }
 
+/** The selected runtime's interaction adapter, for a view that asks beside it. */
+export function useRuntimeInteractions() {
+  return useContext(PendingInteractionContext)
+}
+
 /**
  * Whether the selected runtime raises its questions out of band, so a question
  * tool call is a transcript record the operator answers beside the composer

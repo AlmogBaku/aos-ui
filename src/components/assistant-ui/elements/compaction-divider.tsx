@@ -1,6 +1,9 @@
 "use client"
 
-import { makeAssistantDataUI } from "@assistant-ui/react"
+import {
+  makeAssistantDataUI,
+  TextMessagePartProvider,
+} from "@assistant-ui/react"
 import { useState, type ReactNode } from "react"
 
 import { useToolUiLocale } from "@/components/tool-ui/locale"
@@ -19,6 +22,7 @@ import {
 import { collapsePanel, ShimmerLabel } from "@/lib/surfaces"
 import { cn } from "@/lib/utils"
 import { DisclosureChevron } from "./disclosure-chevron"
+import { MarkdownText } from "./markdown-text"
 
 const DIVIDER =
   "my-3 flex w-full items-center gap-3 text-xs leading-4 text-muted-foreground"
@@ -36,7 +40,8 @@ function Divider({ children }: { children: ReactNode }) {
 /**
  * Compaction is the runtime tidying the Session, not the Agent's work, so it
  * reads as a quiet divider between the turns it separates, outside any fold.
- * Its summary stays one disclosure away; a failure is AOS speaking.
+ * Its summary stays one disclosure away, as the Markdown the runtime wrote it
+ * in, drawn as Agent text is; a failure is AOS speaking.
  */
 export function CompactionDivider({ data }: { data: unknown }) {
   const { locale } = useToolUiLocale()
@@ -82,12 +87,11 @@ export function CompactionDivider({ data }: { data: unknown }) {
         </CollapsibleTrigger>
       </Divider>
       <CollapsibleContent className={cn(collapsePanel, "outline-none")}>
-        <p
-          dir="auto"
-          className="mx-2 mb-3 text-sm whitespace-pre-wrap text-muted-foreground"
-        >
-          {summary}
-        </p>
+        <div dir="auto" className="mx-2 mb-3 text-muted-foreground">
+          <TextMessagePartProvider text={summary}>
+            <MarkdownText smooth={false} />
+          </TextMessagePartProvider>
+        </div>
       </CollapsibleContent>
     </Collapsible>
   )

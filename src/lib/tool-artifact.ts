@@ -49,6 +49,27 @@ const terminalSchema = z.object({
   truncated: z.boolean().optional(),
 })
 
+/**
+ * A permission request a subagent's child Session asked where no turn of its
+ * transcript can hold it, as Assistant UI reads an approval, with the
+ * operation it asks for.
+ */
+const subagentApprovalSchema = z.object({
+  id: z.string(),
+  action: z.string(),
+  prompt: z.string(),
+  options: z.array(
+    z.object({ id: z.string(), kind: z.string(), label: z.string().optional() })
+  ),
+  optionId: z.string().optional(),
+  approved: z.boolean().optional(),
+  resolution: z.enum(["cancelled", "expired"]).optional(),
+})
+
+/**
+ * A subagent's card facts: its own child Session's, where its runtime gives it
+ * one. `cancellable` says the child can be stopped alone.
+ */
 const subagentSchema = z.object({
   id: z.string(),
   goal: z.string().optional(),
@@ -60,6 +81,9 @@ const subagentSchema = z.object({
   filesWritten: z.array(z.string()).optional(),
   durationMs: z.number().optional(),
   childSessionId: z.string().optional(),
+  summary: z.string().optional(),
+  cancellable: z.boolean().optional(),
+  approvals: z.array(subagentApprovalSchema).optional(),
 })
 
 /**
@@ -88,6 +112,7 @@ export type AosDiffChange = z.infer<typeof diffChangeSchema>
 export type AosDiff = z.infer<typeof diffSchema>
 export type AosTerminal = z.infer<typeof terminalSchema>
 export type AosSubagent = z.infer<typeof subagentSchema>
+export type AosSubagentApproval = z.infer<typeof subagentApprovalSchema>
 export type AosMcpApp = z.infer<typeof mcpAppSchema>
 export type AosToolArtifact = z.infer<typeof toolArtifactSchema>
 

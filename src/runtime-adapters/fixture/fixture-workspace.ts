@@ -390,7 +390,13 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   /** The preview performs every Session action the workspace offers. */
   async sessionActionCapabilities() {
-    return { rename: true, archive: true, delete: true, pin: true, unread: true }
+    return {
+      rename: true,
+      archive: true,
+      delete: true,
+      pin: true,
+      unread: true,
+    }
   }
 
   /**

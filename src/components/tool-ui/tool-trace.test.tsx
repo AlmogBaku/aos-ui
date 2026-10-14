@@ -1,6 +1,5 @@
 import {
   cleanup,
-  fireEvent,
   render,
   screen,
   waitFor,
@@ -10,9 +9,25 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  fromThreadMessageLike,
+  type ThreadMessage,
+  type ThreadMessageLike,
+} from "@assistant-ui/react"
+
+import { LocalThread } from "@/components/assistant-ui/elements/thread.aui.test-helpers"
+import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
+import type {
+  RuntimeInteractionAdapter,
+  RuntimeQuestionRequest,
+} from "@/runtime-adapters/contracts"
+import { withAosToolArtifact, type AosSubagent } from "@/lib/tool-artifact"
+
+import type { ChildSessionControls } from "@/runtime-adapters/child-sessions"
+
+import { ChildSessionControlsProvider } from "./child-session-controls"
+import {
   AosToolPresentation,
   ToolUiLocaleProvider,
-  ToolUiSessionLinkProvider,
   isAosRichTool,
 } from "./index"
 import { toolPart } from "./tool-part.test-helpers"
@@ -290,24 +305,19 @@ describe("subagents", () => {
       "Wrote 1 file",
     ])
       expect(screen.getByText(fact)).toBeInTheDocument()
-    expect(screen.queryByRole("link")).toBeNull()
   })
 
-  it("links to the child Session where the surface can open one", async () => {
-    const open = vi.fn()
+  // The summary used to be dropped on the way to the card.
+  it("shows the summary its child Session reports", async () => {
     render(
-      <ToolUiSessionLinkProvider
-        sessionLink={(id) => ({ href: `/agents/a/${id}`, open })}
-      >
-        <AosToolPresentation {...subagentPart} />
-      </ToolUiSessionLinkProvider>
+      <AosToolPresentation
+        {...toolPart(
+          { toolName: "spawn_agent" },
+          { subagent: { ...subagent, summary: "The tiers match the page." } }
+        )}
+      />
     )
-    const link = await screen.findByRole("link", { name: "Open session" })
-    expect(link).toHaveAttribute("href", "/agents/a/session-child")
-    fireEvent.click(link)
-    expect(open).toHaveBeenCalledTimes(1)
-    fireEvent.click(link, { ctrlKey: true })
-    expect(open).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText("The tiers match the page.")).toBeVisible()
   })
 
   it("keeps a failed subagent's status rather than a bare error", async () => {
@@ -329,15 +339,284 @@ describe("subagents", () => {
   it("localizes the subagent facts in Hebrew", async () => {
     render(
       <ToolUiLocaleProvider locale="he">
-        <ToolUiSessionLinkProvider
-          sessionLink={(id) => ({ href: `/s/${id}`, open: () => {} })}
-        >
-          <AosToolPresentation {...subagentPart} />
-        </ToolUiSessionLinkProvider>
+        <AosToolPresentation {...subagentPart} />
       </ToolUiLocaleProvider>
     )
     expect(await screen.findByText("עומק 1")).toBeInTheDocument()
     expect(screen.getByText("כתב קובץ אחד")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "פתיחת שיחה" })).toBeVisible()
+    expect(screen.getByRole("button", { name: "פתיחת שיחה" })).toBeVisible()
+  })
+
+  describe("over its child Session", () => {
+    const CHILD_ID = "session-child"
+    const running: AosSubagent = {
+      ...subagent,
+      status: "running",
+      cancellable: true,
+    }
+    const childTurn = (
+      content: ThreadMessageLike["content"],
+      id = "child-answer"
+    ): ThreadMessage =>
+      fromThreadMessageLike({ id, role: "assistant", content }, id, {
+        type: "running",
+      })
+    /** A thread whose one turn spawned the child, with its transcript nested. */
+    const threadWith = (
+      card: AosSubagent,
+      transcript: readonly ThreadMessage[]
+    ): ThreadMessageLike[] => [
+      { id: "u1", role: "user", content: [{ type: "text", text: "Check" }] },
+      {
+        id: "a1",
+        role: "assistant",
+        status: { type: "running" },
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "spawn",
+            toolName: "delegate_task",
+            args: { task: "Check tiers" },
+            argsText: "{}",
+            artifact: withAosToolArtifact(undefined, { subagent: card }),
+            messages: transcript,
+          },
+        ],
+      },
+    ]
+    const controls = () => ({
+      respondToApproval: vi.fn<ChildSessionControls["respondToApproval"]>(
+        async () => {}
+      ),
+      cancel: vi.fn(),
+    })
+
+    it("stops a child that offers to be stopped alone, and offers no Stop otherwise", async () => {
+      const user = userEvent.setup()
+      const child = controls()
+      const { rerender } = render(
+        <ChildSessionControlsProvider controls={child}>
+          <LocalThread
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith(running, [])}
+          />
+        </ChildSessionControlsProvider>
+      )
+
+      await user.click(
+        await screen.findByRole("button", { name: "Stop subagent" })
+      )
+      expect(child.cancel).toHaveBeenCalledExactlyOnceWith(CHILD_ID)
+
+      rerender(
+        <ChildSessionControlsProvider controls={child}>
+          <LocalThread
+            key="settled"
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith({ ...running, cancellable: false }, [])}
+          />
+        </ChildSessionControlsProvider>
+      )
+      await screen.findByText("Check the pricing tiers")
+      expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
+    })
+
+    /** A call in the child's transcript that asks a permission. */
+    const asking = (toolCallId: string, prompt: string) =>
+      ({
+        type: "tool-call",
+        toolCallId,
+        toolName: "bash",
+        args: { command: "rm -rf build" },
+        argsText: "{}",
+        approval: {
+          id: "child-permission",
+          prompt,
+          options: [
+            { id: "once", kind: "allow-once" },
+            { id: "deny", kind: "reject-once" },
+          ],
+        },
+      }) as const
+
+    // The child's own child asks under the same request id, and each answer
+    // goes to the Session its request came from.
+    // A child the gateway no longer follows may still be at work, or done:
+    // the card says neither, and offers no Stop it could not confirm.
+    it("says a child no longer followed is unconfirmed, and offers no Stop", async () => {
+      render(
+        <ChildSessionControlsProvider controls={controls()}>
+          <LocalThread
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith({ ...running, status: "unknown" }, [])}
+          />
+        </ChildSessionControlsProvider>
+      )
+
+      expect(await screen.findByText("Status unavailable")).toBeVisible()
+      expect(screen.queryByText("Running")).toBeNull()
+      expect(screen.queryByText("Transcript is loading…")).toBeNull()
+      expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
+    })
+
+    it("answers each permission request on the child Session that asked it", async () => {
+      const user = userEvent.setup()
+      const child = controls()
+      render(
+        <ChildSessionControlsProvider controls={child}>
+          <LocalThread
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith(running, [
+              childTurn([
+                asking("child-bash", "Delete the build directory?"),
+                {
+                  type: "tool-call",
+                  toolCallId: "grandchild-spawn",
+                  toolName: "delegate_task",
+                  args: {},
+                  argsText: "{}",
+                  artifact: withAosToolArtifact(undefined, {
+                    subagent: {
+                      id: "grandchild",
+                      childSessionId: "session-grandchild",
+                      status: "running",
+                    },
+                  }),
+                  messages: [
+                    childTurn(
+                      [asking("grandchild-bash", "Delete the cache?")],
+                      "grandchild-answer"
+                    ),
+                  ],
+                },
+              ]),
+            ])}
+          />
+        </ChildSessionControlsProvider>
+      )
+
+      const choices = await screen.findByRole("group", {
+        name: "Delete the build directory?",
+      })
+      await user.click(within(choices).getByRole("button", { name: "Reject" }))
+      const nestedChoices = await screen.findByRole("group", {
+        name: "Delete the cache?",
+      })
+      await user.click(
+        within(nestedChoices).getByRole("button", { name: "Allow once" })
+      )
+      expect(child.respondToApproval.mock.calls).toEqual([
+        [CHILD_ID, "child-permission", "deny", false],
+        ["session-grandchild", "child-permission", "once", true],
+      ])
+    })
+
+    it("answers a permission request the child asked before writing anything", async () => {
+      const user = userEvent.setup()
+      const child = controls()
+      render(
+        <ChildSessionControlsProvider controls={child}>
+          <LocalThread
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith(
+              {
+                ...running,
+                approvals: [
+                  {
+                    id: "early-permission",
+                    action: "Run bash",
+                    prompt: "Delete the build directory?",
+                    options: [
+                      { id: "once", kind: "allow-once" },
+                      { id: "deny", kind: "reject-once" },
+                    ],
+                  },
+                ],
+              },
+              []
+            )}
+          />
+        </ChildSessionControlsProvider>
+      )
+
+      const choices = await screen.findByRole("group", {
+        name: "Delete the build directory?",
+      })
+      await user.click(
+        within(choices).getByRole("button", { name: "Allow once" })
+      )
+      expect(child.respondToApproval).toHaveBeenCalledExactlyOnceWith(
+        CHILD_ID,
+        "early-permission",
+        "once",
+        true
+      )
+    })
+
+    it("answers the child's question on the card", async () => {
+      const user = userEvent.setup()
+      const request: RuntimeQuestionRequest = {
+        kind: "question",
+        requestId: "child-question",
+        sessionId: CHILD_ID,
+        questions: [
+          {
+            header: "Scope",
+            prompt: "Check the enterprise tier too?",
+            options: [{ label: "Yes" }, { label: "No" }],
+          },
+        ],
+      }
+      const interactions: RuntimeInteractionAdapter = {
+        respond: vi.fn(async () => {}),
+        reject: vi.fn(async () => {}),
+        getPending: (sessionId) =>
+          sessionId === CHILD_ID ? request : undefined,
+        subscribe: () => () => {},
+      }
+      render(
+        <PendingInteractionProvider interactions={interactions}>
+          <LocalThread
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith(running, [])}
+          />
+        </PendingInteractionProvider>
+      )
+
+      expect(
+        await screen.findByText("Check the enterprise tier too?")
+      ).toBeVisible()
+      await user.click(screen.getByRole("option", { name: "Yes" }))
+      await user.click(screen.getByRole("button", { name: "Send answer" }))
+      expect(interactions.respond).toHaveBeenCalledWith(request, {
+        kind: "question",
+        answers: [["Yes"]],
+      })
+    })
+
+    it("opens the child Session's transcript to read, and to read only", async () => {
+      const user = userEvent.setup()
+      render(
+        <LocalThread
+          toolFallback={AosToolPresentation}
+          initialMessages={threadWith({ ...subagent, status: "completed" }, [
+            childTurn([
+              { type: "text", text: "The **tiers** match the page." },
+            ]),
+          ])}
+        />
+      )
+
+      await user.click(
+        await screen.findByRole("button", { name: "Open session" })
+      )
+      const view = await screen.findByRole("dialog", {
+        name: "Check the pricing tiers",
+      })
+      expect(within(view).getByText("tiers")).toBeVisible()
+      expect(within(view).queryByRole("textbox")).toBeNull()
+      expect(within(view).queryByRole("button", { name: "Edit" })).toBeNull()
+      expect(within(view).queryByRole("button", { name: "Refresh" })).toBeNull()
+    })
   })
 })

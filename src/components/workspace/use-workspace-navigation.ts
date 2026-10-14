@@ -177,7 +177,7 @@ export function useWorkspaceNavigation({
 }: {
   bundle: Pick<
     HarnessRuntime,
-    "assistantRuntime" | "workspace" | "createSessionDraft"
+    "assistantRuntime" | "workspace" | "createSessionDraft" | "forkSession"
   >
   locale: Locale
   dictionary: Dictionary
@@ -1510,6 +1510,32 @@ export function useWorkspaceNavigation({
     await selectRuntimeThread(created.sessionId)
   }
 
+  /**
+   * Forks a Session and opens the fork, as a created Session opens: the
+   * runtime's copy belongs to the source's Agent and lists like any Session.
+   * Resolves with the fork's id.
+   */
+  async function forkSession(sessionId: string) {
+    const fork = bundle.forkSession
+    if (!fork) throw new Error("Forking is unavailable from this provider")
+    const agentId =
+      sessions.find((session) => session.sessionId === sessionId)?.agentId ??
+      selectedAgentId
+    if (!agentId) throw new Error(`Session not found: ${sessionId}`)
+    const forked = await fork(sessionId)
+    if (agentId !== selectedAgentId) setPreferredAgentId(agentId)
+    await workspace.getSessionMetadata([forked.sessionId])
+    setManuallyOpened((current) => ({
+      ...current,
+      [agentId]: [...new Set([...(current[agentId] ?? []), forked.sessionId])],
+    }))
+    lastSelected.current.set(agentId, forked.sessionId)
+    await runtime.threads.reload()
+    updateRoute({ agentId, sessionId: forked.sessionId }, "push")
+    await selectRuntimeThread(forked.sessionId)
+    return forked.sessionId
+  }
+
   async function openAgentBuilder() {
     const creator = agentCreator
     if (!creator)
@@ -1663,6 +1689,7 @@ export function useWorkspaceNavigation({
     unarchiveSession,
     deleteSession,
     createSession,
+    forkSession,
     openAgentBuilder,
     discardDraft,
     hideAgent,

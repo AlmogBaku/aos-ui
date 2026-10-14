@@ -125,6 +125,9 @@ export type Dictionary = {
     markUnread: string
     archiveSession: string
     unarchiveSession: string
+    forkSession: string
+    /** The `/fork` and `/branch` slash commands' menu description. */
+    forkSessionCommand: string
     deleteSession: string
     deleteSessionTitle: string
     deleteSessionDescription: string

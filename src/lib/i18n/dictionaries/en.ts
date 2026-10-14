@@ -125,6 +125,8 @@ export const en = {
     markUnread: "Mark unread",
     archiveSession: "Archive",
     unarchiveSession: "Unarchive",
+    forkSession: "Fork",
+    forkSessionCommand: "Fork this Session into a new one",
     deleteSession: "Delete",
     deleteSessionTitle: "Delete this Session?",
     deleteSessionDescription:

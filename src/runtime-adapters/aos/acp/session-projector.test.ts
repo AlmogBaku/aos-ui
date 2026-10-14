@@ -2,16 +2,13 @@ import type {
   CompactionUpdate,
   SessionUpdate,
   StateUpdate,
+  SubagentUpdate,
   ToolCallContent,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { ToolCallMessagePart } from "@assistant-ui/core"
 import { describe, expect, it } from "vitest"
 
-import {
-  type Built,
-  HGW_PLAN_ID,
-  HGW_STOP_REASONS,
-} from "@harness-gw/sdk/protocol"
+import { type Built, HGW_PLAN_ID } from "@harness-gw/sdk/protocol"
 import type { AcpApproval } from "@harness-gw/sdk"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
@@ -29,6 +26,8 @@ import { TERMINAL_TAIL_LIMIT } from "./projector-terminals"
 
 import {
   applyApprovals,
+  applyChildApprovals,
+  applyChildUpdate,
   applyUpdate,
   clearTranscript,
   failLatestTurn,
@@ -44,6 +43,13 @@ import {
 
 const TURN_META = { sequence: 0, turnId: "run-1" }
 const TOOL_META = { ...TURN_META, messageId: "a1" }
+
+/** ACP's `error` stop reason, as the gateway ends a failed turn with it. */
+const ERROR_STOP = {
+  state: "idle",
+  stopReason: "error",
+  error: { code: -32603, message: "provider_error" },
+} as const
 
 type Entry = readonly [Built<SessionUpdate>, unknown?]
 
@@ -373,10 +379,7 @@ describe("applyUpdate messages", () => {
     const replayed = fold([
       stateUpdate({ state: "running" }, history),
       agentChunk("a1", "Half an answer"),
-      stateUpdate(
-        { state: "idle", stopReason: HGW_STOP_REASONS.error },
-        { ...history, ...error }
-      ),
+      stateUpdate(ERROR_STOP, { ...history, ...error }),
     ])
 
     expect(toThreadMessages(replayed)[0]?.status).toEqual({
@@ -389,7 +392,7 @@ describe("applyUpdate messages", () => {
     expect(replayed.execution).toEqual({
       status: "failed",
       turnId: "history",
-      stopReason: HGW_STOP_REASONS.error,
+      stopReason: "error",
       error,
     })
   })
@@ -1015,21 +1018,16 @@ describe("applyUpdate execution", () => {
     ],
     ["no failure detail when it named neither", {}, undefined],
   ])(
-    "fails the Session on a vendor error stop reason, carrying %s",
+    "fails the Session on the error stop reason, carrying %s",
     (_, named, error) => {
       const failed = fold(
-        [
-          stateUpdate(
-            { state: "idle", stopReason: HGW_STOP_REASONS.error },
-            { ...TURN_META, ...named }
-          ),
-        ],
+        [stateUpdate(ERROR_STOP, { ...TURN_META, ...named })],
         answering
       )
       expect(failed.execution).toEqual({
         status: "failed",
         turnId: "run-1",
-        stopReason: HGW_STOP_REASONS.error,
+        stopReason: "error",
         error,
       })
       expect(toThreadMessages(failed)[3]?.status).toEqual({
@@ -1040,12 +1038,27 @@ describe("applyUpdate execution", () => {
     }
   )
 
-  it("fails the Session on an uncertain stop reason", () => {
-    const uncertain = fold(
-      [stateUpdate({ state: "idle", stopReason: HGW_STOP_REASONS.uncertain })],
+  // Nothing tells whether such a turn failed, so it reads as one that did,
+  // with its notice: Send stays available and no Stop is offered.
+  it("fails the Session on a turn nothing observes", () => {
+    const error = {
+      code: "HGW_STOP_UNCERTAIN",
+      message: "The stop was not confirmed.",
+    }
+    const unknown = fold(
+      [stateUpdate({ state: "unknown" }, { ...TURN_META, ...error })],
       answering
     )
-    expect(uncertain.execution.status).toBe("failed")
+    expect(unknown.execution).toEqual({
+      status: "failed",
+      turnId: "run-1",
+      error,
+    })
+    expect(toThreadMessages(unknown)[3]?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error,
+    })
   })
 
   it("ignores a state it does not know", () => {
@@ -1397,7 +1410,7 @@ describe("prependMessages", () => {
       userChunk("u2", "Stale copy"),
     ])
 
-    const prepended = prependMessages(current, older.messages)
+    const prepended = prependMessages(current, older)
 
     expect(ids(prepended)).toEqual(["u1", "a1", "u2", "a2"])
     expect(prepended.messages[2]).toBe(current.messages[0])
@@ -1406,8 +1419,8 @@ describe("prependMessages", () => {
   it("keeps the state it has when the page holds nothing new", () => {
     const current = fold([userChunk("u1", "Ship it")])
 
-    expect(prependMessages(current, current.messages)).toBe(current)
-    expect(prependMessages(current, [])).toBe(current)
+    expect(prependMessages(current, current)).toBe(current)
+    expect(prependMessages(current, initialProjectorState)).toBe(current)
   })
 })
 
@@ -1875,51 +1888,86 @@ describe("applyUpdate terminals", () => {
   })
 })
 
-describe("applyUpdate subagents", () => {
-  const SPAWN_META = {
-    ...TOOL_META,
-    subagent: { id: "sub-1", goal: "Research", status: "running" },
-  }
-  const CHILD = { subagentId: "sub-1", parentToolCallId: "t1" }
-  const spawned = fold([
-    toolCall({ title: "delegate", status: "in_progress" }, SPAWN_META),
+describe("applyUpdate child Sessions", () => {
+  const CHILD_ID = "child-1"
+  /** A child Session's report on its parent, as ACP v2 `subagent_update`. */
+  const report = (
+    patch: Omit<Built<SubagentUpdate>, "sessionId">,
+    meta: Record<string, unknown> = { ...TURN_META, toolCallId: "t1" },
+    sessionId = CHILD_ID
+  ): Entry => [{ sessionUpdate: "subagent_update", sessionId, ...patch }, meta]
+  /** Folds what a child Session sent under its own id. */
+  const inChild = (
+    state: ProjectorState,
+    entries: readonly Entry[],
+    childId = CHILD_ID
+  ) =>
+    entries.reduce<ProjectorState>(
+      (next, [update, meta]) => applyChildUpdate(next, childId, update, meta),
+      state
+    )
+  const spawnCall = toolCall(
+    { title: "delegate", name: "delegate_task", status: "in_progress" },
+    TOOL_META
+  )
+  const announced = fold([
+    spawnCall,
+    report(
+      {
+        title: "Research the tiers",
+        description: "Compare the pricing tiers",
+        state: { state: "running" },
+        capabilities: { cancel: {} },
+      },
+      {
+        ...TURN_META,
+        toolCallId: "t1",
+        model: "opus",
+        filesRead: ["a.ts", "b.ts"],
+        filesWritten: ["c.ts"],
+        durationMs: 4000,
+        summary: "The tiers match.",
+      }
+    ),
   ])
-
-  const childMessages = (state: ProjectorState) =>
-    toolPartOf(state)?.messages?.map(({ id, role, content }) => ({
+  const nested = (state: ProjectorState, toolCallId = "t1") =>
+    toolPartOf(state, toolCallId)?.messages?.map(({ id, role, content }) => ({
       id,
       role,
       content,
     }))
 
-  it("nests what the subagent writes under the call that spawned it", () => {
-    const state = fold(
+  it("builds the card of the call that spawned it from the child Session", () => {
+    const state = inChild(announced, [
+      agentChunk("c1", "Looking"),
       [
-        [
-          {
-            sessionUpdate: "agent_message_chunk",
-            messageId: "a1",
-            content: { type: "text", text: "Looking" },
-          },
-          { ...TURN_META, ...CHILD },
-        ],
-        [
-          {
-            sessionUpdate: "tool_call_update",
-            toolCallId: "t2",
-            name: "web_search",
-            status: "in_progress",
-          },
-          { ...TOOL_META, ...CHILD },
-        ],
+        {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "t2",
+          name: "web_search",
+          status: "in_progress",
+        },
+        { ...TURN_META, messageId: "c1" },
       ],
-      spawned
-    )
+    ])
+
     expect(toThreadMessages(state)).toHaveLength(1)
-    expect(toThreadMessages(state)[0]?.content).toHaveLength(1)
-    expect(childMessages(state)).toMatchObject([
+    expect(aosOf(state)?.subagent).toEqual({
+      id: CHILD_ID,
+      childSessionId: CHILD_ID,
+      goal: "Research the tiers",
+      status: "running",
+      depth: 1,
+      cancellable: true,
+      model: "opus",
+      filesRead: ["a.ts", "b.ts"],
+      filesWritten: ["c.ts"],
+      durationMs: 4000,
+      summary: "The tiers match.",
+    })
+    expect(nested(state)).toMatchObject([
       {
-        id: "sub-1",
+        id: "c1",
         role: "assistant",
         content: [
           { type: "text", text: "Looking" },
@@ -1929,100 +1977,276 @@ describe("applyUpdate subagents", () => {
     ])
   })
 
-  it("settles a nested call its update no longer attributes", () => {
-    const state = fold(
+  it.each([
+    [{ state: "running" }, "running"],
+    [{ state: "requires_action" }, "waiting"],
+    [{ state: "idle", stopReason: "end_turn" }, "completed"],
+    [{ state: "idle", stopReason: "cancelled" }, "cancelled"],
+    [
+      {
+        state: "idle",
+        stopReason: "error",
+        error: { code: -32603, message: "internal_error" },
+      },
+      "failed",
+    ],
+    [{ state: "unknown" }, "unknown"],
+  ] as const)("reads a child's %o state as %s", (childState, status) => {
+    const state = fold([report({ state: childState })], announced)
+    expect(aosOf(state)?.subagent?.status).toBe(status)
+  })
+
+  // A child still at work when its parent's turn ends goes on as background
+  // activity: its reports and its own updates arrive between turns, under the
+  // turn that spawned it, and reach its card while the parent stays idle.
+  it("keeps a child that outlives its parent's turn on its card, the parent idle", () => {
+    const background = { ...TURN_META, background: true }
+    const ended = fold([
+      stateUpdate({ state: "running" }),
+      agentChunk("a1", "Delegating."),
+      spawnCall,
+      report({ title: "Research the tiers", state: { state: "running" } }),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    const later = inChild(
+      fold(
+        [
+          report(
+            { state: { state: "idle", stopReason: "end_turn" } },
+            background
+          ),
+        ],
+        ended
+      ),
       [
         [
           {
-            sessionUpdate: "tool_call_update",
-            toolCallId: "t2",
-            name: "web_search",
+            sessionUpdate: "agent_message_chunk",
+            messageId: "c1",
+            content: { type: "text", text: "Tiers compared." },
           },
-          { ...TOOL_META, ...CHILD },
+          background,
         ],
-        [
-          {
-            sessionUpdate: "tool_call_update",
-            toolCallId: "t2",
-            status: "completed",
-            rawOutput: "found",
-          },
-          TOOL_META,
-        ],
-      ],
-      spawned
+      ]
     )
-    expect(childMessages(state)?.[0]?.content).toMatchObject([
-      { toolCallId: "t2", result: "found", isError: false },
+
+    expect(later.execution.status).toBe("idle")
+    expect(toThreadMessages(later)[0]?.status).toEqual({
+      type: "complete",
+      reason: "stop",
+    })
+    expect(aosOf(later)?.subagent?.status).toBe("completed")
+    expect(nested(later)).toMatchObject([
+      { id: "c1", content: [{ type: "text", text: "Tiers compared." }] },
     ])
   })
 
-  it("patches the subagent's status, tokens, and duration by id", () => {
-    const state = fold(
-      [
-        toolCall(
-          {},
-          {
-            ...TOOL_META,
-            subagent: {
-              id: "sub-1",
-              status: "completed",
-              tokens: 900,
-              durationMs: 4000,
-            },
-          }
-        ),
-      ],
-      spawned
+  // With nobody watching, the gateway stops following a child still at work
+  // when its parent's turn ends, and says so in one last report: nothing
+  // confirms how it ended.
+  it("reads a child no longer followed as unconfirmed, until a replay restates how it ended", () => {
+    const unfollowed = fold(
+      [report({ state: { state: "unknown" }, capabilities: {} }, TURN_META)],
+      announced
     )
-    expect(aosOf(state)?.subagent).toEqual({
-      id: "sub-1",
-      goal: "Research",
+    expect(aosOf(unfollowed)?.subagent).toMatchObject({
+      status: "unknown",
+      cancellable: false,
+    })
+
+    const replayed = fold(
+      [spawnCall, report({ state: { state: "idle", stopReason: "end_turn" } })],
+      clearTranscript(unfollowed)
+    )
+    expect(aosOf(replayed)?.subagent?.status).toBe("completed")
+  })
+
+  it("patches what a later report restates, and replaces its capabilities whole", () => {
+    const state = fold(
+      [report({ title: null, capabilities: {} }, TURN_META)],
+      announced
+    )
+    expect(aosOf(state)?.subagent).toMatchObject({
+      goal: "Compare the pricing tiers",
+      cancellable: false,
+      model: "opus",
+      summary: "The tiers match.",
+    })
+  })
+
+  // A child's tokens are its own, so its settled usage counts for its card
+  // alone and never reaches its parent's turn.
+  it("counts the tokens the child's own settled state reports", () => {
+    const state = inChild(announced, [
+      stateUpdate({
+        state: "idle",
+        stopReason: "end_turn",
+        usage: { totalTokens: 900, inputTokens: 700, outputTokens: 200 },
+      }),
+    ])
+    expect(aosOf(state)?.subagent).toMatchObject({
       status: "completed",
       tokens: 900,
-      durationMs: 4000,
     })
+    expect(state.execution).toEqual(announced.execution)
   })
 
-  it("holds a child update until the spawning call it names appears", () => {
+  it("shows the child under its spawning call once that call appears", () => {
     const state = fold([
       agentChunk("a1", "Delegating"),
-      [
-        {
-          sessionUpdate: "agent_message_chunk",
-          messageId: "a1",
-          content: { type: "text", text: "Early" },
-        },
-        { ...TURN_META, ...CHILD },
-      ],
-      toolCall({ title: "delegate" }, SPAWN_META),
-    ])
-    expect(childMessages(state)).toMatchObject([
-      { id: "sub-1", content: [{ type: "text", text: "Early" }] },
+      report({ title: "Research the tiers" }),
+      spawnCall,
     ])
     expect(toThreadMessages(state)[0]?.content).toHaveLength(2)
+    expect(aosOf(state)?.subagent?.goal).toBe("Research the tiers")
   })
 
-  it("synthesizes a spawning call for a subagent the stream never announced", () => {
+  it("gives a child no call names a card of its own", () => {
     const state = fold([
       agentChunk("a1", "Working"),
+      report({ title: "Orphan" }, TURN_META, "child-9"),
+    ])
+    const card = toolPartOf(state, "aos-subagent-child-9")
+    expect(card?.toolName).toBe("subagent")
+    expect(readAosToolArtifact(card?.artifact)?.subagent).toMatchObject({
+      id: "child-9",
+      goal: "Orphan",
+    })
+  })
+
+  // A child announces its own children on itself, and each sends under its
+  // own id, which reaches this Session's projection the same way.
+  it("nests a child's own child under the call that spawned it", () => {
+    const state = inChild(
+      inChild(announced, [
+        [
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "t3",
+            name: "delegate_task",
+            status: "in_progress",
+          },
+          { ...TURN_META, messageId: "c1" },
+        ],
+        report(
+          { title: "Check one tier" },
+          { ...TURN_META, toolCallId: "t3" },
+          "child-2"
+        ),
+      ]),
+      [agentChunk("g1", "Checked")],
+      "child-2"
+    )
+    const childCall = toolPartOf(state)?.messages?.[0]?.content.find(
+      (part) => part.type === "tool-call" && part.toolCallId === "t3"
+    ) as ToolCallMessagePart | undefined
+    expect(readAosToolArtifact(childCall?.artifact)?.subagent).toMatchObject({
+      id: "child-2",
+      goal: "Check one tier",
+      depth: 2,
+    })
+    expect(childCall?.messages?.[0]?.content).toMatchObject([
+      { type: "text", text: "Checked" },
+    ])
+  })
+
+  it("keeps the updates of a child no report announced yet until one does", () => {
+    const early = inChild(fold([spawnCall]), [agentChunk("c1", "Early")])
+    expect(aosOf(early)?.subagent).toBeUndefined()
+
+    const state = fold([report({ title: "Research the tiers" })], early)
+    expect(nested(state)).toMatchObject([
+      { id: "c1", content: [{ type: "text", text: "Early" }] },
+    ])
+  })
+
+  it("lays the child's permission requests over its own transcript", () => {
+    const state = applyChildApprovals(
+      inChild(announced, [
+        [
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "t2",
+            name: "bash",
+            status: "pending",
+          },
+          { ...TURN_META, messageId: "c1" },
+        ],
+      ]),
+      CHILD_ID,
       [
         {
-          sessionUpdate: "agent_message_chunk",
-          messageId: "a1",
-          content: { type: "text", text: "Orphan" },
+          id: "child-permission",
+          toolCallId: "t2",
+          action: "Run bash",
+          options: [{ id: "once", kind: "allow-once" }],
         },
-        { ...TURN_META, subagentId: "sub-9" },
-      ],
+      ]
+    )
+    expect(nested(state)?.[0]?.content).toMatchObject([
+      {
+        toolCallId: "t2",
+        approval: { id: "child-permission", prompt: "Run bash" },
+      },
     ])
-    const spawn = toolPartOf(state, "aos-subagent-sub-9")
-    expect(spawn?.toolName).toBe("subagent")
-    expect(readAosToolArtifact(spawn?.artifact)?.subagent).toEqual({
-      id: "sub-9",
-    })
-    expect(spawn?.messages?.[0]?.content).toMatchObject([
-      { type: "text", text: "Orphan" },
+    expect(toThreadMessages(state)[0]?.content).toHaveLength(1)
+  })
+
+  // An older page announces its children on itself, while their transcripts
+  // reach the Session's own projection ahead of the page's answer.
+  it("keeps an older page's children, with the transcripts that reached them first", () => {
+    const current = inChild(fold([userChunk("u2", "Newer question")]), [
+      agentChunk("c1", "Looked"),
     ])
+    const older = fold([
+      userChunk("u1", "First question"),
+      spawnCall,
+      report({ title: "Research the tiers" }),
+    ])
+
+    const state = prependMessages(current, older)
+
+    expect(aosOf(state)?.subagent?.goal).toBe("Research the tiers")
+    expect(nested(state)).toMatchObject([
+      { id: "c1", content: [{ type: "text", text: "Looked" }] },
+    ])
+  })
+
+  // A child may ask before it has written anything, where no turn of its
+  // transcript can hold the request, so its card holds it instead.
+  it("keeps a child's permission request its transcript cannot host on its card", () => {
+    const state = applyChildApprovals(announced, CHILD_ID, [
+      {
+        id: "child-permission",
+        toolCallId: "t2",
+        action: "Run bash",
+        description: "Delete the build directory?",
+        options: [{ id: "once", kind: "allow-once" }],
+      },
+    ])
+    expect(aosOf(state)?.subagent?.approvals).toEqual([
+      {
+        id: "child-permission",
+        action: "Run bash",
+        prompt: "Delete the build directory?",
+        options: [{ id: "once", kind: "allow-once" }],
+      },
+    ])
+    expect(nested(state)).toBeUndefined()
+
+    // Once a turn of the child's can hold it, it reads there instead.
+    const hosted = inChild(state, [agentChunk("c1", "Asking")])
+    expect(aosOf(hosted)?.subagent?.approvals).toBeUndefined()
+    expect(nested(hosted)?.[0]?.content).toMatchObject([
+      { type: "text", text: "Asking" },
+      { approval: { id: "child-permission" } },
+    ])
+  })
+
+  it("forgets every child with the transcript a replay resends", () => {
+    const cleared = clearTranscript(announced)
+    expect(cleared.children).toBeUndefined()
+    expect(toolPartOf(fold([spawnCall], cleared))?.artifact).toBeUndefined()
   })
 })
 
@@ -2124,6 +2348,97 @@ describe("applyUpdate compaction", () => {
       compaction({ status: "cancelled" }),
     ])
     expect(compactionParts(state)).toEqual([])
+  })
+
+  /** A stored turn as a replay sends it: no run state, history's own turn. */
+  const STORED = { sequence: 0, turnId: "history" }
+  const stored = (
+    sessionUpdate: "user_message" | "agent_message",
+    messageId: string,
+    text: string
+  ): Entry => [
+    { sessionUpdate, messageId, content: [{ type: "text", text }] },
+    STORED,
+  ]
+  /** A stored compaction: OpenCode keeps its summary, Hermes none. */
+  const storedCompaction = (compactionId: string, summary?: string): Entry => [
+    {
+      sessionUpdate: "compaction_update",
+      compactionId,
+      status: "completed",
+      ...(summary === undefined
+        ? {}
+        : { summary: [{ type: "text", text: summary }] }),
+    },
+    STORED,
+  ]
+  const divider = (compactionId: string, summary?: string) => ({
+    type: "data",
+    name: COMPACTION_DATA_PART_NAME,
+    data: {
+      compactionId,
+      status: "completed",
+      ...(summary === undefined ? {} : { summary }),
+    },
+  })
+
+  // A replay sets no run state, so the reply it leads is the next turn, as
+  // the live run that compacted before writing showed it.
+  it("leads the reply to the prompt each replayed compaction follows", () => {
+    const state = fold([
+      stored("user_message", "u1", "Start"),
+      stored("agent_message", "a1", "Started"),
+      stored("user_message", "u2", "Go on"),
+      storedCompaction("c1", "Earlier turns set the plan."),
+      stored("agent_message", "a2", "Going on"),
+      stored("user_message", "u3", "Finish"),
+      storedCompaction("c2"),
+      stored("agent_message", "a3", "Finished"),
+    ])
+    expect(toThreadMessages(state)).toMatchObject([
+      { id: "u1" },
+      { id: "a1", content: [{ type: "text", text: "Started" }] },
+      { id: "u2" },
+      {
+        id: "a2",
+        content: [
+          divider("c1", "Earlier turns set the plan."),
+          { type: "text", text: "Going on" },
+        ],
+      },
+      { id: "u3" },
+      {
+        id: "a3",
+        content: [divider("c2"), { type: "text", text: "Finished" }],
+      },
+    ])
+  })
+
+  it("keeps the compaction an older page starts with beside the newest page's", () => {
+    const current = fold([
+      stored("user_message", "u2", "Go on"),
+      storedCompaction("c2"),
+      stored("agent_message", "a2", "Going on"),
+    ])
+    const older = fold([
+      storedCompaction("c1", "Earlier turns set the plan."),
+      stored("agent_message", "a1", "Started"),
+    ])
+
+    expect(toThreadMessages(prependMessages(current, older))).toMatchObject([
+      {
+        id: "a1",
+        content: [
+          divider("c1", "Earlier turns set the plan."),
+          { type: "text", text: "Started" },
+        ],
+      },
+      { id: "u2" },
+      {
+        id: "a2",
+        content: [divider("c2"), { type: "text", text: "Going on" }],
+      },
+    ])
   })
 })
 

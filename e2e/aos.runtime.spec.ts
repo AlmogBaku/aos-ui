@@ -1,3 +1,5 @@
+import { HGW_EXTENSION_VERSION } from "@harness-gw/sdk/protocol"
+
 import { expandByKeyboard } from "./disclosure"
 import { collapseInspector } from "./support/inspector"
 import { expect, test, type Page } from "./test"
@@ -17,7 +19,7 @@ const ACP_PATH = "/api/v1/acp"
 const PENDING_PROMPT = "Keep running until I stop it"
 /** A prompt the scripted provider answers with `vocabularyTurn`. */
 const VOCABULARY_PROMPT = "Lengthen the trial and run the tests"
-/** The Session the scripted turn's subagent runs in. */
+/** The child Session the scripted turn's subagent runs in. */
 const CHILD_SESSION_ID = "session-2"
 /** A prompt whose turn asks permission to run the tool call it guards. */
 const GUARDED_PERMISSION_PROMPT = "Clean the build directory"
@@ -108,6 +110,7 @@ const sessionCapabilities = {
       input: "text",
       fallback: "provider-queue",
     },
+    rewind: { status: "available", scope: "user-turn" },
     approvals: {
       status: "available",
       protocol: "acp-request",
@@ -266,14 +269,16 @@ const vocabularyTurn = [
     content: [
       { type: "content", content: { type: "text", text: "The page matches." } },
     ],
-    _meta: onAnswer({
-      subagent: {
-        id: "subagent-1",
-        goal: "Check the pricing page",
-        status: "completed",
-        childSessionId: CHILD_SESSION_ID,
-      },
-    }),
+    _meta: onAnswer(),
+  },
+  // The subagent runs in a child Session the turn announces on its parent,
+  // naming the call that spawned it.
+  {
+    sessionUpdate: "subagent_update",
+    sessionId: CHILD_SESSION_ID,
+    title: "Check the pricing page",
+    state: { state: "idle", stopReason: "end_turn" },
+    _meta: { hgw: { toolCallId: "delegate-1" } },
   },
   // The gateway restates the model options when the provider switches models.
   {
@@ -348,6 +353,16 @@ const script = {
   pendingPrompt: PENDING_PROMPT,
   vocabularyPrompt: VOCABULARY_PROMPT,
   vocabularyTurn,
+  /** The child Session the vocabulary turn announces. */
+  childSessionId: CHILD_SESSION_ID,
+  /** What the vocabulary turn's child Session sends under its own id. */
+  childTurn: [
+    {
+      sessionUpdate: "agent_message",
+      messageId: "child-answer",
+      content: [{ type: "text", text: "The pricing page matches the tiers." }],
+    },
+  ],
   guardedPermissionPrompt: GUARDED_PERMISSION_PROMPT,
   standalonePermissionPrompt: STANDALONE_PERMISSION_PROMPT,
   /** The guarded command the permission turn streams before it waits. */
@@ -365,7 +380,7 @@ const script = {
   /** `InitializeResponse._meta.hgw` for the operator role. */
   initializeMeta: {
     // The hgw extension's own version, not ACP's `protocolVersion`.
-    version: 1,
+    version: HGW_EXTENSION_VERSION,
     role: "operator",
     extensions: {
       steer: true,
@@ -494,8 +509,8 @@ type AcpCall = { method: string; params: unknown }
 type AcpReply = { method: string; result?: unknown; error?: unknown }
 type ResumeParams = {
   sessionId: string
-  replayFrom?: { type: string }
-  _meta?: { hgw?: { agentId?: string; after?: number; turnId?: string } }
+  replayFrom?: { type: string; turnId?: string; from?: number }
+  _meta?: { hgw?: { agentId?: string } }
 }
 
 declare global {
@@ -674,6 +689,22 @@ function installAcpStub(script: AcpScript) {
     }
 
     /**
+     * One update of the child Session the scripted turn announced, under the
+     * child's own id and in its parent turn's sequence.
+     */
+    child(update: Record<string, unknown>) {
+      stub.sequence += 1
+      // The stub runs in the page, which sees only what `script` carries.
+      this.notify("session/update", {
+        sessionId: script.childSessionId,
+        update: {
+          ...update,
+          _meta: { hgw: { sequence: stub.sequence, turnId: script.turnId } },
+        },
+      })
+    }
+
+    /**
      * The Session's row, models, and capabilities, which follow a resume's
      * answer as updates rather than riding in it.
      */
@@ -740,10 +771,11 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("session/list", (_params, id) =>
         this.respond(id, { sessions: script.sessions })
       )
-      // A resume from the start replays the stored turns; a resume positioned
-      // by `_meta.hgw.after` reports only what the dropped transport missed.
+      // A resume from the start replays the stored turns; one positioned by
+      // the `_hgw/position` cursor reports only what the dropped transport
+      // missed. As the gateway does, any other cursor is invalid params.
       this.handlers.set("session/resume", (params, id) => {
-        // A subagent's own Session opens with nothing stored.
+        // Any other Session opens with nothing stored.
         if (params.sessionId !== script.sessionId)
           return this.respond(id, { _meta: { hgw: {} } })
         const replayFrom = asRecord(params.replayFrom)
@@ -768,6 +800,12 @@ function installAcpStub(script: AcpScript) {
           this.restate()
           return
         }
+        if (replayFrom.type !== "start" && replayFrom.type !== "_hgw/position")
+          return this.deliver({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32602, message: "invalid_request" },
+          })
         const reply = () => {
           if (replayFrom.type === "start")
             for (const entry of script.history)
@@ -856,11 +894,17 @@ function installAcpStub(script: AcpScript) {
           return
         }
         if (promptText(params).includes(script.vocabularyPrompt)) {
-          // A model switch is Session state, not a position in the run.
+          // A model switch is Session state, not a position in the run. A
+          // child Session sends its own updates once it is announced.
           for (const update of script.vocabularyTurn)
             if (update.sessionUpdate === "config_option_update")
               this.update(update)
-            else this.run(update)
+            else {
+              this.run(update)
+              if (update.sessionUpdate === "subagent_update")
+                for (const childUpdate of script.childTurn)
+                  this.child(childUpdate)
+            }
           busy = false
           // A settled turn restates the context window.
           this.update({ sessionUpdate: "usage_update", ...script.usage })
@@ -1074,9 +1118,20 @@ test("Gateway restores history, offers commands, streams one turn, stops, and re
   await expect
     .poll(async () => (await recorded(page, "initialize")).length)
     .toBe(2)
+  // The cursor names the first event still needed, inclusive.
   await expect
-    .poll(async () => (await resumes(page)).at(-1)?._meta?.hgw)
-    .toEqual({ agentId: AGENT_ID, after: sequence, turnId: TURN_ID })
+    .poll(async () => {
+      const resume = (await resumes(page)).at(-1)
+      return { replayFrom: resume?.replayFrom, hgw: resume?._meta?.hgw }
+    })
+    .toEqual({
+      replayFrom: {
+        type: "_hgw/position",
+        turnId: TURN_ID,
+        from: sequence + 1,
+      },
+      hgw: { agentId: AGENT_ID },
+    })
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
 })
 
@@ -1100,11 +1155,14 @@ test("Gateway at capacity is waited out before the browser reconnects", async ({
   await expect
     .poll(async () => (await recorded(page, "initialize")).length)
     .toBe(2)
-  // The transport is back, but the notice stays until the Session rejoins.
-  await expect(full).toBeVisible()
+  // The transport is back, so its notice ends; the Session's own notice says
+  // it is rejoining, until it has.
+  const rejoining = page.getByText("Reconnecting this Session…")
+  await expect(full).toBeHidden()
+  await expect(rejoining).toBeVisible()
   await page.evaluate(() => window.__acpStub.releaseRejoin())
   await page.clock.runFor(100)
-  await expect(full).toBeHidden()
+  await expect(rejoining).toBeHidden()
 })
 
 test("AOS shows a reconnecting notice over the conversation while a dropped link recovers", async ({
@@ -1115,11 +1173,13 @@ test("AOS shows a reconnecting notice over the conversation while a dropped link
   await page.goto("/")
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
-  const reconnecting = page.getByText("Reconnecting to AOS…")
+  const reconnecting = page.getByText("Reconnecting this Session…")
   const reconnected = page.getByText("Reconnected")
 
-  // A rejoin still held past the 2 s grace shows the notice until it lands,
-  // over the conversation it leaves in place, then says so for a moment.
+  // The link is back within its first backoff, but a rejoin still held past
+  // the 2 s grace shows the Session's notice until it lands, over the
+  // conversation it leaves in place. The link's own notice never showed, so
+  // no recovery is announced.
   await page.evaluate(() => window.__acpStub.dropSocket())
   await page.clock.runFor(1_900)
   await expect(reconnecting).toBeHidden()
@@ -1129,8 +1189,6 @@ test("AOS shows a reconnecting notice over the conversation while a dropped link
   await page.evaluate(() => window.__acpStub.releaseRejoin())
   await page.clock.runFor(100)
   await expect(reconnecting).toBeHidden()
-  await expect(reconnected).toBeVisible()
-  await page.clock.runFor(2_000)
   await expect(reconnected).toBeHidden()
 
   // A drop that recovers within the grace shows nothing.
@@ -1222,25 +1280,7 @@ test("Gateway loads a long Session's earlier messages as the reader scrolls up, 
 test("Gateway renders a turn's tools, diff, terminal, compaction, subagent, stop and usage from the wire", async ({
   page,
 }) => {
-  await serveAcp(page, {
-    sessions: [
-      ...script.sessions,
-      {
-        sessionId: CHILD_SESSION_ID,
-        cwd: "/srv/demo",
-        title: "Pricing page check",
-        updatedAt: "2026-09-11T00:00:00.000Z",
-        _meta: {
-          hgw: {
-            agentId: AGENT_ID,
-            status: "idle",
-            archived: false,
-            unread: false,
-          },
-        },
-      },
-    ],
-  })
+  await serveAcp(page)
   await page.goto("/")
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await collapseInspector(page)
@@ -1313,14 +1353,19 @@ test("Gateway renders a turn's tools, diff, terminal, compaction, subagent, stop
     await expect(page.getByText(shown, { exact: true })).toBeVisible()
   await page.keyboard.press("Escape")
 
-  // The subagent's own Session opens in place from its activity.
-  await page.getByRole("link", { name: "Open session" }).click()
+  // The subagent's child Session opens from its activity to read, from what
+  // its parent's turn carried: nothing loads or resumes the child.
+  await page.getByRole("button", { name: "Open session", exact: true }).click()
+  const childSession = page.getByRole("dialog", {
+    name: "Check the pricing page",
+  })
   await expect(
-    page.getByRole("tab", { name: "Pricing page check" })
-  ).toHaveAttribute("aria-selected", "true")
-  await expect
-    .poll(async () => (await resumes(page)).map((call) => call.sessionId))
-    .toContain(CHILD_SESSION_ID)
+    childSession.getByText("The pricing page matches the tiers.")
+  ).toBeVisible()
+  await expect(childSession.getByRole("textbox")).toHaveCount(0)
+  expect((await resumes(page)).map((call) => call.sessionId)).not.toContain(
+    CHILD_SESSION_ID
+  )
 })
 
 test("Gateway answers a permission request on the tool call it guards, and one that stands alone", async ({

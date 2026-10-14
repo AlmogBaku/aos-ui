@@ -19,6 +19,8 @@ export type ToolUiActivityStatus =
   | "waiting"
   | "completed"
   | "failed"
+  /** Nothing confirms how the activity ended, nor that it still runs. */
+  | "unknown"
 export type ToolUiActionKind =
   | "skill"
   | "read"
@@ -182,6 +184,11 @@ export type ToolUiLocaleLabels = {
     filesRead: (count: number) => string
     filesWritten: (count: number) => string
     openSession: string
+    /** Stops the child's own work; its parent runs on. */
+    stop: string
+    /** Says the opened child Session is shown, never continued. */
+    readOnly: string
+    closeSession: string
   }
   generic: {
     malformed: (displayName: string) => string
@@ -347,6 +354,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     waiting: "Waiting",
     completed: "Completed",
     failed: "Failed",
+    unknown: "Status unavailable",
   },
   activityTranscript: {
     title: "Transcript",
@@ -362,6 +370,9 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     filesWritten: (count) =>
       count === 1 ? "Wrote 1 file" : `Wrote ${count} files`,
     openSession: "Open session",
+    stop: "Stop subagent",
+    readOnly: "The subagent's own Session, to read only.",
+    closeSession: "Close session",
   },
   generic: {
     malformed: (displayName) => `Could not safely render ${displayName}`,
@@ -562,6 +573,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     waiting: "בהמתנה",
     completed: "הושלם",
     failed: "נכשל",
+    unknown: "המצב אינו זמין",
   },
   activityTranscript: {
     title: "תמליל",
@@ -577,6 +589,9 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     filesWritten: (count) =>
       count === 1 ? "כתב קובץ אחד" : `כתב ${count} קבצים`,
     openSession: "פתיחת שיחה",
+    stop: "עצירת סוכן המשנה",
+    readOnly: "השיחה של סוכן המשנה, לקריאה בלבד.",
+    closeSession: "סגירת השיחה",
   },
   generic: {
     malformed: (displayName) => `לא ניתן להציג בבטחה: ${displayName}`,

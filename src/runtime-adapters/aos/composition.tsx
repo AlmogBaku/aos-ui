@@ -59,9 +59,9 @@ import {
 } from "@/lib/notifications/push-subscription"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 import {
-  aosMessageRewind,
   applyComposerPrefill,
   rewindSource,
+  sessionMessageRewind,
 } from "./conversation-controls"
 import { createGatewayClient } from "./gateway-client"
 import { useConnectionOutage, useSessionNotice } from "./use-connection-outage"
@@ -440,6 +440,20 @@ function ReadyAosRuntimeProvider({
     selectedSessionId,
     capabilities
   )
+  // ACP's own capability says the gateway forks, which it tells an operator
+  // alone; the handshake settles it before the connection is ready.
+  const forks = useSyncExternalStore(
+    connection.subscribeStatus,
+    () => connection.capabilities?.session?.fork != null,
+    () => false
+  )
+  const forkSession = useMemo(
+    () =>
+      forks
+        ? (sessionId: string) => connection.forkSession(sessionId)
+        : undefined,
+    [connection, forks]
+  )
   const capabilitiesReady = capabilities !== undefined
   const transcriptionAvailable =
     capabilities?.content.transcription.status === "available"
@@ -477,11 +491,12 @@ function ReadyAosRuntimeProvider({
     assistantRuntime,
     workspace: client,
     createSessionDraft,
+    ...(forkSession ? { forkSession } : {}),
     interactions,
     artifacts: { resolver: artifacts },
     mcpApps,
     composer,
-    messageRewind: aosMessageRewind,
+    messageRewind: sessionMessageRewind(capabilities?.interactions.rewind),
     media,
     activityCoverage: "workspace",
     push,

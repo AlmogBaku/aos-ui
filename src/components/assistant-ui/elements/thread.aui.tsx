@@ -71,6 +71,8 @@ import {
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { Locale, LocaleDirection } from "@/lib/i18n/config"
 import { useQueueControlsExtras } from "@/runtime-adapters/queue-controls"
+import { useChildSessionExtras } from "@/runtime-adapters/child-sessions"
+import { ChildSessionControlsProvider } from "@/components/tool-ui/child-session-controls"
 import {
   matchLocalCommand,
   menuSlashCommands,
@@ -237,6 +239,9 @@ export type ThreadLabels = {
   steeringQueuedMessage?: string | undefined
   steeringFailed?: string | undefined
   queuedMessageCount: (count: number) => string
+  /** Names the steer button on a queued message holding an attachment. */
+  stopAndSendQueuedMessage: string
+  queuedMessageAttachments: (count: number) => string
   queuedMessagesSendCombined: string
   queuedMessagesEditAll: string
   queuedMessageRowHint: string
@@ -340,6 +345,9 @@ const DEFAULT_LABELS: ThreadLabels = {
   steeringQueuedMessage: "Steering queued message",
   steeringFailed: "Could not steer",
   queuedMessageCount: (count) => `${count} queued`,
+  stopAndSendQueuedMessage: "Stop and send now",
+  queuedMessageAttachments: (count) =>
+    count === 1 ? "1 attachment" : `${count} attachments`,
   queuedMessagesSendCombined: "Sends as one message when this turn ends",
   queuedMessagesEditAll: "to edit",
   queuedMessageRowHint:
@@ -470,19 +478,37 @@ export const Thread: FC<ThreadProps> = ({
           <MessageRewindContext.Provider value={messageRewind}>
             <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
               <ThreadComponentsContext.Provider value={components}>
-                <CompactionDataUI />
-                <NoticeDataUI />
-                <ThreadRoot
-                  isEmpty={isEmpty}
-                  autoFocus={autoFocus}
-                  direction={direction}
-                />
+                <ThreadChildSessionControls>
+                  <CompactionDataUI />
+                  <NoticeDataUI />
+                  <ThreadRoot
+                    isEmpty={isEmpty}
+                    autoFocus={autoFocus}
+                    direction={direction}
+                  />
+                </ThreadChildSessionControls>
               </ThreadComponentsContext.Provider>
             </ThreadComposerFeaturesContext.Provider>
           </MessageRewindContext.Provider>
         </AttachmentLabelsContext.Provider>
       </ThreadDirectionContext.Provider>
     </ThreadLabelsContext.Provider>
+  )
+}
+
+/**
+ * Hands the runtime's child Session controls to the subagent cards the thread
+ * renders, which sit below Assistant UI's tool parts.
+ */
+function ThreadChildSessionControls({ children }: { children: ReactNode }) {
+  const controls = useChildSessionExtras(
+    (extras) => extras.childSessions,
+    undefined
+  )
+  return (
+    <ChildSessionControlsProvider controls={controls}>
+      {children}
+    </ChildSessionControlsProvider>
   )
 }
 
@@ -1469,6 +1495,8 @@ const Composer: FC<{
             rowHint: labels.queuedMessageRowHint,
             steerLabel:
               labels.steerQueuedMessageLabel ?? "Steer queued message",
+            stopAndSendLabel: labels.stopAndSendQueuedMessage,
+            attachments: labels.queuedMessageAttachments,
             removeLabel: labels.removeQueuedMessage ?? "Remove queued message",
             steering: labels.steeringQueuedMessage ?? "Steering queued message",
             failed: labels.steeringFailed ?? "Could not steer",

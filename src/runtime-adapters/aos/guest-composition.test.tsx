@@ -7,6 +7,7 @@ import {
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -18,8 +19,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import {
-  INTERACTION_PROTOCOL,
   HGW_AUTH_METHOD_INVITE,
+  HGW_EXTENSION_VERSION,
   HGW_META_KEY,
   HGW_METHODS,
   HgwPromptMetaSchema,
@@ -30,7 +31,7 @@ import { pipedSockets } from "@/runtime-adapters/aos/acp/test-socket"
 import { en } from "@/lib/i18n/dictionaries/en"
 
 import { fetchGuestRuntimeContext, GuestAosSurface } from "./guest-composition"
-import { sessionCapabilities } from "./test-capabilities"
+import { sessionCapabilities, singleInteractions } from "./test-capabilities"
 
 const AGENT_ID = "researcher"
 const REF = "guest_ref"
@@ -46,28 +47,14 @@ const steeringAvailable = {
 } as const
 
 /** What the guest lane reports for the invited Session on `session/resume`. */
-function capabilities(options: { steering?: boolean } = {}) {
+function capabilities(options: { steering?: boolean; rewind?: boolean } = {}) {
   return sessionCapabilities({
     interactions: {
       ...(options.steering ? { steering: steeringAvailable } : {}),
-      approvals: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        choices: [{ value: "once", scope: "request" }],
-        maxPending: 1,
-      },
-      questions: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        answerModes: ["single", "multiple", "free-text"],
-        cancellation: "native-cancel",
-        maxQuestions: 1,
-        maxChoicesPerQuestion: 4,
-        maxAnswerValuesPerQuestion: "complete-request",
-        maxStringBytes: 4096,
-      },
+      ...(options.rewind
+        ? { rewind: { status: "available", scope: "user-turn" } as const }
+        : {}),
+      ...singleInteractions,
     },
   })
 }
@@ -104,6 +91,8 @@ type GuestGatewayOptions = {
   token?: string
   /** Whether the invited Session reports steering as available. */
   steering?: boolean
+  /** Whether the invited Session reports it can rewind for Edit and Retry. */
+  rewind?: boolean
   /** Keeps every run going until `finishRun` settles it. */
   holdRuns?: boolean
   /** The provider no longer has the invited Session. */
@@ -165,7 +154,7 @@ function createGuestGatewayAgent(options: GuestGatewayOptions = {}) {
         ],
         _meta: {
           [HGW_META_KEY]: {
-            version: 1,
+            version: HGW_EXTENSION_VERSION,
             role: "guest",
             extensions: {
               // The guest lane carries the operator's conversation controls.
@@ -266,12 +255,84 @@ function createGuestGatewayAgent(options: GuestGatewayOptions = {}) {
     })
   }
 
+  const CHILD_ID = "guest-child"
+  const childTurn = { turnId: "run-0", sequence: 2 }
+
   return {
     app,
     calls,
     prompts,
     steers,
     finishRun,
+    /**
+     * A child Session the earlier turn spawned, which offers to be stopped and
+     * asks for a permission and a question: what a guest lane never sends,
+     * arriving all the same.
+     */
+    spawnChild() {
+      push({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "spawn",
+        name: "delegate_task",
+        status: "in_progress",
+        _meta: { [HGW_META_KEY]: { ...childTurn, messageId: "history-1" } },
+      })
+      push({
+        sessionUpdate: "subagent_update",
+        sessionId: CHILD_ID,
+        title: "Read the guest's notes",
+        capabilities: { cancel: {} },
+        state: { state: "running" },
+        _meta: { [HGW_META_KEY]: { ...childTurn, toolCallId: "spawn" } },
+      })
+      void peer?.notify(methods.client.session.update, {
+        sessionId: CHILD_ID,
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "child-bash",
+          name: "bash",
+          status: "pending",
+          _meta: { [HGW_META_KEY]: { ...childTurn, messageId: "child-1" } },
+        },
+      })
+      void peer
+        ?.request(methods.client.session.requestPermission, {
+          sessionId: CHILD_ID,
+          title: "Run bash",
+          subject: {
+            type: "tool_call",
+            toolCall: { toolCallId: "child-bash", status: "pending" },
+          },
+          options: [
+            { optionId: "once", name: "Allow once", kind: "allow_once" },
+          ],
+          _meta: { [HGW_META_KEY]: { requestId: "child-permission" } },
+        })
+        .catch(() => {})
+      void peer
+        ?.request(methods.client.elicitation.create, {
+          mode: "form",
+          sessionId: CHILD_ID,
+          message: "The child needs an answer",
+          requestedSchema: {
+            type: "object",
+            properties: { q0: { type: "string", enum: ["Yes", "No"] } },
+          },
+          _meta: {
+            [HGW_META_KEY]: {
+              requestId: "child-question",
+              questions: [
+                {
+                  header: "Scope",
+                  prompt: "Read the archived notes too?",
+                  options: [{ label: "Yes" }, { label: "No" }],
+                },
+              ],
+            },
+          },
+        })
+        .catch(() => {})
+    },
     /** The provider's suggested next turn for the invited composer. */
     suggestPrefill(text: string) {
       void peer?.notify(HGW_METHODS.notify.composerPrefill, prefillParams(text))
@@ -510,12 +571,15 @@ describe("AOS guest browser composition", () => {
 
   it("edits an earlier turn by rewinding the provider turn it replaces", async () => {
     const user = userEvent.setup()
-    const { gateway } = mount()
+    const { gateway } = mount({ rewind: true })
     await screen.findByText("Earlier guest answer")
 
-    // An earlier turn shows its actions while the guest points at it.
+    // An earlier turn shows its actions while the guest points at it, once
+    // the invited Session reports it can rewind.
     await user.hover(screen.getByText("Earlier guest question"))
-    await user.click(screen.getByRole("button", { name: "Edit message" }))
+    await user.click(
+      await screen.findByRole("button", { name: "Edit message" })
+    )
     const editor = screen
       .getAllByRole("textbox")
       .find(
@@ -536,6 +600,34 @@ describe("AOS guest browser composition", () => {
       HgwPromptMetaSchema.safeParse(gateway.prompts[0]?._meta?.[HGW_META_KEY])
         .success
     ).toBe(true)
+  })
+
+  it("offers neither Edit nor Retry where the invited Session cannot rewind", async () => {
+    const user = userEvent.setup()
+    mount()
+    // The Session's report arrives ahead of the history it replays.
+    await screen.findByText("Earlier guest answer")
+
+    await user.hover(screen.getByText("Earlier guest question"))
+    expect(screen.getByRole("button", { name: "Copy" })).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Edit message" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Retry response" })).toBeNull()
+  })
+
+  // The gateway shows a guest nothing of a child, so the guest lane acts for
+  // none either: its subagent cards are never handed the child controls.
+  it("gives a guest no control over a child Session that reaches it", async () => {
+    const { gateway } = mount()
+    await screen.findByText("Earlier guest answer")
+
+    gateway.spawnChild()
+    expect(await screen.findByText("Read the guest's notes")).toBeVisible()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
+    expect(screen.queryByRole("group", { name: "Run bash" })).toBeNull()
+    expect(screen.queryByText("Read the archived notes too?")).toBeNull()
   })
 
   it("links a staged attachment batch from the guest prompt", async () => {
@@ -585,7 +677,9 @@ describe("AOS guest browser composition", () => {
         },
       ])
     )
-    expect(HgwSteerRequestSchema.safeParse(gateway.steers[0]).success).toBe(true)
+    expect(HgwSteerRequestSchema.safeParse(gateway.steers[0]).success).toBe(
+      true
+    )
     expect(gateway.prompts).toHaveLength(1)
   })
 

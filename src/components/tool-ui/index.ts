@@ -56,7 +56,3 @@ export {
   ToolRowMeta,
   useToolElapsedMs,
 } from "./tool-row-meta"
-export {
-  ToolUiSessionLinkProvider,
-  type ToolUiSessionLinkResolver,
-} from "./session-link"
