@@ -214,6 +214,21 @@ describe("real Assistant UI voice composer", () => {
     )
     expect(h.model.run).not.toHaveBeenCalled()
   })
+  it("starts a requested recording from the draft its command hands back", async () => {
+    const surface = createSurfaceRequests()
+    const h = setup({ surface })
+
+    // `/voice Keep this` requests the toggle first; the composer hands the
+    // trailing text back as the draft a microtask later.
+    act(() => {
+      surface.request("toggleVoice")
+      queueMicrotask(() => h.runtime.thread.composer.setText("Keep this"))
+    })
+    await waitFor(() => expect(h.recording.state).toBe("recording"))
+    fireEvent.click(screen.getByRole("button", { name: "Discard recording" }))
+
+    expect(h.runtime.thread.composer.getState().text).toBe("Keep this")
+  })
   it("discard restores the draft and stops microphone tracks", async () => {
     const h = setup()
     await act(async () =>

@@ -218,7 +218,9 @@ function VoiceCaptureControl({
   useEffect(
     () =>
       surface?.subscribe((kind) => {
-        if (kind === "toggleVoice") toggle()
+        // A frame later, so a draft the command hands back (`/voice text`)
+        // lands first and the recording starts from it, as a tap would.
+        if (kind === "toggleVoice") requestAnimationFrame(() => toggle())
       }),
     [surface]
   )

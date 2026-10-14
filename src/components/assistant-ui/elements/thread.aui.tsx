@@ -1077,7 +1077,10 @@ const Composer: FC<{
     const originThreadId = aui.threads.getState().mainThreadId
     const inOrigin = () =>
       aui.threads.getState().mainThreadId === originThreadId
-    void Promise.resolve(command.run(args, flags))
+    // Run inside the chain, so a command that throws before it returns is
+    // caught like one whose promise rejects.
+    void Promise.resolve()
+      .then(() => command.run(args, flags))
       .then((result) => {
         if (result && "steer" in result) {
           if (!inOrigin()) return
