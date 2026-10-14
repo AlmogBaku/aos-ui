@@ -253,6 +253,14 @@ function createGatewayAgent({
           HGW_JSONRPC_ERRORS.turnInProgress,
           "turn_in_progress"
         )
+      // Exactly what it answers a Hermes command reserved for other clients.
+      const [first] = params.prompt
+      if (
+        first?.type === "text" &&
+        typeof first.text === "string" &&
+        first.text.startsWith("/redraw")
+      )
+        throw RequestError.invalidParams({ code: "HGW_COMMAND_UNSUPPORTED" })
       prompts.push(params)
       const messageId = `prompt-${prompts.length}`
       queueMicrotask(() => {
@@ -722,6 +730,21 @@ describe("the workspace over one ACP connection", () => {
     expect(screen.getByText("Draft the plan")).toBeVisible()
     expect(screen.getByText("First answer")).toBeVisible()
     expect(window.location.pathname).toBe(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
+  })
+
+  it("words a refused command by the code the gateway names", async () => {
+    const user = userEvent.setup()
+    const { gateway } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
+    expect(await screen.findByText("First answer")).toBeVisible()
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+
+    await user.type(input, "/redraw")
+    await user.keyboard("{Escape}{Enter}")
+
+    expect(
+      await screen.findByText(en.runErrors.HGW_COMMAND_UNSUPPORTED)
+    ).toBeVisible()
+    expect(gateway.prompts).toHaveLength(0)
   })
 
   it("opens one ACP socket when React discards the provider's render", async () => {

@@ -237,10 +237,18 @@ function refusalText(
   error: unknown,
   describe: ControllerCallbacks["describeRunError"]
 ) {
-  const code =
-    isRecord(error) && typeof error.code === "number"
-      ? REFUSAL_CODES[error.code]
+  // A refusal the gateway names carries its code as the error's data.
+  const named =
+    isRecord(error) &&
+    isRecord(error.data) &&
+    typeof error.data.code === "string"
+      ? error.data.code
       : undefined
+  const code =
+    named ??
+    (isRecord(error) && typeof error.code === "number"
+      ? REFUSAL_CODES[error.code]
+      : undefined)
   const reported = error instanceof Error ? error.message : String(error)
   return describe?.(code, reported) ?? reported
 }
