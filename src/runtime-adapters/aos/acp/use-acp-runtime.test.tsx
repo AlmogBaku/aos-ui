@@ -1499,6 +1499,25 @@ describe("useAcpRuntime child Sessions", () => {
     act(() => fake.emit(report({ capabilities: {} }), REPORT_META))
     act(() => controlsOf(result.current)!.cancel(CHILD_ID))
     expect(fake.cancel.mock.calls).toEqual([[CHILD_ID]])
+
+    // `/stop` stops every child still at work or asking, that stops alone.
+    act(() => {
+      for (const [sessionId, toolCallId, state] of [
+        ["child-asking", "t2", { state: "requires_action" }],
+        ["child-working", "t3", { state: "running" }],
+        ["child-done", "t4", { state: "idle", stopReason: "end_turn" }],
+      ] as const) {
+        fake.emit({ ...spawn, toolCallId }, SPAWN_META)
+        fake.emit(report({ sessionId, state }), { ...TURN_META, toolCallId })
+      }
+    })
+    fake.cancel.mockClear()
+    expect(controlsOf(result.current)!.runningCount()).toBe(2)
+    expect(controlsOf(result.current)!.cancelRunning()).toBe(2)
+    expect(fake.cancel.mock.calls).toEqual([
+      ["child-asking"],
+      ["child-working"],
+    ])
   })
 
   it("restores a child's card and its transcript from a replay, once", async () => {
