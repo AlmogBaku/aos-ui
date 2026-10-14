@@ -22,7 +22,10 @@ import type {
   RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
-import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import type {
+  ComposerFeatureViewModel,
+  LocalCommandResult,
+} from "@/components/assistant-ui/composer-features"
 import {
   setTouchPrimary,
   resetThreadTestEnvironment,
@@ -593,6 +596,7 @@ describe("Thread accessibility", () => {
     const user = userEvent.setup()
     const run = vi.fn(async () => ({ content: [] }))
     const open = vi.fn()
+    let answerLate: (result: LocalCommandResult) => void = () => {}
     render(
       <LocalThread
         model={{ run }}
@@ -609,6 +613,13 @@ describe("Thread accessibility", () => {
               name: "clear",
               acceptsTrailingText: true,
               run: async (args) => ({ draft: args }),
+            },
+            {
+              name: "later",
+              run: () =>
+                new Promise<LocalCommandResult>((resolve) => {
+                  answerLate = resolve
+                }),
             },
           ],
         }}
@@ -641,6 +652,14 @@ describe("Thread accessibility", () => {
     await user.keyboard("{Enter}")
     await waitFor(() => expect(input).toHaveValue("keep this"))
     expect(screen.queryByText("Nothing to stop")).toBeNull()
+
+    // An answer that comes late leaves a draft typed since alone.
+    draft(input, "/later ")
+    await user.keyboard("{Enter}")
+    draft(input, "typed since")
+    act(() => answerLate({ notice: "Too late", keepDraft: true }))
+    expect(await screen.findByText("Too late")).toBeVisible()
+    expect(input).toHaveValue("typed since")
     expect(run).not.toHaveBeenCalled()
   })
 

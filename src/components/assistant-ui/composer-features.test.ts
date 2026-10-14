@@ -93,7 +93,7 @@ describe("matchLocalCommand", () => {
 })
 
 describe("menuSlashCommands", () => {
-  it("lists local commands first, once each by name, and drops a provider namesake of any alias", () => {
+  it("lists local commands first, once each by name with its aliases, and drops a provider namesake of any alias", () => {
     expect(
       menuSlashCommands({
         slashCommands: [
@@ -108,7 +108,7 @@ describe("menuSlashCommands", () => {
       })
     ).toEqual([
       { name: "new", description: "Start a new Session" },
-      { name: "branch", description: "Fork this Session" },
+      { name: "branch", description: "Fork this Session", aliases: ["fork"] },
       { name: "review", description: "Review the diff" },
     ])
   })

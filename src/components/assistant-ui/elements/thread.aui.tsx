@@ -895,7 +895,10 @@ const Composer: FC<{
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
   // One line beside the composer: a failed steer, or a local command's answer.
-  const [composerNotice, setComposerNotice] = useState<string>()
+  const [composerNotice, setComposerNotice] = useState<{
+    readonly text: string
+    readonly tone: "info" | "error"
+  }>()
   const [unconfirmedDeliveries, setUnconfirmedDeliveries] = useState<
     UnconfirmedDeliveryReceipt[]
   >([])
@@ -977,7 +980,10 @@ const Composer: FC<{
             rememberUnconfirmed({ requestId, text })
             return
           }
-          setComposerNotice(labels.steeringFailed ?? "Could not steer")
+          setComposerNotice({
+            text: labels.steeringFailed ?? "Could not steer",
+            tone: "error",
+          })
         })
         .finally(() => {
           if (inOrigin()) submissionLockRef.current = false
@@ -1013,9 +1019,10 @@ const Composer: FC<{
     const { command, args, flags, outcome } = local
     // A draft the command cannot run stays, with its usage, to be finished.
     if (outcome !== "run") {
-      setComposerNotice(
-        labels.commandHint(command.name, command.argument?.hint ?? "")
-      )
+      setComposerNotice({
+        text: labels.commandHint(command.name, command.argument?.hint ?? ""),
+        tone: "info",
+      })
       return
     }
     void aui.composer.reset()
@@ -1027,8 +1034,10 @@ const Composer: FC<{
       } else if ("draft" in result) {
         aui.composer.setText(result.draft)
       } else {
-        setComposerNotice(result.notice)
-        if (result.keepDraft) aui.composer.setText(draft.text)
+        setComposerNotice({ text: result.notice, tone: result.tone ?? "info" })
+        // An answer that arrives late never overwrites a draft typed since.
+        if (result.keepDraft && aui.composer.getState().isEmpty)
+          aui.composer.setText(draft.text)
       }
     })
   }, [
@@ -1533,9 +1542,14 @@ const Composer: FC<{
         <div
           role="status"
           aria-live="polite"
-          className="mb-1.5 px-3 text-sm text-destructive"
+          className={cn(
+            "mb-1.5 px-3 text-sm",
+            composerNotice.tone === "error"
+              ? "text-destructive"
+              : "text-muted-foreground"
+          )}
         >
-          {composerNotice}
+          {composerNotice.text}
         </div>
       ) : null}
       <AuiIf
@@ -1768,6 +1782,7 @@ const ComposerToolbar: FC<
   PropsWithChildren<{ onSend(): void; inputFocused: boolean }>
 > = ({ children, onSend, inputFocused }) => {
   const labels = useContext(ThreadLabelsContext)
+  const { surface } = useContext(ThreadComposerFeaturesContext)
   const voice = useVoiceContext()
   const voiceActive = useVoiceCaptureActive()
   const isRunning = useAuiState((state) => state.thread.isRunning)
@@ -1786,7 +1801,7 @@ const ComposerToolbar: FC<
       <ComposerAddAttachment />
       {children}
       <div className="relative ms-auto flex shrink-0 items-center gap-1.5">
-        <VoiceComposerControl />
+        <VoiceComposerControl surface={surface} />
         {!voiceActive ? (
           <>
             {!isRunning ? (

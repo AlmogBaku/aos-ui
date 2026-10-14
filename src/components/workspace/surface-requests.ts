@@ -9,6 +9,7 @@ export type WorkspaceSurfaceRequest =
   | "openPalette"
   | "openKeyboardReference"
   | "closeActiveTab"
+  | "toggleVoice"
 
 export type WorkspaceSurfaceRequests = {
   readonly request: (kind: WorkspaceSurfaceRequest) => void

@@ -71,6 +71,8 @@ export function composerUsageFromTokens({
 export type ComposerSlashCommand = {
   readonly name: string
   readonly description?: string | undefined
+  /** Other names that run the command; the menu finds it by them too. */
+  readonly aliases?: readonly string[] | undefined
 }
 
 /** A command's `--name` flags: a value, or `true` for a flag that takes none. */
@@ -78,12 +80,18 @@ export type LocalCommandFlags = Readonly<Record<string, string | true>>
 
 /**
  * What a local command hands back to the composer. `notice` shows beside the
- * composer, and `keepDraft` puts back the draft the command consumed; `draft`
- * becomes the composer's text; `steer` goes into the active turn through the
- * composer's own steering, as the steering shortcut would send it.
+ * composer, an answer by default and a failure when `tone` says `"error"`, and
+ * `keepDraft` puts back the draft the command consumed unless something was
+ * typed since; `draft` becomes the composer's text; `steer` goes into the
+ * active turn through the composer's own steering, as the steering shortcut
+ * would send it.
  */
 export type LocalCommandResult =
-  | { readonly notice: string; readonly keepDraft?: boolean | undefined }
+  | {
+      readonly notice: string
+      readonly tone?: "info" | "error" | undefined
+      readonly keepDraft?: boolean | undefined
+    }
   | { readonly draft: string }
   | { readonly steer: string }
 
@@ -94,8 +102,6 @@ export type LocalCommandResult =
  * command stood alone.
  */
 export type ComposerLocalCommand = ComposerSlashCommand & {
-  /** Other names that run the command; the menu lists it by `name` alone. */
-  readonly aliases?: readonly string[] | undefined
   /** A required argument the draft lacks shows `hint` instead of running. */
   readonly argument?:
     | { readonly required: boolean; readonly hint: string }
@@ -206,7 +212,11 @@ export function menuSlashCommands(
   return [
     ...local
       .filter((command) => command.available !== false)
-      .map(({ name, description }) => ({ name, description })),
+      .map(({ name, description, aliases }) => ({
+        name,
+        description,
+        aliases,
+      })),
     ...(features.slashCommands ?? []).filter(
       (command) => !shadowed.has(command.name.toLowerCase())
     ),

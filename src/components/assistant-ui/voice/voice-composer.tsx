@@ -1,9 +1,15 @@
 "use client"
 
 import { ComposerPrimitive, useAui, useAuiState } from "@assistant-ui/react"
-import { useEffect, useRef, type PropsWithChildren } from "react"
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  type PropsWithChildren,
+} from "react"
 import { XIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import type { WorkspaceSurfaceRequests } from "@/components/workspace/surface-requests"
 import {
   ComposerSend,
   ComposerVoice,
@@ -18,7 +24,11 @@ import {
   useVoiceMicLevels,
   useVoiceState,
 } from "./voice-context"
-import { canAttemptSpeech, waitForCommittedTranscript } from "./voice-media"
+import {
+  canAttemptSpeech,
+  waitForCommittedTranscript,
+  type VoiceMediaController,
+} from "./voice-media"
 
 function useRecordingReason() {
   const media = useVoiceContext()?.media
@@ -96,10 +106,29 @@ export function VoiceComposerField({ children }: PropsWithChildren) {
   )
 }
 
-export function VoiceComposerControl() {
-  const aui = useAui()
+/**
+ * `surface` carries a request from elsewhere, such as `/voice`, to start or
+ * finish capture exactly as this control's own buttons do.
+ */
+export function VoiceComposerControl({
+  surface,
+}: {
+  surface?: WorkspaceSurfaceRequests | undefined
+}) {
   const media = useVoiceContext()?.media
   const hasDictation = useAuiState((s) => s.thread.capabilities.dictation)
+  if (!media || !hasDictation) return null
+  return <VoiceCaptureControl media={media} surface={surface} />
+}
+
+function VoiceCaptureControl({
+  media,
+  surface,
+}: {
+  media: VoiceMediaController
+  surface: WorkspaceSurfaceRequests | undefined
+}) {
+  const aui = useAui()
   const labels = useVoiceLabels()
   const capture = useVoiceState((s) => s?.capture)
   const mode = useVoiceState((s) => s?.mode ?? "transcription")
@@ -113,8 +142,6 @@ export function VoiceComposerControl() {
     if (capture?.phase === "recording")
       completionButton.current?.focus({ preventScroll: true })
   }, [capture?.phase])
-  if (!media || !hasDictation) return null
-
   const start = () => {
     // Recheck live state at the gesture boundary, not only the last render.
     const state = aui.composer.getState()
@@ -180,6 +207,21 @@ export function VoiceComposerControl() {
       finishing.current = false
     }
   }
+
+  // A request finishes a recording, and starts one where the record button
+  // would; the starting and transcribing phases have nothing to toggle.
+  const toggle = useEffectEvent(() => {
+    if (!active) {
+      if (reason === undefined) start()
+    } else if (capture?.phase === "recording") void finish()
+  })
+  useEffect(
+    () =>
+      surface?.subscribe((kind) => {
+        if (kind === "toggleVoice") toggle()
+      }),
+    [surface]
+  )
 
   if (active)
     return (

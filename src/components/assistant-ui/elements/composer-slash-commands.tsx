@@ -48,10 +48,13 @@ export function ComposerSlashCommands({
     () => ({
       categories: () => [],
       categoryItems: () => [],
+      // An alias finds its command, listed under the command's own name.
       search: (query: string) =>
         (commands ?? [])
           .filter((command) =>
-            command.name.toLowerCase().includes(query.toLowerCase())
+            [command.name, ...(command.aliases ?? [])].some((name) =>
+              name.toLowerCase().includes(query.toLowerCase())
+            )
           )
           .map((command) => ({
             id: command.name,
