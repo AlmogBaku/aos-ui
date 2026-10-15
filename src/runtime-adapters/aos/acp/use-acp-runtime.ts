@@ -237,10 +237,18 @@ function refusalText(
   error: unknown,
   describe: ControllerCallbacks["describeRunError"]
 ) {
-  const code =
-    isRecord(error) && typeof error.code === "number"
-      ? REFUSAL_CODES[error.code]
+  // A refusal the gateway names carries its code as the error's data.
+  const named =
+    isRecord(error) &&
+    isRecord(error.data) &&
+    typeof error.data.code === "string"
+      ? error.data.code
       : undefined
+  const code =
+    named ??
+    (isRecord(error) && typeof error.code === "number"
+      ? REFUSAL_CODES[error.code]
+      : undefined)
   const reported = error instanceof Error ? error.message : String(error)
   return describe?.(code, reported) ?? reported
 }
@@ -658,6 +666,13 @@ function createAcpController({
     }
   }
 
+  /** Children still at work, or asking for an answer, that stop alone. */
+  const runningChildren = () =>
+    childSessions(state).filter(
+      ({ status, cancellable }) =>
+        cancellable && (status === "running" || status === "waiting")
+    )
+
   /** A child's own controls: its requests are answered, and it stops, alone. */
   const childControls: ChildSessionControls = {
     respondToApproval: (childSessionId, approvalId, optionId, approved) => {
@@ -673,6 +688,12 @@ function createAcpController({
         ({ sessionId }) => sessionId === childSessionId
       )
       if (child?.cancellable) connection.cancel(childSessionId)
+    },
+    runningCount: () => runningChildren().length,
+    cancelRunning: () => {
+      const running = runningChildren()
+      for (const { sessionId } of running) childControls.cancel(sessionId)
+      return running.length
     },
   }
 

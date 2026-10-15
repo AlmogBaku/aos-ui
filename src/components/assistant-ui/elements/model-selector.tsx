@@ -149,6 +149,8 @@ export function ModelSelectorRoot({
   onEffortChange,
   direction = "ltr",
   labels,
+  open,
+  onOpenChange,
   children,
 }: {
   models: readonly ModelOption[]
@@ -162,6 +164,9 @@ export function ModelSelectorRoot({
   onEffortChange?: ((effortId: string) => void) | undefined
   direction?: TextDirection | undefined
   labels: ModelSelectorLabels
+  /** Controls the popup, as a caller opening it from elsewhere does. */
+  open?: boolean | undefined
+  onOpenChange?: ((open: boolean) => void) | undefined
   children: ReactNode
 }) {
   const groups = useMemo(() => toModelGroups(models), [models])
@@ -201,6 +206,8 @@ export function ModelSelectorRoot({
           items={groups}
           itemToStringLabel={(model) => model.name}
           modal={false}
+          open={open}
+          onOpenChange={onOpenChange}
           // Only a deliberate pick may switch the Session's model. The
           // Combobox also reports its own bookkeeping: typeahead against the
           // closed trigger label-matches every keystroke against the whole

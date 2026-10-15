@@ -20,6 +20,10 @@ import {
 } from "@testing-library/react"
 import { useEffect, useLayoutEffect, useReducer } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import {
+  createSurfaceRequests,
+  type WorkspaceSurfaceRequests,
+} from "@/components/assistant-ui/surface-requests"
 import { Thread } from "../elements/thread.aui"
 import { VoiceMediaController } from "./voice-media"
 import { VoiceMediaProvider } from "./voice-context"
@@ -80,6 +84,7 @@ function setup({
   synthesize = vi.fn<(text: string, signal: AbortSignal) => Promise<Blob>>(
     async () => new Blob(["audio"], { type: "audio/wav" })
   ),
+  surface = undefined as WorkspaceSurfaceRequests | undefined,
 } = {}) {
   const model = {
     run: vi.fn<ChatModelAdapter["run"]>(() => modelResult),
@@ -131,7 +136,7 @@ function setup({
     return (
       <VoiceMediaProvider media={media} locale="en">
         <AssistantRuntimeProvider runtime={current}>
-          <Thread autoFocus={false} />
+          <Thread autoFocus={false} composerFeatures={{ surface }} />
         </AssistantRuntimeProvider>
       </VoiceMediaProvider>
     )
@@ -192,6 +197,37 @@ describe("real Assistant UI voice composer", () => {
     expect(h.model.run).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: "Send message" }))
     await waitFor(() => expect(h.model.run).toHaveBeenCalledOnce())
+  })
+  it("starts and finishes capture on a request from elsewhere, as its buttons do", async () => {
+    const surface = createSurfaceRequests()
+    const h = setup({ surface })
+    act(() => h.runtime.thread.composer.setText("Existing draft"))
+
+    act(() => surface.request("toggleVoice"))
+    await waitFor(() => expect(h.recording.state).toBe("recording"))
+    act(() => surface.request("toggleVoice"))
+
+    await waitFor(() =>
+      expect(h.runtime.thread.composer.getState().text).toBe(
+        "Existing draft spoken draft"
+      )
+    )
+    expect(h.model.run).not.toHaveBeenCalled()
+  })
+  it("starts a requested recording from the draft its command hands back", async () => {
+    const surface = createSurfaceRequests()
+    const h = setup({ surface })
+
+    // `/voice Keep this` requests the toggle first; the composer hands the
+    // trailing text back as the draft a microtask later.
+    act(() => {
+      surface.request("toggleVoice")
+      queueMicrotask(() => h.runtime.thread.composer.setText("Keep this"))
+    })
+    await waitFor(() => expect(h.recording.state).toBe("recording"))
+    fireEvent.click(screen.getByRole("button", { name: "Discard recording" }))
+
+    expect(h.runtime.thread.composer.getState().text).toBe("Keep this")
   })
   it("discard restores the draft and stops microphone tracks", async () => {
     const h = setup()

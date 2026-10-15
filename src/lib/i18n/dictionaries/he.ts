@@ -139,6 +139,106 @@ export const he = {
     switchToEnglish: "מעבר לאנגלית",
     switchToHebrew: "מעבר לעברית",
   },
+  commands: {
+    resume: {
+      title: "חזרה לשיחה",
+      description: "פתיחת אחת מהשיחות של הסוכן הזה לפי המזהה או הכותרת שלה",
+      hint: "<מזהה או כותרת>",
+    },
+    branch: { hint: "[שם]" },
+    btw: {
+      title: "שאלה מהצד",
+      description: "שאלה בפיצול של השיחה הזו, בלי לעזוב אותה",
+      hint: "<שאלה>",
+    },
+    bg: {
+      title: "הרצה ברקע",
+      description: "שליחת הנחיה בשיחה חדשה, בלי לעזוב את השיחה הזו",
+      hint: "<הנחיה>",
+    },
+    title: { description: "שינוי השם של השיחה הזו", hint: "<שם>" },
+    stop: {
+      title: "עצירה",
+      description: "עצירת התשובה הפעילה, או העבודה שהשיחה הזו מריצה ברקע",
+    },
+    steer: {
+      title: "שינוי כיוון",
+      description: "שינוי הכיוון של התשובה הפעילה בעזרת הודעה",
+      hint: "<הודעה>",
+    },
+    queue: {
+      title: "הוספת הודעה לתור",
+      description: "שליחה אחרי התשובה הפעילה, או מיד כשאין כזו",
+      hint: "<הודעה>",
+    },
+    model: {
+      title: "בחירת מודל",
+      description: "החלפת המודל, או פתיחת בורר המודלים",
+      hint: "[--reasoning <רמה>] [מודל]",
+    },
+    reasoning: {
+      title: "בחירת מאמץ החשיבה",
+      description: "קביעת מאמץ החשיבה, או פתיחת בורר המודלים",
+      hint: "[רמה]",
+    },
+    retry: {
+      title: "ניסיון חוזר",
+      description: "יצירה מחדש של התשובה האחרונה",
+    },
+    undo: {
+      title: "עריכת הודעה קודמת",
+      description:
+        "עריכה ושליחה מחדש של ההודעה האחרונה שלכם, או של ההודעה ה־N מהסוף",
+      hint: "[N]",
+    },
+    copy: {
+      title: "העתקת תשובה",
+      description: "העתקת התשובה האחרונה, או התשובה ה־N מהסוף",
+      hint: "[N]",
+    },
+    context: {
+      title: "הצגת ניצול ההקשר",
+      description: "כמה מחלון ההקשר השיחה הזו מנצלת",
+    },
+    help: {
+      title: "הצגת פקודות וקיצורים",
+      description: "רשימת הפקודות וקיצורי המקלדת של סביבת העבודה",
+    },
+    palette: {
+      title: "פתיחת פקודות",
+      description: "חיפוש הפעולות של סביבת העבודה",
+    },
+    quit: { description: "סגירת הלשונית של השיחה הזו" },
+    voice: {
+      title: "קלט קולי",
+      description: "התחלה או סיום של קלט קולי",
+    },
+    notices: {
+      noSession: "פתחו שיחה תחילה.",
+      emptySession: "בשיחה הזו עדיין אין הודעות.",
+      cannotFork: "סביבת הריצה הזו לא מפצלת שיחות.",
+      cannotStartTurn: "סביבת הריצה הזו לא יכולה להתחיל תור בשיחה אחרת.",
+      cannotRename: "סביבת הריצה הזו לא משנה שמות של שיחות.",
+      cannotSteer: "סביבת הריצה הזו לא משנה את הכיוון של תשובה פעילה.",
+      cannotRewind: "אי אפשר לחזור אחורה בשיחה הזו.",
+      waitForRun: "המתינו עד שהתשובה תסתיים.",
+      answerPending: "ענו קודם על הבקשה הממתינה.",
+      nothingRunning: "שום דבר לא רץ כרגע.",
+      noSessionNamed: 'אין שיחה שתואמת ל"{query}".',
+      severalSessionsNamed:
+        'כמה שיחות תואמות ל"{query}". השתמשו במזהה של השיחה במקום.',
+      noSuchModel: 'אין מודל שתואם ל"{query}".',
+      severalModels: 'כמה מודלים תואמים ל"{query}".',
+      noSuchEffort: 'למודל הזה אין מאמץ חשיבה "{level}".',
+      noSuchMessage: "אין הודעה כזו.",
+      copied: "התשובה הועתקה.",
+      copyFailed: "לא ניתן היה להעתיק את התשובה.",
+      sidePromptIsCommand: "הנחיה שנשלחת לשיחה אחרת לא יכולה להיות פקודה.",
+      startedInBackground: "ההנחיה נשלחה בשיחה חדשה.",
+      backgroundTurnRefused: "לא ניתן היה להתחיל את השיחה החדשה: {reason}",
+      voiceUnavailable: "קלט קולי לא זמין כאן.",
+    },
+  },
   appearance: {
     label: "מראה",
     light: "בהיר",
@@ -200,6 +300,7 @@ export const he = {
     HGW_COMMAND_WITH_ATTACHMENTS: "לא ניתן לשלוח פקודות עם קבצים מצורפים.",
     HGW_REWIND_CONFLICT:
       "לא ניתן ליצור מחדש את התשובה הזו כי היסטוריית השיחה השתנתה.",
+    HGW_COMMAND_UNSUPPORTED: "הפקודה הזו לא זמינה כאן.",
     temporarily_unavailable: "השירות אינו זמין באופן זמני. נסו שוב.",
     rate_limited: "יותר מדי בקשות. נסו שוב בעוד רגע.",
     request_failed: "לא ניתן היה להשלים את הבקשה.",

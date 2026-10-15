@@ -1,13 +1,23 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 
+import { createSurfaceRequests } from "@/components/assistant-ui/surface-requests"
+import type { WorkspaceCommand } from "@/components/workspace/workspace-commands"
 import {
   WorkspaceShell,
   type WorkspaceAgent,
   type WorkspaceSession,
+  type WorkspaceShellProps,
 } from "@/components/workspace/workspace-shell"
 
 vi.mock("next-themes", () => ({
@@ -28,7 +38,24 @@ const sessions: WorkspaceSession[] = [
   { sessionId: "b", title: "B", status: "idle", updatedAt: "2026-09-06" },
 ]
 
-function renderShell() {
+/** A slash command the palette can run with nothing typed. */
+function slashCommand(
+  id: string,
+  name: string,
+  title: string
+): WorkspaceCommand {
+  return {
+    id,
+    names: [name],
+    title,
+    description: "",
+    available: true,
+    palette: true,
+    run: vi.fn(async () => undefined),
+  }
+}
+
+function renderShell(props: Partial<WorkspaceShellProps> = {}) {
   return render(
     <WorkspaceShell
       locale="en"
@@ -43,6 +70,7 @@ function renderShell() {
       onCloseSession={vi.fn()}
       onCreateSession={vi.fn()}
       onOpenAgentBuilder={vi.fn()}
+      {...props}
     >
       <div>Conversation</div>
     </WorkspaceShell>
@@ -124,6 +152,60 @@ describe("workspace keyboard discovery", () => {
     expect(
       screen.getAllByRole("button", { name: "Open Session: A" })
     ).toHaveLength(1)
+  })
+
+  it("lends a built-in action its slash spelling and adds the other slash commands", async () => {
+    const user = userEvent.setup()
+    const onCreateSession = vi.fn()
+    const twin = slashCommand("workspace.newSession", "new", "Start afresh")
+    const stop = slashCommand("command.stop", "stop", "Stop")
+    renderShell({ onCreateSession, commands: [twin, stop] })
+    const openCommands = () =>
+      user.click(screen.getByRole("button", { name: "Commands (❖+K)" }))
+
+    await openCommands()
+    const newSession = screen.getAllByRole("button", { name: "New Session" })
+    expect(newSession).toHaveLength(1)
+    expect(newSession[0]).toHaveTextContent("/new")
+    expect(screen.queryByRole("button", { name: "Start afresh" })).toBeNull()
+    await user.click(newSession[0]!)
+    // The twin keeps the built-in's own action.
+    expect(onCreateSession).toHaveBeenCalledExactlyOnceWith("one")
+    expect(twin.run).not.toHaveBeenCalled()
+
+    await openCommands()
+    await user.click(screen.getByRole("button", { name: "Stop" }))
+    expect(stop.run).toHaveBeenCalledExactlyOnceWith("", {})
+  })
+
+  it("opens the palette and the command reference, and closes the active tab, when a command asks", async () => {
+    const user = userEvent.setup()
+    const surface = createSurfaceRequests()
+    const onCloseSession = vi.fn()
+    renderShell({
+      surface,
+      onCloseSession,
+      openSessions: sessions.map((session) => ({ ...session, canClose: true })),
+      commands: [slashCommand("command.stop", "stop", "Stop")],
+    })
+
+    act(() => surface.request("openPalette"))
+    expect(
+      await screen.findByRole("dialog", { name: "Commands" })
+    ).toBeVisible()
+    await user.keyboard("{Escape}")
+    act(() => surface.request("openKeyboardReference"))
+    const reference = await screen.findByRole("dialog", {
+      name: "Keyboard reference",
+    })
+    expect(
+      within(reference).getByRole("region", { name: "Slash commands" })
+    ).toHaveTextContent("Stop/stop")
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+
+    act(() => surface.request("closeActiveTab"))
+    expect(onCloseSession).toHaveBeenCalledExactlyOnceWith("a", "one")
   })
 
   it("opens conversation search from Mod+F and Commands without taking composer history keys", async () => {

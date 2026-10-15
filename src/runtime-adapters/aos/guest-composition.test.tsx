@@ -683,6 +683,33 @@ describe("AOS guest browser composition", () => {
     expect(gateway.prompts).toHaveLength(1)
   })
 
+  // The guest lane owns `/stop` alone; any other command is the guest's text,
+  // which the gateway answers as it would any client's.
+  it("stops the running turn on /stop and sends any other command as text", async () => {
+    const user = userEvent.setup()
+    const { gateway } = mount({ holdRuns: true })
+    await screen.findByText("Earlier guest answer")
+    await sendTurn(user, "Start the interview")
+    expect(await screen.findByText("Guest-visible answer")).toBeVisible()
+
+    // The trailing space closes the `/` menu, so Enter submits.
+    await sendTurn(user, "/stop ")
+    await waitFor(() =>
+      expect(gateway.calls).toContain(methods.agent.session.cancel)
+    )
+    expect(gateway.prompts).toHaveLength(1)
+
+    gateway.finishRun()
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /stop/iu })).toBeNull()
+    )
+    await sendTurn(user, "/resume pricing")
+    await waitFor(() => expect(gateway.prompts).toHaveLength(2))
+    expect(gateway.prompts[1]?.prompt).toEqual([
+      { type: "text", text: "/resume pricing" },
+    ])
+  })
+
   it("does not steer when the invited Session reports steering unavailable", async () => {
     const user = userEvent.setup()
     const { gateway } = mount({ holdRuns: true })

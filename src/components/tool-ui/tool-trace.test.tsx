@@ -389,6 +389,8 @@ describe("subagents", () => {
         async () => {}
       ),
       cancel: vi.fn(),
+      runningCount: () => 0,
+      cancelRunning: () => 0,
     })
 
     it("stops a child that offers to be stopped alone, and offers no Stop otherwise", async () => {

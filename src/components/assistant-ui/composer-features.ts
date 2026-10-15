@@ -1,3 +1,4 @@
+import type { WorkspaceSurfaceRequests } from "./surface-requests"
 import type {
   ComposerModelFeed,
   ComposerTurnUsage,
@@ -70,15 +71,57 @@ export function composerUsageFromTokens({
 export type ComposerSlashCommand = {
   readonly name: string
   readonly description?: string | undefined
+  /** Other names that run the command; the menu finds it by them too. */
+  readonly aliases?: readonly string[] | undefined
 }
+
+/** A command's `--name` flags: a value, or `true` for a flag that takes none. */
+export type LocalCommandFlags = Readonly<Record<string, string | true>>
+
+/**
+ * What a local command hands back to the composer. `notice` shows beside the
+ * composer, an answer by default and a failure when `tone` says `"error"`, and
+ * `keepDraft` puts back the draft the command consumed unless something was
+ * typed since; `draft` becomes the composer's text; `steer` goes into the
+ * active turn through the composer's own steering, as the steering shortcut
+ * would send it. A notice or a kept draft belongs to the Session the command
+ * ran on, so neither reaches another one shown by the time it arrives; a
+ * `draft` does, as `/new` opening a Session wants.
+ */
+export type LocalCommandResult =
+  | {
+      readonly notice: string
+      readonly tone?: "info" | "error" | undefined
+      readonly keepDraft?: boolean | undefined
+    }
+  | { readonly draft: string }
+  | { readonly steer: string }
 
 /**
  * A slash command the workspace runs itself instead of sending to the runtime:
  * `/new` opens a Session, which no provider turn can do. `args` is whatever
- * followed the command name, trimmed; empty when the command stood alone.
+ * followed the command name and its leading flags, trimmed; empty when the
+ * command stood alone. A command without an `argument` takes none, so any
+ * text after it becomes the next draft once it has run.
  */
 export type ComposerLocalCommand = ComposerSlashCommand & {
-  readonly run: (args: string) => void | Promise<void>
+  /** A required argument the draft lacks shows `hint` instead of running. */
+  readonly argument?:
+    | { readonly required: boolean; readonly hint: string }
+    | undefined
+  /**
+   * The text after the name is taken as written, with no flag read and no
+   * argument required: a command that only answers why it cannot run does.
+   */
+  readonly unparsed?: boolean | undefined
+  /** `--name` flags the command reads before its argument. */
+  readonly knownFlags?:
+    | readonly { readonly name: string; readonly takesValue: boolean }[]
+    | undefined
+  readonly run: (
+    args: string,
+    flags: LocalCommandFlags
+  ) => void | Promise<void | LocalCommandResult>
   /**
    * `false` keeps the command out of the menu while it still shadows the
    * provider's namesake and still runs, so a typed draft never becomes a turn.
@@ -86,18 +129,83 @@ export type ComposerLocalCommand = ComposerSlashCommand & {
   readonly available?: boolean
 }
 
-const LOCAL_COMMAND = /^\/(\S+)(?:\s+([\s\S]*))?$/u
+/**
+ * How a draft invokes a local command. `missing-argument` and `unknown-flag`
+ * leave the command unrun, so the composer can show its usage instead.
+ */
+export type LocalCommandResolution = {
+  readonly command: ComposerLocalCommand
+  readonly args: string
+  readonly flags: LocalCommandFlags
+  readonly outcome: "run" | "missing-argument" | "unknown-flag"
+}
 
-/** The local command a draft invokes, by name, case-insensitively. */
+/** The first whitespace-separated word of `text` and the trimmed rest. */
+function splitWord(text: string): [word: string, rest: string] | undefined {
+  const match = /^(\S+)(?:\s+([\s\S]*))?$/u.exec(text)
+  return match ? [match[1]!, match[2] ?? ""] : undefined
+}
+
+const commandNames = (command: ComposerLocalCommand) =>
+  [command.name, ...(command.aliases ?? [])].map((name) => name.toLowerCase())
+
+/** The local command a draft invokes, by name or alias, case-insensitively. */
 export function matchLocalCommand(
   text: string,
   commands: readonly ComposerLocalCommand[] | undefined
 ): { command: ComposerLocalCommand; args: string } | undefined {
-  const match = LOCAL_COMMAND.exec(text.trim())
-  if (!match || !commands?.length) return undefined
-  const name = match[1]!.toLowerCase()
-  const command = commands.find((entry) => entry.name.toLowerCase() === name)
-  return command ? { command, args: match[2]?.trim() ?? "" } : undefined
+  const draft = text.trim()
+  const split = draft.startsWith("/") ? splitWord(draft.slice(1)) : undefined
+  if (!split || !commands?.length) return undefined
+  const [word, args] = split
+  const name = word.toLowerCase()
+  const command = commands.find((entry) => commandNames(entry).includes(name))
+  return command ? { command, args } : undefined
+}
+
+/**
+ * Resolves a draft against the local commands. Leading `--name` tokens are the
+ * command's flags, read in order; a flag that takes a value takes the next
+ * word, and lacking one counts as a missing argument. The first unknown flag
+ * stops the command.
+ */
+export function resolveLocalCommand(
+  text: string,
+  commands: readonly ComposerLocalCommand[] | undefined
+): LocalCommandResolution | undefined {
+  const match = matchLocalCommand(text, commands)
+  if (!match) return undefined
+  const { command } = match
+  if (command.unparsed)
+    return { command, args: match.args, flags: {}, outcome: "run" }
+  const flags: Record<string, string | true> = {}
+  const resolution = (
+    outcome: LocalCommandResolution["outcome"],
+    args: string
+  ): LocalCommandResolution => ({ command, args, flags, outcome })
+  let args = match.args
+  for (let token = splitWord(args); token; token = splitWord(args)) {
+    const [word, rest] = token
+    if (!word.startsWith("--") || word.length === 2) break
+    const name = word.slice(2).toLowerCase()
+    const flag = command.knownFlags?.find(
+      (known) => known.name.toLowerCase() === name
+    )
+    if (!flag) return resolution("unknown-flag", args)
+    args = rest
+    if (!flag.takesValue) {
+      flags[flag.name] = true
+      continue
+    }
+    const value = splitWord(args)
+    if (!value) return resolution("missing-argument", args)
+    flags[flag.name] = value[0]
+    args = value[1]
+  }
+  return resolution(
+    command.argument?.required && !args ? "missing-argument" : "run",
+    args
+  )
 }
 
 /** Local commands lead the completion menu and shadow a provider's namesake. */
@@ -105,11 +213,15 @@ export function menuSlashCommands(
   features: Pick<ComposerFeatureViewModel, "slashCommands" | "localCommands">
 ): readonly ComposerSlashCommand[] {
   const local = features.localCommands ?? []
-  const shadowed = new Set(local.map((command) => command.name.toLowerCase()))
+  const shadowed = new Set(local.flatMap(commandNames))
   return [
     ...local
       .filter((command) => command.available !== false)
-      .map(({ name, description }) => ({ name, description })),
+      .map(({ name, description, aliases }) => ({
+        name,
+        description,
+        aliases,
+      })),
     ...(features.slashCommands ?? []).filter(
       (command) => !shadowed.has(command.name.toLowerCase())
     ),
@@ -155,4 +267,6 @@ export type ComposerFeatureViewModel = {
         readonly cost?: ComposerSessionCost | undefined
       }
     | undefined
+  /** Requests from outside the composer to open its model or context surface. */
+  readonly surface?: WorkspaceSurfaceRequests | undefined
 }

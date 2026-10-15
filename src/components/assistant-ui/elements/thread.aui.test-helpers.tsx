@@ -334,8 +334,10 @@ const multiSessionAdapter = {
 
 export function MultiSessionThread({
   exposeRuntime,
+  composerFeatures,
 }: {
   exposeRuntime?: (runtime: AssistantRuntime) => void
+  composerFeatures?: ComposerFeatureViewModel
 }) {
   const runtime = useRemoteThreadListRuntime({
     adapter: multiSessionAdapter,
@@ -345,7 +347,7 @@ export function MultiSessionThread({
   exposeRuntime?.(runtime)
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread autoFocus={false} />
+      <Thread autoFocus={false} composerFeatures={composerFeatures} />
     </AssistantRuntimeProvider>
   )
 }

@@ -4,7 +4,7 @@
 # the guest lane beside it.
 services:
   gateway:
-    image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.9.0@sha256:0c8505ffcbfb9eaa20ff52056f20cfab1cb7a95f111c82cd9116ec42b3e06848}
+    image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.10.0@sha256:7750ce6406cfaf1bea7548549b13c2c38f49739dc3851ee0b07e94bd4c2e21ae}
     user: "${AOS_UI_HOST_UID:-1000}:${AOS_UI_HOST_GID:-1000}"
     environment:
       HARNESS_GW_CONFIG_FILE: /run/harness-gw/config.yaml

@@ -454,6 +454,16 @@ function ReadyAosRuntimeProvider({
         : undefined,
     [connection, forks]
   )
+  // No thread holds the Session: the gateway joins this connection to it for
+  // the prompt and answers at admission, and no projector shows the echo.
+  const startTurn = useCallback(
+    async (sessionId: string, text: string) => {
+      await connection.prompt(sessionId, [{ type: "text", text }], {
+        clientId: crypto.randomUUID(),
+      })
+    },
+    [connection]
+  )
   const capabilitiesReady = capabilities !== undefined
   const transcriptionAvailable =
     capabilities?.content.transcription.status === "available"
@@ -492,6 +502,7 @@ function ReadyAosRuntimeProvider({
     workspace: client,
     createSessionDraft,
     ...(forkSession ? { forkSession } : {}),
+    startTurn,
     interactions,
     artifacts: { resolver: artifacts },
     mcpApps,

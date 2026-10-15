@@ -50,6 +50,10 @@ import {
   WorkspaceConversationShell,
   WorkspaceStatusNotice,
 } from "@/components/workspace"
+import {
+  stopCommand,
+  toLocalCommands,
+} from "@/components/workspace/workspace-commands"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import type { Locale } from "@/lib/i18n/config"
@@ -498,17 +502,41 @@ function ReadyGuestAosSurface({
   useEffect(() => {
     threadRuntime.current = runtime
   }, [runtime])
-  // Guests get no slash commands; a run steers only when the Session allows it.
+  // A guest's one local command is `/stop`, for the turn alone: a guest acts
+  // for no child Session. Every other command travels as text, and the
+  // gateway answers it. A run steers only when the Session allows it.
   const steeringAvailable =
     capabilities?.interactions.steering.status === "available"
+  const subscribeThread = useCallback(
+    (onChange: () => void) => runtime.thread.subscribe(onChange),
+    [runtime]
+  )
+  const isRunning = useSyncExternalStore(
+    subscribeThread,
+    () => runtime.thread.getState().isRunning
+  )
   const composerFeatures = useMemo<ComposerFeatureViewModel>(
     () => ({
       steer: steeringAvailable
         ? (request: { requestId: string; text: string }) =>
             connection.steer({ sessionId, ...request })
         : undefined,
+      localCommands: toLocalCommands([
+        stopCommand({
+          dictionary: dictionaries[selectedLocale],
+          isRunning,
+          cancelRun: () => runtime.thread.cancelRun(),
+        }),
+      ]),
     }),
-    [connection, sessionId, steeringAvailable]
+    [
+      connection,
+      isRunning,
+      runtime,
+      selectedLocale,
+      sessionId,
+      steeringAvailable,
+    ]
   )
   const composer = useMemo<ThreadComponents["Composer"]>(
     () =>

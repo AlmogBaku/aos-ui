@@ -22,14 +22,12 @@ import {
   useContext,
   useMemo,
   useState,
-  useSyncExternalStore,
 } from "react"
 
 import {
   Thread,
   type ThreadComponents,
 } from "@/components/assistant-ui/elements/thread.aui"
-import type { ComposerLocalCommand } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
 import {
@@ -56,6 +54,9 @@ import {
   useHasSessionOutputs,
 } from "@/components/artifacts"
 import { ManageAgents } from "@/components/workspace/manage-agents"
+import { createSurfaceRequests } from "@/components/assistant-ui/surface-requests"
+import { useWorkspaceCommands } from "@/components/workspace/use-workspace-commands"
+import { toLocalCommands } from "@/components/workspace/workspace-commands"
 import { useWorkspaceNavigation } from "@/components/workspace/use-workspace-navigation"
 import { useActivityCoordinator } from "@/components/workspace/use-activity-coordinator"
 import type { BrowserSettingsView } from "@/components/workspace/activity"
@@ -587,77 +588,39 @@ function WorkspaceContent({
     setWorkspaceErrorDismissed(false)
   }
   const shownWorkspaceError = workspaceErrorDismissed ? null : workspaceError
-  // `/new` is the composer's spelling of the New Session action: a Session is
-  // the workspace's to open, so the command runs here and never becomes a turn.
-  // Text after the command seeds the new Session's draft instead of being lost.
-  // An empty Session is already new: the command leaves the menu there, and a
-  // typed one only seeds the draft rather than opening a second empty Session.
-  const subscribeThread = useCallback(
-    (onChange: () => void) => runtime.thread.subscribe(onChange),
-    [runtime]
+  // Slash commands that act on the workspace or the conversation run here
+  // through the workspace's own actions, and the palette offers the same ones.
+  // A command asks a surface it does not own, such as the model selector or
+  // the tab strip, through one request channel the surfaces answer.
+  const surface = useMemo(() => createSurfaceRequests(), [])
+  const reportActionError = useCallback(
+    (reason: unknown) => setActionError(toError(reason)),
+    [setActionError]
   )
-  const threadIsEmpty = useSyncExternalStore(
-    subscribeThread,
-    () => runtime.thread.getState().messages.length === 0
-  )
-  // `/fork` and `/branch` are the composer's spelling of the Fork action, run
-  // here for the same reason: the fork opens as the Session in view, and no
-  // turn is sent. ACP's fork takes no title, so a name typed after the command
-  // names the fork as Rename does; one it cannot take leaves the fork as it
-  // is. A Session not created yet has nothing to fork.
-  const forksSessions = Boolean(bundle.forkSession)
-  const localCommands = useMemo<
-    readonly ComposerLocalCommand[] | undefined
-  >(() => {
-    if (!selectedAgentId || selectedAgentIsDraft) return undefined
-    const fork = async (title: string) => {
-      if (!visibleThreadId) return
-      try {
-        const forked = await forkSession(visibleThreadId)
-        if (title) await renameSession(forked, title)
-      } catch (reason) {
-        setActionError(toError(reason))
-      }
-    }
-    return [
-      {
-        name: "new",
-        description: dictionary.actions.newSessionCommand,
-        available: !threadIsEmpty,
-        run: async (args) => {
-          try {
-            if (!threadIsEmpty) await createSession(selectedAgentId)
-            if (args) runtime.thread.composer.setText(args)
-          } catch (reason) {
-            setActionError(toError(reason))
-          }
-        },
-      },
-      ...(forksSessions
-        ? ["fork", "branch"].map((name) => ({
-            name,
-            description: dictionary.actions.forkSessionCommand,
-            available: Boolean(visibleThreadId),
-            run: fork,
-          }))
-        : []),
-    ]
-  }, [
-    createSession,
+  const commands = useWorkspaceCommands({
+    bundle,
     dictionary,
-    forkSession,
-    forksSessions,
-    renameSession,
-    runtime,
-    selectedAgentId,
-    selectedAgentIsDraft,
-    setActionError,
-    threadIsEmpty,
-    visibleThreadId,
-  ])
+    surface,
+    reportActionError,
+    navigation: {
+      selectedAgentId,
+      selectedAgentIsDraft,
+      visibleThreadId,
+      loadedSessions: [...shellOpenSessions, ...sessionView.allSessions],
+      sessionActions,
+      openSession,
+      renameSession,
+      createSession,
+      forkSession,
+    },
+  })
   const threadComposerFeatures = useMemo(
-    () => ({ ...composerFeatures, localCommands }),
-    [composerFeatures, localCommands]
+    () => ({
+      ...composerFeatures,
+      localCommands: commands && toLocalCommands(commands),
+      surface,
+    }),
+    [commands, composerFeatures, surface]
   )
 
   const threadChrome = useMemo<WorkspaceThreadChrome>(
@@ -749,6 +712,8 @@ function WorkspaceContent({
         onDeleteSession={deleteSession}
         sessionActions={sessionActions}
         onSearchSessions={workspace.searchSessions}
+        commands={commands}
+        surface={surface}
         onOpenAgentBuilder={openAgentBuilder}
         onManageAgents={() => setManagementOpen(true)}
         onConversationObscuredChange={setConversationObscured}

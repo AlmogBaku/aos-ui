@@ -18,6 +18,10 @@ export type ChildSessionControls = {
   ) => Promise<void>
   /** Stops the child's current work, where the child offers that. */
   readonly cancel: (childSessionId: string) => void
+  /** How many children are at work, or waiting for an answer, and stop alone. */
+  readonly runningCount: () => number
+  /** Stops each child `runningCount` counts, and says how many it stopped. */
+  readonly cancelRunning: () => number
 }
 
 export type ChildSessionExtras = {

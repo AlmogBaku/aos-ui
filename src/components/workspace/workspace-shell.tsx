@@ -18,6 +18,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useReducer,
   useRef,
@@ -64,6 +65,8 @@ import {
   type BrowserSettingsView,
 } from "./activity"
 import type { ActivityView } from "./use-activity-coordinator"
+import type { WorkspaceSurfaceRequests } from "@/components/assistant-ui/surface-requests"
+import type { WorkspaceCommand } from "./workspace-commands"
 import { WorkspaceKeyboard } from "@/components/keyboard/workspace-keyboard"
 import {
   MobileNavigator,
@@ -212,6 +215,10 @@ export type WorkspaceShellProps = {
   navigationHidden?: boolean
   /** The provider's Session search; absent, the search box filters titles. */
   onSearchSessions?: AgentSessionHistoryProps["onSearch"]
+  /** The workspace's slash commands, which the palette also offers. */
+  commands?: readonly WorkspaceCommand[] | undefined
+  /** Requests from a command to open the palette or close the active tab. */
+  surface?: WorkspaceSurfaceRequests | undefined
   children: ReactNode
 }
 
@@ -593,6 +600,7 @@ type SessionTabsProps = Pick<
   | "onActionError"
   | "threadListRuntime"
   | "sessionActions"
+  | "surface"
 > & {
   sessionMenu: SessionRowMenuHandlers
   /** The inspector lists the Sessions, so the strip is out of reach. */
@@ -611,6 +619,7 @@ function SessionTabs({
   onActionError,
   threadListRuntime,
   sessionActions,
+  surface,
   sessionMenu,
   replaced,
 }: SessionTabsProps) {
@@ -662,6 +671,19 @@ function SessionTabs({
       onActionError
     )
   }
+
+  // `/quit` closes the tab in view as its close button does, focus handoff
+  // and all; a tab that cannot close stays.
+  const closeActiveTab = useEffectEvent(() => {
+    if (activeSession?.canClose) closeTab(activeSession.sessionId)
+  })
+  useEffect(
+    () =>
+      surface?.subscribe((kind) => {
+        if (kind === "closeActiveTab") closeActiveTab()
+      }),
+    [surface]
+  )
 
   function moveToTab(index: number, event: KeyboardEvent<HTMLButtonElement>) {
     const session = openSessions[index]
@@ -1149,6 +1171,8 @@ export function WorkspaceShell({
   conversationHeader,
   navigationHidden = false,
   onSearchSessions,
+  commands,
+  surface,
   children,
 }: WorkspaceShellProps) {
   const shellRef = useRef<HTMLElement>(null)
@@ -1674,6 +1698,7 @@ export function WorkspaceShell({
                 onActionError={onActionError}
                 threadListRuntime={threadListRuntime}
                 sessionActions={sessionActions}
+                surface={surface}
                 sessionMenu={sessionMenu}
                 replaced={inspectorShowsSessions}
               />
@@ -1810,6 +1835,8 @@ export function WorkspaceShell({
             onOpenSession={onOpenSession}
             onCreateSession={onCreateSession}
             onOpenAgentBuilder={onOpenAgentBuilder}
+            commands={commands}
+            surface={surface}
           />
         ) : null}
 

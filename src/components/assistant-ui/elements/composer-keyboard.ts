@@ -10,6 +10,8 @@ export type ComposerEnterState = {
   readonly plainEnterSends: boolean
   readonly canSteer?: boolean
   readonly hasAttachments?: boolean
+  /** The draft invokes a local command, which runs whatever the run state. */
+  readonly isLocalCommand?: boolean
 }
 
 export type ComposerEnterEvent = {
@@ -138,7 +140,7 @@ export function resolveComposerEnterAction(
   if (!sendShortcut && (event.shiftKey || !state.plainEnterSends)) {
     return "newline"
   }
-  if (!state.isRunning) return "send"
+  if (state.isLocalCommand || !state.isRunning) return "send"
   if (steeringShortcut) {
     if (state.canSteer && !state.hasAttachments) return "steer"
     return state.hasQueue ? "queue" : "noop"
