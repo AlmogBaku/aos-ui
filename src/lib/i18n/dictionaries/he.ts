@@ -120,7 +120,6 @@ export const he = {
     archiveSession: "העברה לארכיון",
     unarchiveSession: "הוצאה מהארכיון",
     forkSession: "פיצול",
-    forkSessionCommand: "פיצול השיחה הזו לשיחה חדשה",
     deleteSession: "מחיקה",
     deleteSessionTitle: "למחוק את השיחה?",
     deleteSessionDescription:
@@ -145,11 +144,15 @@ export const he = {
       description: "פתיחת אחת מהשיחות של הסוכן הזה לפי המזהה או הכותרת שלה",
       hint: "<מזהה או כותרת>",
     },
-    branch: { hint: "[שם]" },
-    btw: {
-      title: "שאלה מהצד",
-      description: "שאלה בפיצול של השיחה הזו, בלי לעזוב אותה",
-      hint: "<שאלה>",
+    branch: {
+      title: "פיצול ומעבר",
+      description: "פיצול השיחה הזו ומעבר לפיצול",
+      hint: "[הנחיה]",
+    },
+    fork: {
+      title: "פיצול",
+      description: "פיצול השיחה הזו והישארות בה",
+      hint: "[הנחיה]",
     },
     bg: {
       title: "הרצה ברקע",
@@ -235,6 +238,7 @@ export const he = {
       copyFailed: "לא ניתן היה להעתיק את התשובה.",
       sidePromptIsCommand: "הנחיה שנשלחת לשיחה אחרת לא יכולה להיות פקודה.",
       startedInBackground: "ההנחיה נשלחה בשיחה חדשה.",
+      forked: "השיחה פוצלה לשיחה חדשה.",
       backgroundTurnRefused: "לא ניתן היה להתחיל את השיחה החדשה: {reason}",
       voiceUnavailable: "קלט קולי לא זמין כאן.",
     },

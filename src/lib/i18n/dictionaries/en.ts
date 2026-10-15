@@ -126,7 +126,6 @@ export const en = {
     archiveSession: "Archive",
     unarchiveSession: "Unarchive",
     forkSession: "Fork",
-    forkSessionCommand: "Fork this Session into a new one",
     deleteSession: "Delete",
     deleteSessionTitle: "Delete this Session?",
     deleteSessionDescription:
@@ -151,11 +150,15 @@ export const en = {
       description: "Open one of this Agent's Sessions by its id or title",
       hint: "<id or title>",
     },
-    branch: { hint: "[name]" },
-    btw: {
-      title: "Ask on the side",
-      description: "Ask in a fork of this Session and stay here",
-      hint: "<question>",
+    branch: {
+      title: "Branch",
+      description: "Fork this Session and switch to the fork",
+      hint: "[prompt]",
+    },
+    fork: {
+      title: "Fork",
+      description: "Fork this Session and stay here",
+      hint: "[prompt]",
     },
     bg: {
       title: "Start in the background",
@@ -237,6 +240,7 @@ export const en = {
       copyFailed: "The reply could not be copied.",
       sidePromptIsCommand: "A prompt sent elsewhere cannot be a command.",
       startedInBackground: "Started in a new Session.",
+      forked: "Forked into a new Session.",
       backgroundTurnRefused: "The new Session could not start: {reason}",
       voiceUnavailable: "Voice input is not available here.",
     },

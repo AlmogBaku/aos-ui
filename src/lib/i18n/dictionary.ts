@@ -129,7 +129,6 @@ export type Dictionary = {
     unarchiveSession: string
     forkSession: string
     /** The `/fork` and `/branch` slash commands' menu description. */
-    forkSessionCommand: string
     deleteSession: string
     deleteSessionTitle: string
     deleteSessionDescription: string
@@ -159,8 +158,8 @@ export type Dictionary = {
   commands: {
     resume: CommandCopy & { hint: string }
     /** `/branch` and `/fork`, after the optional name they take. */
-    branch: { hint: string }
-    btw: CommandCopy & { hint: string }
+    branch: CommandCopy & { hint: string }
+    fork: CommandCopy & { hint: string }
     bg: CommandCopy & { hint: string }
     title: { description: string; hint: string }
     stop: CommandCopy
@@ -198,6 +197,7 @@ export type Dictionary = {
       copyFailed: string
       sidePromptIsCommand: string
       startedInBackground: string
+      forked: string
       backgroundTurnRefused: string
       voiceUnavailable: string
     }
