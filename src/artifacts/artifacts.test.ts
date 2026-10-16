@@ -28,12 +28,28 @@ describe("extractSessionOutputs", () => {
     ],
   })
 
-  it("lists an identified file once, at its latest call, and an unidentified one per call", () => {
+  /** One Artifact publication in its own message. */
+  const published = (messageId: string, id: string, filename: string) => ({
+    id: messageId,
+    role: "assistant",
+    content: [
+      {
+        type: "data",
+        name: "aos.artifact",
+        data: { id, filename, source: { type: "provider", reference: id } },
+      },
+    ],
+  })
+
+  it("lists a republished file once, at its latest publication, and an unidentified one per call", () => {
     const messages = [
       shown("call-1", { filename: "Notes.txt", fileId: "notes" }),
+      published("media-1", "deck", "index.html"),
       shown("call-2", { filename: "plan.md", fileId: "plan" }),
       shown("call-3", { filename: "scratch.txt" }),
+      published("media-2", "plan", "plan.png"),
       shown("call-4", { filename: "Notes v2.txt", fileId: "notes" }),
+      published("media-3", "deck", "index.html"),
       shown("call-5", { filename: "scratch.txt" }),
     ]
 
@@ -41,12 +57,14 @@ describe("extractSessionOutputs", () => {
       extractSessionOutputs(messages).map((output) =>
         output.kind === "app"
           ? [output.toolCallId, output.file.filename]
-          : output.kind
+          : [output.key, output.artifact.filename]
       )
     ).toEqual([
       ["call-2", "plan.md"],
       ["call-3", "scratch.txt"],
+      ["media-2:0", "plan.png"],
       ["call-4", "Notes v2.txt"],
+      ["media-3:0", "index.html"],
       ["call-5", "scratch.txt"],
     ])
     expect(latestCallsByFile(messages)).toEqual(

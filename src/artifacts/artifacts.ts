@@ -186,15 +186,24 @@ export type SessionOutput =
     }
 
 /**
- * Every file the conversation published, in the order it did. A file its tool
- * identifies across calls appears once, at its latest publication, since each
- * call for one file refreshes the same Artifact rather than adding another.
+ * Every file the conversation published, in the order it did. A file published
+ * again, as the same Artifact or as the file its tool identifies across calls,
+ * appears once, at its latest publication, since each one refreshes the same
+ * file rather than adding another.
  */
 export function extractSessionOutputs(
   messages: readonly ArtifactMessage[]
 ): SessionOutput[] {
   const outputs: Array<SessionOutput | undefined> = []
   const latestByFile = new Map<string, number>()
+  const publish = (output: SessionOutput, identity: string | undefined) => {
+    if (identity !== undefined) {
+      const earlier = latestByFile.get(identity)
+      if (earlier !== undefined) outputs[earlier] = undefined
+      latestByFile.set(identity, outputs.length)
+    }
+    outputs.push(output)
+  }
   const artifacts = new Map(
     extractArtifactOccurrences(messages).map((occurrence) => [
       occurrence.key,
@@ -206,7 +215,7 @@ export function extractSessionOutputs(
       const key = `${message.id}:${partIndex}`
       const artifact = artifacts.get(key)
       if (artifact) {
-        outputs.push({ key, kind: "artifact", artifact })
+        publish({ key, kind: "artifact", artifact }, `artifact:${artifact.id}`)
         return
       }
       if (
@@ -219,20 +228,18 @@ export function extractSessionOutputs(
         return
       const file = shownFileOf(part.result)
       if (!file) return
-      if (file.fileId !== undefined) {
-        const earlier = latestByFile.get(file.fileId)
-        if (earlier !== undefined) outputs[earlier] = undefined
-        latestByFile.set(file.fileId, outputs.length)
-      }
-      outputs.push({
-        key,
-        kind: "app",
-        toolCallId: part.toolCallId,
-        ...(typeof part.toolName === "string"
-          ? { toolName: part.toolName }
-          : {}),
-        file,
-      })
+      publish(
+        {
+          key,
+          kind: "app",
+          toolCallId: part.toolCallId,
+          ...(typeof part.toolName === "string"
+            ? { toolName: part.toolName }
+            : {}),
+          file,
+        },
+        file.fileId === undefined ? undefined : `file:${file.fileId}`
+      )
     })
   }
   return outputs.filter((output) => output !== undefined)
