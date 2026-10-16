@@ -44,7 +44,7 @@ export type SessionRowMenuCopy = {
   markRead: string
   archive: string
   unarchive: string
-  fork: string
+  branch: string
   delete: string
   closeTab: string
   removeOpenSession: string
@@ -62,7 +62,7 @@ export function sessionRowMenuCopy(dictionary: Dictionary): SessionRowMenuCopy {
     markRead: dictionary.activity.markRead,
     archive: dictionary.actions.archiveSession,
     unarchive: dictionary.actions.unarchiveSession,
-    fork: dictionary.actions.forkSession,
+    branch: dictionary.actions.branchSession,
     delete: dictionary.actions.deleteSession,
     closeTab: dictionary.actions.closeTab,
     removeOpenSession: dictionary.mobileNavigation.removeOpenSession,
@@ -179,7 +179,7 @@ function sessionMenuEntries({
     const onFork = handlers.onFork
     items.push({
       id: "fork",
-      label: copy.fork,
+      label: copy.branch,
       icon: <GitFork aria-hidden="true" />,
       available: true,
       run: () => onFork(session),

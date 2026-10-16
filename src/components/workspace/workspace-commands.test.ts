@@ -117,24 +117,23 @@ function setup(overrides: Partial<WorkspaceCommandInput> = {}) {
 describe("workspace commands", () => {
   it.each<readonly [string, Partial<WorkspaceCommandInput>, string]>([
     ["/branch", { isThreadEmpty: true }, notices.emptySession],
-    ["/btw what now?", { isThreadEmpty: true }, notices.emptySession],
+    ["/fork what now?", { isThreadEmpty: true }, notices.emptySession],
     [
       "/fork --here",
       { forkSession: undefined, forkSessionInBackground: undefined },
       notices.cannotFork,
     ],
     [
-      "/btw",
+      "/branch",
       { forkSession: undefined, forkSessionInBackground: undefined },
       notices.cannotFork,
     ],
     // Whatever follows the name, the reason answers: no usage first.
     [
-      "/btw --side what now?",
+      "/fork --side what now?",
       { forkSession: undefined, forkSessionInBackground: undefined },
       notices.cannotFork,
     ],
-    ["/btw what now?", { startTurn: undefined }, notices.cannotStartTurn],
     ["/bg draft it", { startTurn: undefined }, notices.cannotStartTurn],
     ["/title Q3", { canRename: false }, notices.cannotRename],
     ["/retry", { isRunning: true }, notices.waitForRun],
@@ -175,18 +174,31 @@ describe("workspace commands", () => {
   >([
     // The composer hands the text after the name back as the next draft.
     ["/reset plan the launch", {}, { createSession: [["agent-1"]] }, undefined],
-    // The opening fork, renamed when named; `--here` means nothing here.
+    // `/branch` forks and switches, then sends its prompt in the fork;
+    // `--here` means nothing here.
     [
       "/branch --here Pricing ideas",
       {},
       {
         forkSession: [["session-1"]],
-        renameSession: [["fork-1", "Pricing ideas"]],
+        startTurn: [["fork-1", "Pricing ideas"]],
       },
       undefined,
     ],
-    ["/fork", { isRunning: true }, { forkSession: [["session-1"]] }, undefined],
-    // The staying makers: the Session in view stays in view.
+    [
+      "/branch",
+      { isRunning: true },
+      { forkSession: [["session-1"]] },
+      undefined,
+    ],
+    // The staying makers: `/fork` (and its alias `/btw`) and `/bg` keep the
+    // Session in view.
+    [
+      "/fork",
+      { isRunning: true },
+      { forkSessionInBackground: [["session-1"]] },
+      { notice: notices.forked },
+    ],
     [
       "/btw why now?",
       {},
@@ -389,7 +401,7 @@ describe("workspace commands", () => {
       string,
       Partial<WorkspaceCommandInput>,
       Record<string, unknown[][]>,
-      LocalCommandResult,
+      LocalCommandResult | undefined,
     ]
   >([
     [
@@ -407,7 +419,32 @@ describe("workspace commands", () => {
         keepDraft: true,
       },
     ],
+    [
+      "/branch draft it",
+      {
+        startTurn: vi.fn(async () => Promise.reject(new Error("Session busy"))),
+      },
+      {
+        forkSession: [["session-1"]],
+        startTurn: [["fork-1", "draft it"]],
+        reportActionError: [[new Error("Session busy")]],
+      },
+      undefined,
+    ],
     ["/btw /reset", {}, {}, unmoved(notices.sidePromptIsCommand)],
+    ["/branch /reset", {}, {}, unmoved(notices.sidePromptIsCommand)],
+    [
+      "/fork what now?",
+      { startTurn: undefined },
+      {},
+      unmoved(notices.cannotStartTurn),
+    ],
+    [
+      "/branch what now?",
+      { startTurn: undefined },
+      {},
+      unmoved(notices.cannotStartTurn),
+    ],
     // The gateway strips zero-width padding before it reads a command.
     ["/bg \u200B\u2060/reset", {}, {}, unmoved(notices.sidePromptIsCommand)],
   ])(
@@ -445,7 +482,7 @@ describe("workspace commands", () => {
     expect(menu).not.toContain("branch")
     expect(menu).not.toContain("fork")
     expect(resolveLocalCommand("/fork", localCommands)?.command.name).toBe(
-      "branch"
+      "fork"
     )
     expect(menu).toEqual(expect.arrayContaining(["model", "status"]))
     expect(resolveLocalCommand("/model gpt-5", localCommands)).toBeUndefined()

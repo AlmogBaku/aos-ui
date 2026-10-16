@@ -440,7 +440,7 @@ describe("AosUiApp fixture composition", () => {
       await user.keyboard("{Enter}{Enter}")
     }
 
-    // Full mount: the row menu, `/fork` and `/branch` are the workspace's to
+    // Full mount: the row menu, `/branch` and `/fork` are the workspace's to
     // define over one fork, and no lower seam joins them.
     it.each<readonly [string, (user: User) => Promise<void>]>([
       [
@@ -453,12 +453,11 @@ describe("AosUiApp fixture composition", () => {
           )
           await user.click(
             await screen.findByRole("menuitem", {
-              name: en.actions.forkSession,
+              name: en.actions.branchSession,
             })
           )
         },
       ],
-      ["a typed /fork", typed("/fork")],
       ["a typed /branch", typed("/branch")],
     ])(
       "forks the Session from %s and opens the fork, sending nothing",
@@ -484,44 +483,21 @@ describe("AosUiApp fixture composition", () => {
       }
     )
 
-    // ACP's fork takes no title, so a name typed after the command reaches
-    // the fork through Rename, and never its composer, where Enter would
-    // send it as a prompt.
-    it.each([
-      ["names the fork after a name typed behind the command", undefined],
-      [
-        "keeps the fork and says so when naming it fails",
-        "The provider refused the title",
-      ],
-    ])("%s", async (_, refusal) => {
+    it("forks the Session from a typed /fork and stays on it", async () => {
       const user = userEvent.setup()
       const forked = vi.fn()
-      const view = renderWorkspace(forkingRuntime(forked), fixtureClock)
+      renderWorkspace(forkingRuntime(forked), fixtureClock)
       await collapseInspector(user)
       await screen.findByRole("tab", { name: "Market brief" })
-      if (refusal)
-        vi.spyOn(view.runtime.workspace, "setSessionTitle").mockImplementation(
-          () => {
-            throw new Error(refusal)
-          }
-        )
 
-      await user.click(screen.getByRole("textbox", { name: "Message input" }))
-      await user.paste("/branch Pricing ideas")
-      await user.keyboard("{Enter}")
+      await typed("/fork")(user)
 
-      await waitFor(() =>
-        expect(forked).toHaveBeenCalledExactlyOnceWith("thread-aster-market")
+      expect(await screen.findByText(en.commands.notices.forked)).toBeVisible()
+      expect(forked).toHaveBeenCalledExactlyOnceWith("thread-aster-market")
+      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
+        "aria-selected",
+        "true"
       )
-      const fork = refusal ? FORKED_TITLE : "Pricing ideas"
-      await waitFor(() =>
-        expect(screen.getByRole("tab", { name: fork })).toHaveAttribute(
-          "aria-selected",
-          "true"
-        )
-      )
-      if (refusal)
-        expect(await screen.findByRole("alert")).toHaveTextContent(refusal)
       expect(
         screen.getByRole("textbox", { name: "Message input" })
       ).toHaveValue("")
@@ -542,7 +518,7 @@ describe("AosUiApp fixture composition", () => {
         await screen.findByRole("menuitem", { name: en.actions.closeTab })
       ).toBeVisible()
       expect(
-        screen.queryByRole("menuitem", { name: en.actions.forkSession })
+        screen.queryByRole("menuitem", { name: en.actions.branchSession })
       ).toBeNull()
       await user.keyboard("{Escape}")
 
@@ -552,7 +528,8 @@ describe("AosUiApp fixture composition", () => {
         name: "Slash commands",
       })
       expect(commands).toHaveTextContent(en.actions.newSessionCommand)
-      expect(commands).not.toHaveTextContent(en.actions.forkSessionCommand)
+      expect(commands).not.toHaveTextContent(en.commands.branch.description)
+      expect(commands).not.toHaveTextContent(en.commands.fork.description)
     })
   })
 

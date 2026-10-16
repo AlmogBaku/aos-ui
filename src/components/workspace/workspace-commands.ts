@@ -348,7 +348,7 @@ export function buildWorkspaceCommands(
     text: string,
     make: () => Promise<{ readonly sessionId: string }>
   ): Promise<LocalCommandResult | void> => {
-    if (!startTurn) return
+    if (!startTurn) return unmoved(notices.cannotStartTurn)
     if (isCommand(text)) return unmoved(notices.sidePromptIsCommand)
     try {
       const { sessionId } = await make()
@@ -418,21 +418,26 @@ export function buildWorkspaceCommands(
         }
       },
     }),
-    // ACP's fork takes no title, so a name after the command renames the fork
-    // once it is open. Hermes's `--here` has no meaning here and is dropped.
+    // `/branch` forks and switches to the fork; `/fork` forks and stays. Each
+    // sends the prompt after it, if any, in the fork. Hermes's `--here` has no
+    // meaning here and is dropped.
     entry(
       {
         id: "command.branch",
-        names: ["branch", "fork"],
-        title: dictionary.actions.forkSession,
-        description: dictionary.actions.forkSessionCommand,
+        names: ["branch"],
+        title: copy.branch.title,
+        description: copy.branch.description,
         argument: { required: false, hint: copy.branch.hint },
         knownFlags: [{ name: "here", takesValue: false }],
-        run: async (name) => {
+        run: async (prompt) => {
           if (!forkSession || !visibleThreadId) return
+          if (prompt && !startTurn) return unmoved(notices.cannotStartTurn)
+          if (isCommand(prompt)) return unmoved(notices.sidePromptIsCommand)
+          // The answer lands after the switch, where the composer drops it,
+          // so a failure goes to the workspace's alert.
           try {
             const forked = await forkSession(visibleThreadId)
-            if (name) await input.renameSession(forked, name)
+            if (prompt) await startTurn?.(forked, prompt)
           } catch (error) {
             input.reportActionError(error)
           }
@@ -445,21 +450,26 @@ export function buildWorkspaceCommands(
     ),
     entry(
       {
-        id: "command.btw",
-        names: ["btw"],
-        title: copy.btw.title,
-        description: copy.btw.description,
-        argument: { required: true, hint: copy.btw.hint },
-        run: async (question) => {
+        id: "command.fork",
+        names: ["fork", "btw"],
+        title: copy.fork.title,
+        description: copy.fork.description,
+        argument: { required: false, hint: copy.fork.hint },
+        knownFlags: [{ name: "here", takesValue: false }],
+        run: async (prompt) => {
           if (!forkSessionInBackground || !visibleThreadId) return
-          return startElsewhere(question, () =>
-            forkSessionInBackground(visibleThreadId)
-          )
+          const fork = () => forkSessionInBackground(visibleThreadId)
+          if (prompt) return startElsewhere(prompt, fork)
+          try {
+            await fork()
+            return { notice: notices.forked }
+          } catch (error) {
+            input.reportActionError(error)
+          }
         },
       },
       blockedBy(
         [forkSessionInBackground, notices.cannotFork],
-        [startTurn, notices.cannotStartTurn],
         [conversation, notices.emptySession]
       )
     ),
