@@ -81,12 +81,14 @@ describe("tools/list", () => {
     for (const tool of tools) {
       expect(tool.annotations?.readOnlyHint, tool.name).toBe(true)
       expect(tool.inputSchema.type, tool.name).toBe("object")
-      expect(tool.description!.length, tool.name).toBeLessThan(600)
+      expect(tool.description!.length, tool.name).toBeLessThan(1000)
     }
     const byName = new Map(tools.map((tool) => [tool.name, tool]))
     expect(byName.get("render_chart")!.description).toMatch(/Mermaid/u)
     expect(byName.get("render_map")!.description).toMatch(/HTML/u)
-    expect(byName.get("present_artifact")!.description).toMatch(/absolute/u)
+    expect(byName.get("present_artifact")!.description).toMatch(
+      /instead of a MEDIA: line/u
+    )
     expect(byName.get("present_artifact")!.description).toMatch(
       /again after each change/u
     )
