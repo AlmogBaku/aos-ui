@@ -16,14 +16,12 @@ does not need it. For each of those profiles:
 ```bash
 hermes -p <profile> config set mcp_servers.aos-ui.url http://127.0.0.1:4110/mcp
 hermes -p <profile> mcp test aos-ui
-hermes -p <profile> config set platform_hints.desktop.append \
+hermes -p <profile> config set platform_hints.aos-ui.append \
   "When the mcp__aos_ui__present_artifact tool is available, directly or through tool_call, show every file you deliver with it instead of a MEDIA: line or a bare path."
 ```
 
-The last command points the model at `present_artifact`: Hermes's own note for
-the platform otherwise tells it to deliver files with `MEDIA:` lines. Use the
-`desktop` key when the Hermes server runs with `HERMES_DESKTOP=1`, and `tui`
-otherwise; ask the operator if unsure.
+The last command points the model at `present_artifact` in AOS Sessions, which
+Hermes runs as the `aos-ui` platform; that platform has no note of its own.
 
 `hermes mcp add` is interactive, so prefer `config set`. The tools reach the
 model as `mcp__aos_ui__render_chart` and so on. The harness-gw gateway reads the chart,

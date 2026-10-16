@@ -180,23 +180,22 @@ Session, or start a new Session, to pick the tools up.
 
 ### File delivery note
 
-Hermes adds a note for the platform a Session runs as, and neither note
-behind AOS names `present_artifact`. A server started with `HERMES_DESKTOP=1`
-runs Sessions as `desktop`, whose note says to deliver files with `MEDIA:`
-lines; otherwise they run as `tui`, whose note says to state the file's path.
-Hermes also hides MCP tools behind tool search, listing each by its first
-sentence clipped to 60 characters, which is why `present_artifact`'s
-description opens with "use it instead of a MEDIA: line". Append a note under
-the platform key your server uses, in every profile that registers `aos-ui`:
+Hermes adds the note of the platform a Session runs as to its prompt, and the
+gateway runs every Session it creates as the platform `aos-ui`, which has no
+built-in note. Set one in every profile that registers `aos-ui`, so the model
+shows files with `present_artifact`:
 
 ```bash
-hermes -p PROFILE config set platform_hints.desktop.append \
+hermes -p PROFILE config set platform_hints.aos-ui.append \
   "When the mcp__aos_ui__present_artifact tool is available, directly or through tool_call, show every file you deliver with it instead of a MEDIA: line or a bare path."
 ```
 
-Hermes's own desktop app shares the `desktop` note and shows the tool's result
-as text until it hosts MCP App views. Hermes keeps an open Session's prompt and
-tool list, so the note and a changed tool description reach new Sessions.
+The note reaches AOS Sessions only; Hermes's desktop app, terminal, and
+messaging channels keep their own notes. Hermes also hides MCP tools behind
+tool search and lists each by its first sentence, clipped to 60 characters,
+which is why `present_artifact`'s description opens with "use it instead of a
+MEDIA: line". Hermes keeps an open Session's prompt and tool list, so the note
+and a changed tool description reach new Sessions.
 
 ### Skills
 

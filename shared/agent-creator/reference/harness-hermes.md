@@ -35,11 +35,11 @@ as `'\''`.
    hermes -p <id> mcp test aos-ui    # must list present_artifact
    ```
 
-   Copy your own file delivery note too, for each platform key your profile
-   sets under `platform_hints` (`desktop`, or `tui`):
+   Copy your own file delivery note too, which points the Agent at
+   `present_artifact` in AOS Sessions:
 
    ```bash
-   hermes -p <id> config set platform_hints.desktop.append "$(hermes config get platform_hints.desktop.append)"
+   hermes -p <id> config set platform_hints.aos-ui.append "$(hermes config get platform_hints.aos-ui.append)"
    ```
 
    If your own profile has no `aos-ui`, skip this and tell the operator the new
