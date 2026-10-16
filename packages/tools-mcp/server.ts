@@ -50,8 +50,10 @@ export type ToolsServerFiles = {
 const SAFE_OUTPUT =
   "Never emit executable HTML, scripts, or browser-side code; Mermaid belongs only in fenced mermaid blocks."
 
+// The first sentence fits 60 characters: a harness that defers MCP tools behind
+// tool search, as Hermes does, lists each by its first sentence clipped there.
 const PRESENT_ARTIFACT_DESCRIPTION =
-  "Shows a file to the user as an Artifact: a card in the conversation that previews it, and a row in the Session's Artifacts list where the user can open it full screen and download it. It previews documents, Markdown, code, PDFs, images and screenshots, HTML pages and slide decks, audio, and video. Use it whenever a file you created, changed, or found is part of your answer, as its output, subject, or source, and use it instead of a MEDIA: line, a Markdown image, or a bare path. Call it again after each change to the file: one path is one Artifact, so each call refreshes the same card and row in place instead of adding another. Keep the title the same on every call or omit it, and never copy or rename a file to mark a version. Do not use it for files you only read or checked along the way. It returns the file's display name and an id, never its contents, so it cannot be used to read a file."
+  "Shows a file to the user; use it instead of a MEDIA: line. The file appears as an Artifact: a card in the conversation that previews it, and a row in the Session's Artifacts list where the user can open it full screen and download it. It previews documents, Markdown, code, PDFs, images and screenshots, HTML pages and slide decks, audio, and video. Use it whenever a file you created, changed, or found is part of your answer, as its output, subject, or source, rather than a MEDIA: line, a Markdown image, or a bare path. Call it again after each change to the file: one path is one Artifact, so each call refreshes the same card and row in place instead of adding another. Keep the title the same on every call or omit it, and never copy or rename a file to mark a version. Do not use it for files you only read or checked along the way. It returns the file's display name and an id, never its contents, so it cannot be used to read a file."
 
 const MIME_TYPE =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
