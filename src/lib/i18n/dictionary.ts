@@ -127,7 +127,7 @@ export type Dictionary = {
     markUnread: string
     archiveSession: string
     unarchiveSession: string
-    forkSession: string
+    branchSession: string
     /** The `/fork` and `/branch` slash commands' menu description. */
     deleteSession: string
     deleteSessionTitle: string

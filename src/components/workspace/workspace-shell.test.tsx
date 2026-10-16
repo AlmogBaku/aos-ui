@@ -960,14 +960,14 @@ describe("WorkspaceShell", () => {
       "Pin",
       "Mark unread",
       "Archive",
-      "Fork",
+      "Branch",
       "Close tab",
       "Delete",
     ])
   })
 
   // The handler exists only where the runtime forks, which the connection
-  // already said, so Fork waits on no other runtime answer.
+  // already said, so Branch waits on no other runtime answer.
   it("forks the Session its row menu belongs to", async () => {
     const user = userEvent.setup()
     const onForkSession = vi.fn()
@@ -975,7 +975,7 @@ describe("WorkspaceShell", () => {
 
     await collapseInspector(user)
     await user.click(tabSessionMenu("Market brief"))
-    await user.click(await screen.findByRole("menuitem", { name: "Fork" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Branch" }))
     expect(onForkSession).toHaveBeenCalledExactlyOnceWith("thread-market")
   })
 

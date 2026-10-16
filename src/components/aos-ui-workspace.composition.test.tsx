@@ -453,7 +453,7 @@ describe("AosUiApp fixture composition", () => {
           )
           await user.click(
             await screen.findByRole("menuitem", {
-              name: en.actions.forkSession,
+              name: en.actions.branchSession,
             })
           )
         },
@@ -518,7 +518,7 @@ describe("AosUiApp fixture composition", () => {
         await screen.findByRole("menuitem", { name: en.actions.closeTab })
       ).toBeVisible()
       expect(
-        screen.queryByRole("menuitem", { name: en.actions.forkSession })
+        screen.queryByRole("menuitem", { name: en.actions.branchSession })
       ).toBeNull()
       await user.keyboard("{Escape}")
 

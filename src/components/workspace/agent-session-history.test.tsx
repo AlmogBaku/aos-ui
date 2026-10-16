@@ -68,7 +68,7 @@ const copy: AgentSessionHistoryCopy = {
     markRead: "Mark read",
     archive: "Archive",
     unarchive: "Unarchive",
-    fork: "Fork",
+    branch: "Branch",
     delete: "Delete",
     closeTab: "Close tab",
     removeOpenSession: "Remove from open sessions",
