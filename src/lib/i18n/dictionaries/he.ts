@@ -119,7 +119,7 @@ export const he = {
     markUnread: "סימון כלא נקרא",
     archiveSession: "העברה לארכיון",
     unarchiveSession: "הוצאה מהארכיון",
-    branchSession: "פיצול ומעבר",
+    branchSession: "פיצול",
     deleteSession: "מחיקה",
     deleteSessionTitle: "למחוק את השיחה?",
     deleteSessionDescription:
