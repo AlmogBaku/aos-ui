@@ -30,6 +30,8 @@ function fakeQuestion() {
       dismiss: vi.fn(async () => undefined),
       keep: vi.fn(async () => ({ sessionId: "fork-1" })),
     },
+    /** How many listeners still follow the question. */
+    followers: () => listeners.size,
     publish(next: SideQuestionSnapshot) {
       snapshot = next
       act(() => {
@@ -100,6 +102,7 @@ describe("side-question tray", () => {
     expect(question.handle.dismiss).toHaveBeenCalledOnce()
     expect(question.handle.keep).not.toHaveBeenCalled()
     expect(screen.queryByRole("region", { name: copy.one })).toBeNull()
+    expect(question.followers()).toBe(0)
     // The last row gone, focus goes to the composer, never the page.
     expect(screen.getByRole("textbox", { name: "Message input" })).toHaveFocus()
   })

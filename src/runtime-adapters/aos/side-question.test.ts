@@ -32,7 +32,7 @@ const turn = (sequence: number) => ({
  * The operator gateway, in process, for one Session that forks. The fork's
  * turn moves only when the test moves it, as a provider's would.
  */
-function forkingGateway({ holdArchive = false } = {}) {
+function forkingGateway({ holdArchived }: { holdArchived?: boolean } = {}) {
   let peer: AgentContext | undefined
   let releaseArchive = () => {}
   const push = (update: SessionUpdate) =>
@@ -65,9 +65,11 @@ function forkingGateway({ holdArchive = false } = {}) {
     }))
     .onRequest(methods.agent.session.fork, () => ({ sessionId: FORK }))
     .onRequest(HGW_METHODS.session.update, z.unknown(), async ({ params }) => {
-      const archiving =
+      const archived =
         typeof params === "object" && params !== null && "archived" in params
-      if (holdArchive && archiving)
+          ? params.archived
+          : undefined
+      if (holdArchived !== undefined && archived === holdArchived)
         await new Promise<void>((resolve) => (releaseArchive = resolve))
       return {}
     })
@@ -170,7 +172,7 @@ const PROMPTED = `${FORK} ${methods.agent.session.prompt}`
 describe("side questions", () => {
   it("keeps watching its fork while a slow archive outlasts the part grace, then asks", async () => {
     const clock = useFakeClock()
-    const gateway = forkingGateway({ holdArchive: true })
+    const gateway = forkingGateway({ holdArchived: true })
     const { wire } = ask(gateway)
 
     await clock.advance(2_500)
@@ -225,19 +227,22 @@ describe("side questions", () => {
     expect(question.snapshot().state).toBe("needs-input")
   })
 
-  it.each<[string, (gateway: ReturnType<typeof forkingGateway>) => void]>([
-    ["its turn ends", (gateway) => gateway.end()],
-    ["the wait runs out", () => undefined],
+  it.each<
+    [string, number, (gateway: ReturnType<typeof forkingGateway>) => void]
+  >([
+    // Well before the timeout, so only the turn's end can delete the fork.
+    ["its turn ends", SETTLE_MS / 2, (gateway) => gateway.end()],
+    ["the wait runs out", SETTLE_MS, () => undefined],
   ])(
     "Dismiss while asking stops the turn, and deletes the fork once %s",
-    async (_, settle) => {
+    async (_, settledAt, settle) => {
       const clock = useFakeClock()
       const gateway = forkingGateway()
       const { question, wire } = ask(gateway)
       await clock.advance(0)
 
       const dismissed = question.dismiss()
-      await clock.advance(SETTLE_MS - 1)
+      await clock.advance(settledAt - 1)
       expect(wire()).toEqual([
         FORKED,
         ARCHIVED,
@@ -258,25 +263,36 @@ describe("side questions", () => {
     }
   )
 
-  it("keeps the fork on Continue: unarchived, and no later Dismiss deletes it", async () => {
-    const clock = useFakeClock()
-    const gateway = forkingGateway()
-    const { question, wire } = ask(gateway)
-    await clock.advance(0)
-    gateway.reply("reply-1", ANSWER, 2)
-    gateway.end()
-    await clock.advance(0)
+  it.each([
+    ["after it", undefined],
+    ["while it still unarchives the fork", false],
+  ])(
+    "keeps the fork on Continue: unarchived, and a Dismiss %s deletes nothing",
+    async (_, holdArchived) => {
+      const clock = useFakeClock()
+      const gateway = forkingGateway({ holdArchived })
+      const { question, wire } = ask(gateway)
+      await clock.advance(0)
+      gateway.reply("reply-1", ANSWER, 2)
+      gateway.end()
+      await clock.advance(0)
 
-    await expect(question.keep()).resolves.toEqual({ sessionId: FORK })
-    await question.dismiss()
-    await clock.advance(0)
+      const kept = question.keep()
+      await clock.advance(0)
+      const dismissed = question.dismiss()
+      await clock.advance(0)
+      gateway.releaseArchive()
+      await clock.advance(0)
+      await expect(kept).resolves.toEqual({ sessionId: FORK })
+      await dismissed
 
-    expect(wire()).toEqual([
-      FORKED,
-      ARCHIVED,
-      PROMPTED,
-      `${FORK} {"unread":false}`,
-      `${FORK} {"archived":false}`,
-    ])
-  })
+      expect(wire()).toEqual([
+        FORKED,
+        ARCHIVED,
+        PROMPTED,
+        `${FORK} {"unread":false}`,
+        `${FORK} {"archived":false}`,
+      ])
+    }
+  )
 })

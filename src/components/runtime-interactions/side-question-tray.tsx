@@ -105,7 +105,10 @@ function SideQuestionRow({
   return (
     <li
       className="flex gap-2.5 px-3.5 pt-2.5 pb-3 not-first:border-t not-first:border-border/60"
-      onKeyDown={(event) => closeOnEscape(event, onDismiss)}
+      // A row Continue is keeping takes Escape and does nothing with it.
+      onKeyDown={(event) =>
+        closeOnEscape(event, keeping ? () => undefined : onDismiss)
+      }
     >
       <Icon
         aria-hidden="true"
@@ -178,7 +181,13 @@ function SideQuestionRow({
               {copy.continue}
             </Button>
           ) : null}
-          <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={keeping}
+            onClick={onDismiss}
+          >
             {copy.dismiss}
           </Button>
         </div>
