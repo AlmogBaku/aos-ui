@@ -178,6 +178,8 @@ export type ToolUiLocaleLabels = {
     filesWritten: (count: number) => string
     /** Opens the child's transcript in the side panel, to read. */
     viewTranscript: string
+    /** A waiting child's line while its request is still open. */
+    needsAnswer: string
     closeTranscript: string
     /** The entry the panel showed left the conversation. */
     transcriptUnavailable: string
@@ -368,6 +370,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     filesWritten: (count) =>
       count === 1 ? "Wrote 1 file" : `Wrote ${count} files`,
     viewTranscript: "View transcript",
+    needsAnswer: "Needs your answer",
     closeTranscript: "Close transcript",
     transcriptUnavailable: "This transcript is no longer available.",
     brief: "Brief",
@@ -594,6 +597,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     filesWritten: (count) =>
       count === 1 ? "כתב קובץ אחד" : `כתב ${count} קבצים`,
     viewTranscript: "הצגת התמליל",
+    needsAnswer: "ממתין לתשובה שלך",
     closeTranscript: "סגירת התמליל",
     transcriptUnavailable: "התמליל כבר אינו זמין.",
     brief: "תדריך",

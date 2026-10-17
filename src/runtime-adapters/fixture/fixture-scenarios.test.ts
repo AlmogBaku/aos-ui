@@ -36,6 +36,8 @@ describe("deterministic fixture scenarios", () => {
       ["stream a terminal live", "terminal-live"],
       ["show a failed terminal", "terminal-failed"],
       ["show a nested subagent", "subagent-nested"],
+      ["start a subagent batch", "subagent-batch"],
+      ["watch a live subagent", "subagent-live"],
       ["stop at the length limit", "stop-length"],
       ["show a refusal", "stop-refusal"],
       ["show a provider error", "provider-error-detail"],

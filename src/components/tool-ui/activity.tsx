@@ -187,12 +187,17 @@ export function ActivityTool({
     active
   )
   const failed = status === "failed"
-  const line = active
-    ? subagentLiveLine(part.messages, labels)
-    : failed
-      ? (summary ?? failureOf(part.messages))
-      : summary
   const childSessionId = subagent?.childSessionId
+  const asking =
+    useAsksOperator(childSessionId, subagent?.approvals, part.messages) &&
+    status === "waiting"
+  const line = asking
+    ? labels.subagent.needsAnswer
+    : active
+      ? subagentLiveLine(part.messages, labels)
+      : failed
+        ? (summary ?? failureOf(part.messages))
+        : summary
   const readable = Boolean(
     childSessionId || part.messages?.length || payload.result?.transcript
   )
@@ -225,7 +230,8 @@ export function ActivityTool({
           <p
             className={cn(
               "line-clamp-2 ps-6.5 text-xs text-muted-foreground",
-              failed && "text-destructive"
+              failed && "text-destructive",
+              asking && "font-medium text-warning"
             )}
           >
             {failed ? (
@@ -234,7 +240,9 @@ export function ActivityTool({
               </span>
             ) : null}
             {/* The child's own words keep their direction in either locale. */}
-            {active ? (
+            {asking ? (
+              line
+            ) : active ? (
               <ShimmerLabel aria-live="off">
                 <bdi>{line}</bdi>
               </ShimmerLabel>
@@ -373,6 +381,58 @@ function childSessionIds(
       })
     ),
   ]
+}
+
+/** A permission request no one has answered yet. */
+const unanswered = ({ call: { approval } }: ChildApprovalRequest) =>
+  approval !== undefined &&
+  approval.optionId === undefined &&
+  approval.approved === undefined &&
+  approval.resolution === undefined
+
+/** Joins Session ids into one stable dependency, and splits them back. */
+const SESSION_IDS = "\n"
+
+/**
+ * Whether the child Session, or a child of its own, waits on the operator: a
+ * permission request no one has answered, or a question still open.
+ */
+function useAsksOperator(
+  childSessionId: string | undefined,
+  unhosted: readonly AosSubagentApproval[] | undefined,
+  messages: readonly ThreadMessage[] | undefined
+) {
+  const interactions = useRuntimeInteractions()
+  const asked =
+    childSessionId !== undefined &&
+    childApprovals(childSessionId, unhosted, messages).some(unanswered)
+  const sessions =
+    childSessionId !== undefined && interactions
+      ? childSessionIds(childSessionId, messages).join(SESSION_IDS)
+      : ""
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (!interactions || !sessions) return () => {}
+      const stops = sessions
+        .split(SESSION_IDS)
+        .map((id) => interactions.subscribe(id, listener))
+      return () => {
+        for (const stop of stops) stop()
+      }
+    },
+    [interactions, sessions]
+  )
+  const getSnapshot = useCallback(
+    () =>
+      Boolean(interactions && sessions) &&
+      sessions.split(SESSION_IDS).some((id) => {
+        const request = interactions?.getPending(id)
+        return request?.sessionId === id && request.status !== "expired"
+      }),
+    [interactions, sessions]
+  )
+  const questioned = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  return asked || questioned
 }
 
 /**

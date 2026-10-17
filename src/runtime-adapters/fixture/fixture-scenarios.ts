@@ -4,7 +4,7 @@ import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
 import { FIXTURE_MCP_APP_TOOL } from "./fixture-mcp-apps"
 import { fixturePresentationPart } from "./fixture-presentations"
 import type { ThreadMessage } from "@assistant-ui/react"
-import { withAosToolArtifact } from "@/lib/tool-artifact"
+import { withAosToolArtifact, type AosSubagent } from "@/lib/tool-artifact"
 
 // Assistant UI's public type lives in @assistant-ui/react. Re-exporting a local
 // alias keeps all fixture-only provider payloads inside this adapter directory.
@@ -44,6 +44,8 @@ export const fixtureScenarioNames = [
   "terminal-live",
   "terminal-failed",
   "subagent-nested",
+  "subagent-batch",
+  "subagent-live",
   "stop-length",
   "stop-refusal",
   "provider-error-detail",
@@ -198,34 +200,32 @@ function liveTerminalPart(
   )
 }
 
-/** A subagent's own conversation, as nested thread messages. */
-function nestedSubagentMessages(): ThreadMessage[] {
+/**
+ * A child Session's own conversation, as nested thread messages: the brief it
+ * was given, then its one turn.
+ */
+function childTranscript(
+  id: string,
+  brief: string,
+  content: AssistantPart[],
+  status: MessageStatus = { type: "complete", reason: "stop" }
+): ThreadMessage[] {
   const createdAt = new Date(FIXTURE_TOOL_STARTED_AT)
   return [
     {
-      id: "fixture-subagent-user",
+      id: `${id}-user`,
       role: "user",
       createdAt,
-      content: [
-        {
-          type: "text",
-          text: "Check the pricing tiers against the interview notes.",
-        },
-      ],
+      content: [{ type: "text", text: brief }],
       attachments: [],
       metadata: { custom: {} },
     },
     {
-      id: "fixture-subagent-assistant",
+      id: `${id}-assistant`,
       role: "assistant",
       createdAt,
-      status: { type: "complete", reason: "stop" },
-      content: [
-        {
-          type: "text",
-          text: "Two of three tiers match what buyers asked for; the team tier needs a longer trial.",
-        },
-      ],
+      status,
+      content,
       metadata: {
         unstable_state: null,
         unstable_annotations: [],
@@ -234,6 +234,211 @@ function nestedSubagentMessages(): ThreadMessage[] {
         custom: {},
       },
     },
+  ]
+}
+
+const nestedSubagentMessages = () =>
+  childTranscript(
+    "fixture-subagent",
+    "Check the pricing tiers against the interview notes.",
+    [
+      {
+        type: "text",
+        text: "Two of three tiers match what buyers asked for; the team tier needs a longer trial.",
+      },
+    ]
+  )
+
+/** A child's tool call as Hermes reports it: its name, and no arguments. */
+const childCall = (
+  toolName: string,
+  result?: unknown,
+  extra: Partial<Extract<AssistantPart, { type: "tool-call" }>> = {}
+) =>
+  toolPart(toolName, {}, result, { toolCallId: `child-${toolName}`, ...extra })
+
+/** A child Session's own entry after the call that spawned it. */
+function subagentEntry(
+  sessionId: string,
+  subagent: Omit<AosSubagent, "id" | "childSessionId">,
+  messages: ThreadMessage[]
+) {
+  return toolPart("subagent", {}, undefined, {
+    toolCallId: `aos-subagent-${sessionId}`,
+    artifact: withAosToolArtifact(undefined, {
+      subagent: {
+        id: sessionId,
+        childSessionId: sessionId,
+        depth: 1,
+        model: "claude-opus-5.5",
+        ...subagent,
+      },
+    }),
+    messages,
+  })
+}
+
+/** The call that spawned `count` children, each read on its own entry. */
+const delegation = (task: string, count: number, result?: unknown) =>
+  toolPart("delegate_subagent", { task }, result, {
+    toolCallId: `fixture-delegate-${count}`,
+    artifact: withAosToolArtifact(undefined, { delegated: count }),
+  })
+
+const BOARD_PREP = {
+  pricing:
+    "Research how Northwind, Contoso and Fabrikam priced their 2026 plans and what changed since last year",
+  invoices:
+    "Reconcile September's 48 supplier invoices against their purchase orders",
+  followUps: "Draft follow-up emails to the twelve leads from the trade show",
+  interviews: "Summarize last quarter's customer interviews into five themes",
+}
+
+/** Four children of one delegation, one in each state a child can be in. */
+function subagentBatchParts(): AssistantPart[] {
+  return [
+    {
+      type: "text",
+      text: "I've started four agents on the board-meeting prep.",
+    },
+    delegation("Prepare the board meeting", 4, "Started 4 subagents."),
+    subagentEntry(
+      "fixture-pricing",
+      {
+        goal: BOARD_PREP.pricing,
+        status: "completed",
+        tokens: 18_400,
+        durationMs: 252_000,
+        summary:
+          "All three raised entry prices 8–12%; only Contoso added a free tier.",
+      },
+      childTranscript("fixture-pricing", `${BOARD_PREP.pricing}.`, [
+        { type: "text", text: "Reading the three pricing pages." },
+        childCall("web_extract", "Northwind, Contoso and Fabrikam plans"),
+        {
+          type: "text",
+          text: "All three raised entry prices 8–12%; only Contoso added a free tier.",
+        },
+      ])
+    ),
+    subagentEntry(
+      "fixture-invoices",
+      { goal: BOARD_PREP.invoices, status: "running", cancellable: true },
+      childTranscript(
+        "fixture-invoices",
+        `${BOARD_PREP.invoices}. Flag any amount that differs by more than 2%.`,
+        [
+          { type: "text", text: "Opening the September ledger." },
+          childCall("read_file", "48 invoices"),
+          { type: "text", text: "Invoices 1 to 20 match their orders." },
+        ],
+        { type: "running" }
+      )
+    ),
+    subagentEntry(
+      "fixture-follow-ups",
+      { goal: BOARD_PREP.followUps, status: "waiting", cancellable: true },
+      childTranscript(
+        "fixture-follow-ups",
+        `${BOARD_PREP.followUps}.`,
+        [
+          { type: "text", text: "Twelve drafts are ready to send." },
+          childCall("send_email", undefined, {
+            approval: {
+              id: "fixture-follow-up-permission",
+              prompt: "Send the follow-up to dana.levi@example.com?",
+              options: [
+                { id: "allow-once", kind: "allow-once" },
+                { id: "reject-once", kind: "reject-once" },
+              ],
+            },
+          }),
+        ],
+        { type: "requires-action", reason: "tool-calls" }
+      )
+    ),
+    subagentEntry(
+      "fixture-interviews",
+      { goal: BOARD_PREP.interviews, status: "failed", durationMs: 52_000 },
+      childTranscript(
+        "fixture-interviews",
+        `${BOARD_PREP.interviews}.`,
+        [
+          { type: "text", text: "Opening last quarter's interview notes." },
+          childCall("read_file", "Access denied", { isError: true }),
+        ],
+        {
+          type: "incomplete",
+          reason: "error",
+          error: {
+            message: "interviews-q3.docx couldn't be opened: access denied.",
+          },
+        }
+      )
+    ),
+    {
+      type: "text",
+      text: "I'll bring their findings together once the last two finish.",
+    },
+  ]
+}
+
+const PIPELINE = "Pull the Q3 pipeline numbers for the board deck"
+
+/** The live child's entry as its newest step arrives, then once it is done. */
+function liveSubagentParts(step: 1 | 2 | 3): AssistantPart[] {
+  const done = step === 3
+  const opening = {
+    type: "text" as const,
+    text: "Opening the Q3 pipeline report.",
+  }
+  const content: AssistantPart[] = [
+    step === 1
+      ? opening
+      : {
+          type: "text",
+          text: "Opening the Q3 pipeline report. Northwind and Contoso are the two largest open deals.",
+        },
+    ...(step === 1
+      ? []
+      : [
+          childCall("web_extract", done ? "Q3 pipeline: $4.2M" : undefined, {
+            artifact: withAosToolArtifact(undefined, { kind: "fetch" }),
+          }),
+        ]),
+    ...(done
+      ? [{ type: "text" as const, text: "The pipeline is up 14% on Q2." }]
+      : []),
+  ]
+  return [
+    { type: "text", text: "I'll have a subagent pull the pipeline numbers." },
+    delegation(PIPELINE, 1, done ? "Started 1 subagent." : undefined),
+    subagentEntry(
+      "fixture-pipeline",
+      done
+        ? {
+            goal: PIPELINE,
+            status: "completed",
+            durationMs: 38_000,
+            summary:
+              "The pipeline is up 14% on Q2; two deals need a decision this week.",
+          }
+        : { goal: PIPELINE, status: "running", cancellable: true },
+      childTranscript(
+        "fixture-pipeline",
+        `${PIPELINE}.`,
+        content,
+        done ? undefined : { type: "running" }
+      )
+    ),
+    ...(done
+      ? [
+          {
+            type: "text" as const,
+            text: "The pipeline is up 14% on Q2; I've added it to the deck.",
+          },
+        ]
+      : []),
   ]
 }
 
@@ -586,6 +791,18 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
         liveTerminalPart(steps),
         { type: "text", text: "All ten pricing tests pass." },
       ],
+    }
+  }
+
+  if (input.includes("subagent batch")) {
+    return { name: "subagent-batch", parts: subagentBatchParts() }
+  }
+
+  if (input.includes("live subagent")) {
+    return {
+      name: "subagent-live",
+      frames: [liveSubagentParts(1), liveSubagentParts(2)],
+      parts: liveSubagentParts(3),
     }
   }
 
