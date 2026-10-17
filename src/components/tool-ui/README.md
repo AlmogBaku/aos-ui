@@ -34,7 +34,13 @@ permission) are imported with `React.lazy` to keep the main bundle lean.
 | `render_stats`                  | stats-display |
 | `ask_user_question`, `question` | question-flow |
 | `request_permission`            | permission    |
-| `delegate_subagent`, `task`     | activity      |
+| `delegate_subagent`             | activity      |
+
+A delegate call draws its own activity card only when it settles with no
+children. While it runs, and once the projector has placed its children after
+it (`delegated` on its artifact), it is an ordinary row in the tool run, and
+each child is its own subagent row (`subagent-group.tsx`), whose transcript
+opens in the side panel (`subagent-transcript.tsx`).
 
 ## Tool artifact views
 

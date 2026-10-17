@@ -508,12 +508,19 @@ assistant's answer.
   names the provider and model when the runtime reports them.
 - **Usage stays in the composer:** the last turn's tokens and the Session cost
   appear only in the composer's context popover; messages carry no numbers.
-- **Subagents stay visible:** a subagent's work nests under the call that
-  spawned it, outside the fold, with its goal, status, counts, and summary.
-  A subagent with a child Session answers that Session's permission requests
-  and questions on its card, offers Stop only where the child can be stopped
-  alone, and opens the child's transcript to read only, never as a Session of
-  its own.
+- **Subagents stay visible:** each subagent is one row after the call that
+  spawned it, outside the fold: its status, its goal on one line, a live
+  timer, and a second line with the child's newest sentence or the kind and
+  name of its newest tool call, then its summary or its failure. A child that
+  waits on a request says "Needs your answer", and the request is answered
+  under its row, on the child that asked. Consecutive subagents form one group
+  whose header counts each child's own status; the group collapses to its
+  header once every child is done, unless the reader chose otherwise. The
+  spawning call itself reads as an ordinary row ("Delegated 4 tasks"). A row's
+  panel mark opens the child's transcript in the side panel, live and to read
+  only, never as a Session of its own; it renders like the thread, with Stop
+  only where the child can be stopped alone. While a subagent runs or waits, a
+  one-line strip above the composer lists it.
 - **Preserve fidelity:** retain provider order and lifecycle, render each piece
   of content once, and degrade to an honest inspectable fallback when richer
   presentation is unavailable.
@@ -529,6 +536,13 @@ assistant's answer.
   free-text row is always offered when options exist and freeform is allowed;
   the send button is disabled until at least one option or a non-empty free-text
   answer is present.
+- **Side questions:** `/btw <question>` asks in a fork of the Session (ACP
+  `session/fork`) that the tray archives at once, so no list shows it, and
+  answers in a tray above the composer, one answer per question, while the
+  turn keeps running. Copy keeps the text; Continue in a fork opens the fork
+  as an ordinary Session, which is how to reply; Dismiss deletes the fork. The
+  tray belongs to the tab: a reload removes it and leaves the fork archived.
+  The asking tab raises no alert and lists no Activity row for its forks.
 - **Inline permissions:** a permission request is answered on the card of the
   tool call it guards (`src/components/tool-ui/permission.tsx`), or on a
   standalone permission card in the current turn when the runtime cannot name

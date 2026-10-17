@@ -60,7 +60,7 @@ capacity.
 
 - A **Plan** belongs to the assistant message that produced it. Inspect it with that message.
 - **Todos** describe work in the current Session. Changing Sessions changes the Todo list.
-- A **Subagent** is a nested delegated run, not a primary Agent and not an item in the Agent-management catalog. Where the runtime gives it a Session of its own, its card answers that Session's permission requests and questions, offers **Stop subagent** when the subagent can be stopped alone, and **Open session** shows its transcript to read only.
+- A **Subagent** is a nested delegated run, not a primary Agent and not an item in the Agent-management catalog. Each one shows as a row after the call that started it, and a batch forms one group that collapses once every child is done. Where the runtime gives it a Session of its own, its row answers that Session's permission requests and questions, and **View transcript** opens the child in the side panel to read only, with **Stop subagent** when it can be stopped alone. A strip above the composer lists the subagents still at work.
 
 ## Open published Artifacts
 
@@ -118,7 +118,7 @@ Use the conversation search control to find messages in the current Session. Res
 
 ## Use slash-command suggestions
 
-Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. Guests get no slash commands: the guest composer shows none, and the guest listener refuses a guest message that starts with `/`.
+Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. `/btw <question>` asks a side question without interrupting the turn: the answer appears in a tray above the composer, **Continue in a fork** keeps it as a Session you can reply in, and **Dismiss** deletes it. Guests get no slash commands: the guest composer shows none, and the guest listener refuses a guest message that starts with `/`.
 
 ## Answer a question or free-text "Other"
 
