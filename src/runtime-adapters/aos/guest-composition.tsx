@@ -71,6 +71,7 @@ import {
   tabConnectionOptions,
   watchTabBuild,
 } from "@/runtime-adapters/aos/acp/tab"
+import type { LaneOrigins } from "@shared/lane-origins"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -175,6 +176,7 @@ function GuestArtifactShell({
   sessionId,
   artifacts,
   mcpApps,
+  mcpAppOrigins,
   title,
   message,
   brandName,
@@ -190,6 +192,7 @@ function GuestArtifactShell({
   sessionId: string
   artifacts: AosArtifactAdapter
   mcpApps: AosMcpAppAdapter
+  mcpAppOrigins: LaneOrigins | undefined
   title?: string
   message?: string
   brandName: string
@@ -216,6 +219,8 @@ function GuestArtifactShell({
         adapter={mcpApps}
         agentId={agentId}
         sessionId={sessionId}
+        surface="guest"
+        origins={mcpAppOrigins}
         connectionStatus={connectionStatus}
         messages={messages}
       >
@@ -378,11 +383,13 @@ function ReadyGuestAosSurface({
   context,
   inviteToken,
   locale,
+  mcpAppOrigins,
 }: {
   connection: AcpConnection
   context: GuestRuntimeContext
   inviteToken: string
   locale: Locale
+  mcpAppOrigins: LaneOrigins | undefined
 }) {
   const { agentId } = context
   const sessionId = context.conversationRef
@@ -561,6 +568,7 @@ function ReadyGuestAosSurface({
               sessionId={sessionId}
               artifacts={artifacts}
               mcpApps={mcpApps}
+              mcpAppOrigins={mcpAppOrigins}
               title={context.ui?.title}
               message={context.ui?.message}
               brandName={brandName}
@@ -628,9 +636,12 @@ type GuestAttempt = { key: string } & (
 export function GuestAosSurface({
   inviteToken,
   locale,
+  mcpAppOrigins,
 }: {
   inviteToken?: string
   locale: Locale
+  /** The guest lane's origins, which App views show on. */
+  mcpAppOrigins?: LaneOrigins
 }) {
   const contextKey = inviteToken ?? ""
   const [attempt, setAttempt] = useState(0)
@@ -713,6 +724,7 @@ export function GuestAosSurface({
       context={current.context}
       inviteToken={inviteToken}
       locale={locale}
+      mcpAppOrigins={mcpAppOrigins}
     />
   )
 }

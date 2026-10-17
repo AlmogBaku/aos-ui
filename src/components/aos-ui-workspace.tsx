@@ -80,6 +80,7 @@ import {
 } from "@/components/runtime-interactions/side-question-store"
 import { SideQuestionTray } from "@/components/runtime-interactions/side-question-tray"
 import { useStableHandlers } from "@/hooks/use-stable-handlers"
+import type { LaneOrigins } from "@shared/lane-origins"
 
 type AosUiWorkspaceProps = {
   runtime: HarnessRuntime
@@ -89,6 +90,8 @@ type AosUiWorkspaceProps = {
   readNow?: () => Date
   browserSettings?: BrowserSettingsView
   browserNotificationPort?: BrowserNotificationPort
+  /** The operator lane's origins, which App views show on. */
+  mcpAppOrigins?: LaneOrigins
 }
 
 /**
@@ -197,6 +200,7 @@ function ArtifactWorkspaceBridge({
   locale,
   agentId,
   artifactMessageProjector,
+  mcpAppOrigins,
   children,
   ...shell
 }: {
@@ -206,6 +210,7 @@ function ArtifactWorkspaceBridge({
   artifactMessageProjector?: (
     messages: readonly ArtifactMessage[]
   ) => readonly ArtifactMessage[]
+  mcpAppOrigins?: LaneOrigins
 } & WorkspaceShellProps) {
   const selectArtifactMessages = useMemo(() => {
     const stabilize = createArtifactMessageStabilizer(artifactMessageProjector)
@@ -229,6 +234,7 @@ function ArtifactWorkspaceBridge({
         adapter={bundle.mcpApps}
         agentId={agentId}
         sessionId={artifactThreadId}
+        origins={mcpAppOrigins}
         connectionStatus={bundle.connectionStatus}
         messages={artifactMessages}
       >
@@ -501,6 +507,7 @@ function WorkspaceContent({
   composer,
   browserSettings,
   browserNotificationPort,
+  mcpAppOrigins,
 }: Omit<AosUiWorkspaceProps, "runtime"> & {
   harness: HarnessRuntime
   composer?: ThreadComponents["Composer"]
@@ -696,6 +703,7 @@ function WorkspaceContent({
         locale={locale}
         agentId={selectedAgentId ?? ""}
         artifactMessageProjector={artifactMessageProjector}
+        mcpAppOrigins={mcpAppOrigins}
         activity={activity}
         browserSettings={
           browserSettings ?? {

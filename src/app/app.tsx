@@ -112,6 +112,7 @@ function RuntimeApp({
           dictionary={dictionary}
           now={clock.now}
           readNow={clock.readNow}
+          mcpAppOrigins={config.origins}
         />
       )}
     </HarnessRuntimeProvider>
@@ -265,7 +266,11 @@ function Application() {
     return (
       <RuntimeErrorBoundary locale={locale}>
         <Suspense fallback={<LoadingWorkspace locale={locale} />}>
-          <GuestAosSurface inviteToken={inviteToken} locale={locale} />
+          <GuestAosSurface
+            inviteToken={inviteToken}
+            locale={locale}
+            mcpAppOrigins={config.origins}
+          />
         </Suspense>
       </RuntimeErrorBoundary>
     )

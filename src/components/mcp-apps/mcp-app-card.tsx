@@ -26,8 +26,8 @@ import {
   type ToolUiLocaleLabels,
 } from "@/components/tool-ui/locale"
 import type { RichToolPart } from "@/components/tool-ui/types"
-import { SystemNotice } from "@/components/ui/system-notice"
 
+import { AppUnavailable } from "./app-unavailable"
 import type { AppPlacement } from "./host-handlers"
 import type { McpAppFrameProps } from "./mcp-app-frame"
 import {
@@ -70,17 +70,6 @@ function AppLoading() {
       />
       {labels.mcpApp.loading}
     </p>
-  )
-}
-
-function AppUnavailable() {
-  const { labels, locale } = useToolUiLocale()
-  return (
-    <SystemNotice
-      tone="warning"
-      title={labels.mcpApp.unavailable}
-      locale={locale}
-    />
   )
 }
 
@@ -229,6 +218,8 @@ function HostedMcpApp({
           toolName={toolName}
           target={target}
           adapter={adapter}
+          surface={host.surface}
+          origins={host.origins}
           title={viewTitle(labels, { file, toolName, target })}
           detail={file?.mimeType}
           filesRevision={revision}
@@ -394,6 +385,8 @@ function PipPanel({
             toolName={pip.toolName}
             target={pip.target}
             adapter={adapter}
+            surface={host.surface}
+            origins={host.origins}
             title={title}
             detail={pip.file?.mimeType}
             filesRevision={fileRevision(host, pip.file, pip.target)}

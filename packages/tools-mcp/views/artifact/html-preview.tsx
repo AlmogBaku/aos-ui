@@ -139,8 +139,7 @@ export function agentLink(
 /**
  * The file's HTML with the policy as the first child of its head, so it
  * governs every script the file holds, and the zoom script and the stand-ins
- * after it, so they run before the file's own. The page's `injectHtmlCsp`
- * does the same for a view; the view cannot import the page's code.
+ * after it, so they run before the file's own.
  */
 function withPolicy(html: string) {
   const document = new DOMParser().parseFromString(html, "text/html")
