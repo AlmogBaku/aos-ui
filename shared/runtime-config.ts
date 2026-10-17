@@ -1,5 +1,7 @@
+import { isMcpAppPolicyOrigin } from "@harness-gw/sdk/protocol"
 import { z } from "zod"
 
+import type { LaneOrigins } from "./lane-origins"
 import { DEFAULT_RUNTIME_MODE } from "./runtime-modes"
 
 export type RuntimeUnavailableReason =
@@ -19,6 +21,8 @@ export const DEFAULT_COMPOSER_FEATURE_CONFIG: ComposerFeatureConfig = {
 type ReadyRuntimeConfiguration = {
   status: "ready"
   composerFeatures: ComposerFeatureConfig
+  /** The lane's origins, which its web server adds; views need them to show. */
+  origins?: LaneOrigins
 }
 
 export type RuntimeConfiguration =
@@ -37,6 +41,7 @@ export type PublicRuntimeConfiguration =
 export type GuestSurfaceConfiguration = {
   status: "ready"
   surface: "guest"
+  origins?: LaneOrigins
 }
 
 export type ApplicationConfiguration =
@@ -106,6 +111,27 @@ export function serializePublicRuntimeConfiguration(
  */
 const buildIdField = { buildId: z.string().optional() }
 
+const policyOrigin = z.string().refine(isMcpAppPolicyOrigin)
+
+/** The lane's own origins, which its web server writes over any configured. */
+const laneOriginFields = {
+  publicOrigins: z.array(policyOrigin).min(1).optional(),
+  mcpAppSandboxOrigin: policyOrigin.optional(),
+}
+
+/** Both of the lane's origin fields, or nothing when either is missing. */
+function laneOrigins({
+  publicOrigins,
+  mcpAppSandboxOrigin,
+}: {
+  publicOrigins?: string[] | undefined
+  mcpAppSandboxOrigin?: string | undefined
+}): { origins?: LaneOrigins } {
+  return publicOrigins && mcpAppSandboxOrigin
+    ? { origins: { publicOrigins, mcpAppSandboxOrigin } }
+    : {}
+}
+
 const publicComposerFeatureFields = {
   composerModelSelectorEnabled: z.boolean().optional(),
   composerContextEnabled: z.boolean().optional(),
@@ -115,6 +141,7 @@ const publicConfigurationSchema = z
   .object({
     mode: z.enum(["aos", "fixture"]),
     ...publicComposerFeatureFields,
+    ...laneOriginFields,
     ...buildIdField,
   })
   .strict()
@@ -127,17 +154,24 @@ export function parsePublicRuntimeConfiguration(
   if (!parsed.success)
     return { status: "unavailable", reason: "invalid-public-config" }
   const config = parsed.data
-  return resolveRuntimeConfiguration({
+  const resolved = resolveRuntimeConfiguration({
     AOS_UI_RUNTIME_MODE: config.mode,
     AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED:
       config.composerModelSelectorEnabled === false ? "false" : undefined,
     AOS_UI_COMPOSER_CONTEXT_ENABLED:
       config.composerContextEnabled === false ? "false" : undefined,
   })
+  return resolved.status === "ready"
+    ? { ...resolved, ...laneOrigins(config) }
+    : resolved
 }
 
 const guestSurfaceSchema = z
-  .object({ surface: z.literal("guest"), ...buildIdField })
+  .object({
+    surface: z.literal("guest"),
+    ...laneOriginFields,
+    ...buildIdField,
+  })
   .strict()
 
 /** Selects the guest surface before runtime parsing; guest code never selects a provider. */
@@ -145,6 +179,11 @@ export function parsePublicApplicationConfiguration(
   input: unknown
 ): ApplicationConfiguration {
   const guest = guestSurfaceSchema.safeParse(input)
-  if (guest.success) return { status: "ready", surface: guest.data.surface }
+  if (guest.success)
+    return {
+      status: "ready",
+      surface: guest.data.surface,
+      ...laneOrigins(guest.data),
+    }
   return parsePublicRuntimeConfiguration(input)
 }

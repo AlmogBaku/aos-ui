@@ -1,8 +1,19 @@
-import { createWebApp, type WebSurface } from "./web"
+import {
+  assertLanesApart,
+  readLaneOrigins,
+  type LaneOrigins,
+  type Surface,
+} from "../shared/lane-origins"
+import { createWebApp } from "./web"
 
 type Getenv = (name: string) => string | undefined
 
-export type WebListener = { surface: WebSurface; host: string; port: number }
+export type WebListener = {
+  surface: Surface
+  host: string
+  port: number
+  origins: LaneOrigins
+}
 
 export type WebServerConfig = {
   root: string
@@ -39,22 +50,25 @@ function host(name: string, value: string, getenv: Getenv) {
   )
 }
 
-/** Reads the web server's settings; the guest listener runs only when its port is set. */
+/**
+ * Reads the web server's settings; the guest listener, and the guest lane's
+ * origins, only when its port is set.
+ */
 export function readWebServerConfig(getenv: Getenv): WebServerConfig {
-  const listeners: WebListener[] = [
-    {
-      surface: "operator",
-      host: host(
-        "AOS_UI_WEB_HOST",
-        getenv("AOS_UI_WEB_HOST") ?? "127.0.0.1",
-        getenv
-      ),
-      port: port("AOS_UI_WEB_PORT", getenv("AOS_UI_WEB_PORT") ?? "3000"),
-    },
-  ]
+  const operator: WebListener = {
+    surface: "operator",
+    host: host(
+      "AOS_UI_WEB_HOST",
+      getenv("AOS_UI_WEB_HOST") ?? "127.0.0.1",
+      getenv
+    ),
+    port: port("AOS_UI_WEB_PORT", getenv("AOS_UI_WEB_PORT") ?? "3000"),
+    origins: readLaneOrigins(getenv, "operator"),
+  }
+  const listeners = [operator]
   const guestPort = getenv("AOS_UI_GUEST_WEB_PORT")
-  if (guestPort !== undefined)
-    listeners.push({
+  if (guestPort !== undefined) {
+    const guest: WebListener = {
       surface: "guest",
       host: host(
         "AOS_UI_GUEST_WEB_HOST",
@@ -62,7 +76,11 @@ export function readWebServerConfig(getenv: Getenv): WebServerConfig {
         getenv
       ),
       port: port("AOS_UI_GUEST_WEB_PORT", guestPort),
-    })
+      origins: readLaneOrigins(getenv, "guest"),
+    }
+    assertLanesApart(operator.origins, guest.origins)
+    listeners.push(guest)
+  }
   return {
     root: getenv("AOS_UI_STATIC_ROOT") ?? "/app/dist",
     runtimeConfigFile:
@@ -79,7 +97,7 @@ type Serve = (options: {
 
 /** Starts one listener per surface. */
 export function startWebServer(config: WebServerConfig, serve: Serve) {
-  return config.listeners.map(({ surface, host, port }) =>
+  return config.listeners.map(({ surface, host, port, origins }) =>
     serve({
       hostname: host,
       port,
@@ -87,6 +105,7 @@ export function startWebServer(config: WebServerConfig, serve: Serve) {
         surface,
         root: config.root,
         runtimeConfigFile: config.runtimeConfigFile,
+        origins,
       }),
     })
   )

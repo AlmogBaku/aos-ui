@@ -115,8 +115,8 @@ export const FIXTURE_MCP_APP_FILES = {
 } as const
 
 /**
- * The exact URL paths that must carry `Access-Control-Allow-Origin: null`
- * so the artifact view can fetch them from its opaque-origin sandbox frame.
+ * The exact URL paths that carry `Access-Control-Allow-Origin: *`, so the
+ * artifact view can fetch them from the lane's sandbox origin.
  */
 export const FIXTURE_MCP_APP_FILE_PATHS = Object.values(
   FIXTURE_MCP_APP_FILES

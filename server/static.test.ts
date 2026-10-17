@@ -113,7 +113,7 @@ describe("static serving", () => {
     expect(await head?.text()).toBe("")
   })
 
-  it("adds Access-Control-Allow-Origin: null only to fixture MCP App file paths", async () => {
+  it("lets any origin read the fixture MCP App files alone", async () => {
     const root = await mkdtemp(join(tmpdir(), "aos-static-"))
     directories.push(root)
     await mkdir(join(root, "fixture", "mcp-app-files"), { recursive: true })
@@ -132,7 +132,7 @@ describe("static serving", () => {
     const pdfResp = await fetch(
       new Request(`https://aos.example.test${pdfPath}`)
     )
-    expect(pdfResp?.headers.get("access-control-allow-origin")).toBe("null")
+    expect(pdfResp?.headers.get("access-control-allow-origin")).toBe("*")
     expect(pdfResp?.headers.has("access-control-allow-credentials")).toBe(false)
 
     // A neighbor path that is not one of the three file names does not.

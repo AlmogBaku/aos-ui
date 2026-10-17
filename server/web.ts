@@ -1,21 +1,25 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
+import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
+
+import type { LaneOrigins, Surface } from "../shared/lane-origins"
 import {
-  MCP_APP_SANDBOX_CSP,
-  MCP_APP_SANDBOX_PATH,
-} from "@harness-gw/sdk/protocol"
-
-import { createStaticHandler } from "./static"
-
-export type WebSurface = "operator" | "guest"
+  isSandboxHost,
+  lanePageFrameSrc,
+  MCP_APP_SANDBOX_SCRIPT_PATH,
+  sandboxPagePolicy,
+} from "../shared/mcp-app-sandbox"
+import { createStaticHandler, requestedFile } from "./static"
 
 export type WebAppOptions = {
-  surface: WebSurface
+  surface: Surface
   /** The built app, `dist`, holding `build-id` beside the assets. */
   root: string
   /** The operator's public runtime configuration; the guest's is generated. */
   runtimeConfigFile: string
+  /** The surface's lane: its pages' origins and its MCP App sandbox origin. */
+  origins: LaneOrigins
 }
 
 /**
@@ -25,23 +29,33 @@ export type WebAppOptions = {
  */
 const GUEST_RESERVED_PATHS = ["/auth", "/sw.js", "/manifest.webmanifest"]
 
-const GUEST_PAGE_HEADERS = {
-  "content-security-policy":
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; media-src 'self' blob:; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-  "referrer-policy": "no-referrer",
-  "x-content-type-options": "nosniff",
-  "x-frame-options": "DENY",
+/** Each surface's page policy: both frame their own sandbox origin alone. */
+function pageHeaders(
+  surface: Surface,
+  origins: LaneOrigins
+): Record<string, string> {
+  const frameSrc = lanePageFrameSrc(origins)
+  return surface === "guest"
+    ? {
+        "content-security-policy": `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; media-src 'self' blob:; font-src 'self' data:; ${frameSrc}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+      }
+    : { "content-security-policy": frameSrc }
 }
 
 /**
- * The MCP App sandbox proxy page carries its own policy on every surface, in
- * place of the guest page's: only this origin may frame it.
+ * The MCP App sandbox page, for the view its query names: under that view's
+ * own policy, which only the lane's pages may frame, and never cached, since
+ * the policy follows the query.
  */
-const SANDBOX_PAGE_HEADERS = {
-  "content-security-policy": MCP_APP_SANDBOX_CSP,
+const sandboxPageHeaders = (origins: LaneOrigins, query: URLSearchParams) => ({
+  "cache-control": "no-store",
+  "content-security-policy": sandboxPagePolicy(origins, query),
   "referrer-policy": "no-referrer",
   "x-content-type-options": "nosniff",
-}
+})
 
 /**
  * The path the static handler will resolve, which is what a reservation has to
@@ -113,17 +127,28 @@ async function readOperatorConfig(path: string) {
 
 /**
  * One surface of the web app: the built pages, the runtime configuration with
- * the served build id, and the surface's page policy. The gateway answers
- * `/api/v1` beside it, so every other `/api` path is absent here.
+ * the served build id and the lane's origins, and the surface's page policy.
+ * The gateway answers `/api/v1` beside it, so every other `/api` path is
+ * absent here.
+ *
+ * The lane's sandbox address serves the MCP App sandbox page and its script
+ * alone, and the lane's own addresses serve neither, each by the file a
+ * request names however its path is spelled.
  */
 export function createWebApp(options: WebAppOptions) {
+  const { origins, root } = options
   const guest = options.surface === "guest"
-  const serveStatic = createStaticHandler({ root: options.root })
-  const page = (response: Response) =>
-    guest ? withHeaders(response, GUEST_PAGE_HEADERS) : response
+  const serveStatic = createStaticHandler({ root })
+  const headers = pageHeaders(options.surface, origins)
+  const page = (response: Response) => withHeaders(response, headers)
+  const sandboxPage = requestedFile(root, MCP_APP_SANDBOX_PATH)
+  const sandboxFiles = new Set([
+    sandboxPage,
+    requestedFile(root, MCP_APP_SANDBOX_SCRIPT_PATH),
+  ])
 
   async function runtimeConfig(request: Request) {
-    const buildId = await readBuildId(options.root)
+    const buildId = await readBuildId(root)
     const config = guest
       ? { surface: "guest" }
       : await readOperatorConfig(options.runtimeConfigFile)
@@ -132,11 +157,31 @@ export function createWebApp(options: WebAppOptions) {
         status: 503,
         headers: { "cache-control": "no-store" },
       })
-    return json(request, { ...config, ...(buildId ? { buildId } : {}) })
+    return json(request, {
+      ...config,
+      ...origins,
+      ...(buildId ? { buildId } : {}),
+    })
+  }
+
+  async function sandbox(request: Request, file: string | undefined) {
+    if (!sandboxFiles.has(file)) return notFound()
+    if (request.method !== "GET" && request.method !== "HEAD")
+      return new Response(null, { status: 405 })
+    const response = (await serveStatic(request)) ?? notFound()
+    return file === sandboxPage && response.ok
+      ? withHeaders(
+          response,
+          sandboxPageHeaders(origins, new URL(request.url).searchParams)
+        )
+      : response
   }
 
   return async (request: Request): Promise<Response> => {
-    const { pathname } = new URL(request.url)
+    const { host, pathname } = new URL(request.url)
+    const file = requestedFile(root, pathname)
+    if (isSandboxHost(origins, host)) return sandbox(request, file)
+    if (sandboxFiles.has(file)) return page(notFound())
     if (guest && guestReserved(pathname)) return page(notFound())
     if (request.method !== "GET" && request.method !== "HEAD")
       return page(new Response(null, { status: 405 }))
@@ -145,9 +190,6 @@ export function createWebApp(options: WebAppOptions) {
       return page(await runtimeConfig(request))
     if (pathname === "/api" || pathname.startsWith("/api/"))
       return page(notFound())
-    const response = (await serveStatic(request)) ?? notFound()
-    if (pathname === MCP_APP_SANDBOX_PATH && response.ok)
-      return withHeaders(response, SANDBOX_PAGE_HEADERS)
-    return page(response)
+    return page((await serveStatic(request)) ?? notFound())
   }
 }

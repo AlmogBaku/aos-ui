@@ -39,6 +39,12 @@ describe("browser runtime configuration", () => {
       { mode: "hermes", baseUrl: "/hermes" },
       { mode: "aos", providerUrl: "http://127.0.0.1:9119" },
       { mode: "aos", apiKey: "secret" },
+      // A lane origin is exact, as the web server writes it.
+      {
+        mode: "aos",
+        publicOrigins: ["https://aos.example.test/"],
+        mcpAppSandboxOrigin: "https://sandbox.example.test",
+      },
     ]) {
       expect(parsePublicRuntimeConfiguration(input)).toEqual({
         status: "unavailable",
@@ -47,12 +53,17 @@ describe("browser runtime configuration", () => {
     }
   })
 
-  it("recognizes the isolated guest listener without treating it as a runtime", () => {
+  it("recognizes the isolated guest listener and its lane without treating it as a runtime", () => {
+    const origins = {
+      publicOrigins: ["https://guest.example.test"],
+      mcpAppSandboxOrigin: "https://guest-sandbox.example.test",
+    }
     expect(
       parsePublicApplicationConfiguration({
         surface: "guest",
+        ...origins,
         buildId: "build-1",
       })
-    ).toEqual({ status: "ready", surface: "guest" })
+    ).toEqual({ status: "ready", surface: "guest", origins })
   })
 })

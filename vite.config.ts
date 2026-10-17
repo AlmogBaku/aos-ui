@@ -1,6 +1,7 @@
 import react from "@vitejs/plugin-react"
 import { readFileSync } from "node:fs"
 import { readdir, readFile, writeFile } from "node:fs/promises"
+import type { IncomingMessage, ServerResponse } from "node:http"
 import path from "node:path"
 import { promisify } from "node:util"
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib"
@@ -17,10 +18,19 @@ import {
   resolveRuntimeConfiguration,
   serializePublicRuntimeConfiguration,
 } from "./shared/runtime-config.ts"
+import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
 import {
-  MCP_APP_SANDBOX_CSP,
-  MCP_APP_SANDBOX_PATH,
-} from "@harness-gw/sdk/protocol"
+  LANE_ORIGIN_SETTINGS,
+  readLaneOrigins,
+  type LaneOrigins,
+} from "./shared/lane-origins.ts"
+import {
+  isSandboxHost,
+  lanePageFrameSrc,
+  MCP_APP_SANDBOX_SCRIPT_PATH,
+  sandboxPagePolicy,
+} from "./shared/mcp-app-sandbox.ts"
+import { requestedFile } from "./server/static.ts"
 import {
   DEFAULT_RUNTIME_MODE,
   getRuntimeEntrypoint,
@@ -49,25 +59,56 @@ function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   })
 }
 
-function runtimeConfigurationPlugin(environment: NodeJS.ProcessEnv): Plugin {
+type LaneOriginsOf = (request: IncomingMessage) => LaneOrigins
+
+/**
+ * The operator lane's origins (`readLaneOrigins`), the only lane these servers
+ * serve: its settings, or, where they are unset, loopback names on the port a
+ * request reached, which is this server's own.
+ */
+function laneOriginsOf(environment: NodeJS.ProcessEnv): LaneOriginsOf {
+  const settings = LANE_ORIGIN_SETTINGS.operator
+  return ({ socket }) => {
+    const port = socket.localPort
+    const loopback: Record<string, string> = {
+      [settings.publicOrigins]: `http://localhost:${port},http://127.0.0.1:${port}`,
+      [settings.mcpAppSandboxOrigin]: `http://sandbox.localhost:${port}`,
+    }
+    return readLaneOrigins(
+      (name) => environment[name] || loopback[name],
+      "operator"
+    )
+  }
+}
+
+function runtimeConfigurationPlugin(
+  environment: NodeJS.ProcessEnv,
+  originsOf: LaneOriginsOf
+): Plugin {
   const configureRuntimeConfiguration = (
     server: PreviewServer | ViteDevServer
   ) => {
     server.middlewares.use(
       "/runtime-config.json",
-      async (_request, response) => {
+      async (request, response) => {
         response.setHeader("cache-control", "no-store")
         response.setHeader("content-type", "application/json; charset=utf-8")
         try {
           const configFile = environment.AOS_UI_RUNTIME_CONFIG_FILE
-          const body = configFile
-            ? await readFile(path.resolve(configFile), "utf8")
-            : JSON.stringify(
-                serializePublicRuntimeConfiguration(
-                  runtimeConfigurationFromEnvironment(environment)
-                )
+          const configured: unknown = configFile
+            ? JSON.parse(await readFile(path.resolve(configFile), "utf8"))
+            : serializePublicRuntimeConfiguration(
+                runtimeConfigurationFromEnvironment(environment)
               )
-          response.end(body)
+          if (
+            configured === null ||
+            typeof configured !== "object" ||
+            Array.isArray(configured)
+          )
+            throw new Error("The runtime configuration is not an object")
+          // The lane's own origins, over any the file names, as the web
+          // server writes them.
+          response.end(JSON.stringify({ ...configured, ...originsOf(request) }))
         } catch {
           response.statusCode = 500
           response.end(
@@ -154,16 +195,16 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
 }
 
 /**
- * Adds `Access-Control-Allow-Origin: null` to the synthetic fixture
- * files the artifact view fetches from an opaque-origin sandbox frame. Mirrors
- * what `server/static.ts` does in production.
+ * Adds `Access-Control-Allow-Origin: *` to the synthetic fixture files the
+ * artifact view fetches from the lane's sandbox origin. Mirrors what
+ * `server/static.ts` does in production.
  */
 function fixtureMcpAppFilesPlugin(): Plugin {
   const paths = new Set(FIXTURE_MCP_APP_FILE_PATHS)
   const addHeader = (server: PreviewServer | ViteDevServer) => {
     server.middlewares.use((request, response, next) => {
       if (paths.has(request.url?.split("?")[0] ?? ""))
-        response.setHeader("access-control-allow-origin", "null")
+        response.setHeader("access-control-allow-origin", "*")
       next()
     })
   }
@@ -174,19 +215,58 @@ function fixtureMcpAppFilesPlugin(): Plugin {
   }
 }
 
-/** The MCP App sandbox page carries the policy the web server serves it with. */
-function mcpAppSandboxPlugin(): Plugin {
-  const secure = (server: ViteDevServer | PreviewServer) => {
+const notFound = (response: ServerResponse) => {
+  response.statusCode = 404
+  response.end()
+}
+
+/**
+ * The web server's MCP App sandbox rule (`server/web.ts`), ahead of every
+ * other answer these servers give: on the sandbox address only the sandbox
+ * page, under its view's policy, and its relay script, each by the file the
+ * request names; on the lane's own addresses neither, and pages that frame
+ * the sandbox origin alone.
+ */
+function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
+  const secure = (server: ViteDevServer | PreviewServer, root: string) => {
+    const files = new Map(
+      [MCP_APP_SANDBOX_PATH, MCP_APP_SANDBOX_SCRIPT_PATH].map((file) => [
+        requestedFile(root, file),
+        file,
+      ])
+    )
     server.middlewares.use((request, response, next) => {
-      if (request.url?.split("?")[0] === MCP_APP_SANDBOX_PATH)
-        response.setHeader("Content-Security-Policy", MCP_APP_SANDBOX_CSP)
+      const origins = originsOf(request)
+      // Prefixed, not resolved, so `//name` stays a path rather than a host.
+      const url = new URL(`http://request.invalid${request.url ?? "/"}`)
+      const requested = requestedFile(root, url.pathname)
+      const file = requested === undefined ? undefined : files.get(requested)
+      if (!isSandboxHost(origins, request.headers.host ?? "")) {
+        if (file !== undefined) return notFound(response)
+        response.setHeader("content-security-policy", lanePageFrameSrc(origins))
+        return next()
+      }
+      if (file === undefined) return notFound(response)
+      // Served by its own path, which no fallback page answers.
+      request.url = `${file}${url.search}`
+      if (file === MCP_APP_SANDBOX_PATH) {
+        response.setHeader(
+          "content-security-policy",
+          sandboxPagePolicy(origins, url.searchParams)
+        )
+        response.setHeader("cache-control", "no-store")
+      }
       next()
     })
   }
   return {
     name: "aos-mcp-app-sandbox",
-    configureServer: secure,
-    configurePreviewServer: secure,
+    configureServer: (server) => secure(server, server.config.publicDir),
+    configurePreviewServer: (server) =>
+      secure(
+        server,
+        path.resolve(server.config.root, server.config.build.outDir)
+      ),
   }
 }
 
@@ -355,6 +435,9 @@ export default defineConfig(({ mode }) => {
     environment.AOS_UI_RUNTIME_MODE ??
     DEFAULT_RUNTIME_MODE
   ).replace(/[^a-zA-Z0-9_-]/g, "-")
+  const originsOf = laneOriginsOf(environment)
+  const sandboxOrigin =
+    environment[LANE_ORIGIN_SETTINGS.operator.mcpAppSandboxOrigin]
   const allowedHosts = (
     environment.AOS_UI_ALLOWED_HOSTS ??
     environment.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
@@ -362,11 +445,18 @@ export default defineConfig(({ mode }) => {
     ?.split(",")
     .map((host) => host.trim())
     .filter(Boolean)
+    // Vite already answers `*.localhost`, the sandbox's loopback default.
+    .concat(sandboxOrigin ? [new URL(sandboxOrigin).hostname] : [])
   const gatewayProxy = {
     "/api/v1": {
       target: environment.AOS_UI_GATEWAY_TARGET ?? "http://127.0.0.1:4100",
       changeOrigin: false,
       ws: true,
+      // The sandbox address never reaches the gateway, WebSockets included.
+      bypass: (request: IncomingMessage) =>
+        isSandboxHost(originsOf(request), request.headers.host ?? "")
+          ? false
+          : undefined,
     },
   }
 
@@ -376,11 +466,12 @@ export default defineConfig(({ mode }) => {
       `node_modules/.vite-${cacheKey}`
     ),
     plugins: [
+      // First, so the sandbox address answers nothing the others serve.
+      mcpAppSandboxPlugin(originsOf),
       react(),
       reactCompiler(),
-      runtimeConfigurationPlugin(environment),
+      runtimeConfigurationPlugin(environment, originsOf),
       e2eReadinessPlugin(environment),
-      mcpAppSandboxPlugin(),
       fixtureMcpAppFilesPlugin(),
       fixtureToolsServerPlugin(),
       buildIdPlugin(),
