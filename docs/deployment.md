@@ -114,14 +114,15 @@ web server refuses to start without them, naming each one it rejects.
 | Setting | Form | Description |
 | --- | --- | --- |
 | `AOS_UI_PUBLIC_ORIGIN` | Comma-separated exact origins | The origins the browser opens the lane at; the only addresses that may frame App views |
-| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | Single exact origin | The separate address views load from; must differ from every entry in `AOS_UI_PUBLIC_ORIGIN` |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | Single exact origin | The separate address views load from; must differ in host and port from every entry in `AOS_UI_PUBLIC_ORIGIN`, and be `https:` when any of them is |
 
 An exact origin passes `new URL(value).origin === value`: a scheme, a host, and
 the port when it is not the default for the scheme. `https://agents.example` is
 exact; `https://agents.example/` is not.
 
-Compose defaults both to loopback on the published port. Local development and
-containerized fixture mode need no extra configuration:
+Compose defaults both to loopback on the published port, or on `18080` under
+[host networking](#host-networking). Local development and containerized
+fixture mode need no extra configuration:
 
 | Variable | Compose default (port 3000) |
 | --- | --- |
@@ -139,9 +140,11 @@ running there can set cookies on the parent domain and ride its `SameSite=Lax`
 or `SameSite=None` cookies. AOS itself sets only a locale preference cookie, so
 the main concern is cookies your App servers may set.
 
-For loopback development, use a `*.localhost` name such as
-`http://sandbox.localhost:3000`. Vite accepts `*.localhost` names without extra
-configuration. The sandbox must be loopback exactly when the lane's origins are:
+For loopback development, the sandbox must be a `*.localhost` name such as
+`http://sandbox.localhost:3000`, never `localhost` or a loopback address on
+another port, which the gateway still answers. Vite accepts `*.localhost` names
+without extra configuration. The sandbox must be loopback exactly when the
+lane's origins are:
 a sandbox at `http://sandbox.localhost:3000` with a lane at
 `https://agents.example` stops the web server with an error naming the
 mismatched setting.
@@ -208,8 +211,8 @@ With the guest lane active, set two more settings:
 | `AOS_UI_GUEST_PUBLIC_ORIGIN` | Comma-separated exact origins for the guest lane |
 | `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN` | Sandbox origin for the guest lane |
 
-The guest sandbox must differ from the operator sandbox and from both lanes'
-public origins. Harness overlays default the guest sandbox to
+The guest sandbox must differ in host and port from the operator sandbox and
+from both lanes' public origins. Harness overlays default the guest sandbox to
 `http://sandbox.localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}`.
 
 Apply the same DNS, certificate, and reverse-proxy rules for the guest lane as
@@ -374,7 +377,9 @@ Use host networking in either of these cases:
 
 Compose ignores published ports here, so `AOS_UI_WEB_PUBLISHED_PORT` and the
 bind variables have no effect: the lanes are `http://127.0.0.1:18080` and
-`http://127.0.0.1:18081`, usually behind an external ingress. The gateway
+`http://127.0.0.1:18081`, usually behind an external ingress, and the four
+origin settings default to them, with the sandboxes at
+`http://sandbox.localhost:18080` and `http://sandbox.localhost:18081`. The gateway
 configuration must list `127.0.0.1` as both listener hosts, its origins must
 match the address the browser uses, and the `aos-ui` MCP App override can use
 `http://127.0.0.1:4110/mcp`, the same URL the host harness registers.
