@@ -37,6 +37,10 @@ import {
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
+import {
+  SubagentTranscript,
+  useSubagentTranscriptPip,
+} from "@/components/tool-ui/subagent-transcript"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import {
@@ -240,8 +244,11 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
   children,
   ...shell
 }: WorkspaceShellProps) {
-  // The side panel holds the pip view when one is active.
-  const pip = useMcpAppPip(shell.locale)
+  // The side panel holds the pip view, or a subagent's transcript, when one
+  // is active. The transcript is dispatched here, beside the thread it reads.
+  const app = useMcpAppPip(shell.locale)
+  const transcript = useSubagentTranscriptPip(shell.locale)
+  const pip = transcript ?? app
   // The shell frames the list in its own bordered block, which goes with it.
   const hasOutputs = useHasSessionOutputs()
 
@@ -250,7 +257,9 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
       {...shell}
       artifactOutputs={hasOutputs ? <ArtifactOutputs /> : undefined}
       sidePanel={
-        pip ? (
+        transcript ? (
+          <SubagentTranscript locale={shell.locale} />
+        ) : app ? (
           <McpAppPipPanel
             locale={shell.locale}
             failureNotice={artifactPanelFailure}

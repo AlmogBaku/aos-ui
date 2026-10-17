@@ -9,27 +9,41 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  AssistantRuntimeProvider,
   fromThreadMessageLike,
+  useExternalStoreRuntime,
   type ThreadMessage,
   type ThreadMessageLike,
 } from "@assistant-ui/react"
+import { useMemo } from "react"
 
+import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 import { LocalThread } from "@/components/assistant-ui/elements/thread.aui.test-helpers"
+import { threadLabels } from "@/components/assistant-ui/thread-labels"
+import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
 import type {
+  McpAppAdapter,
   RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import { withAosToolArtifact, type AosSubagent } from "@/lib/tool-artifact"
 
-import type { ChildSessionControls } from "@/runtime-adapters/child-sessions"
+import {
+  childSessionExtras,
+  type ChildSessionControls,
+} from "@/runtime-adapters/child-sessions"
 
 import { ChildSessionControlsProvider } from "./child-session-controls"
 import {
   AosToolPresentation,
   ToolUiLocaleProvider,
+  enToolUiLabels,
+  heToolUiLabels,
   isAosRichTool,
+  type ToolUiLocale,
 } from "./index"
+import { SubagentTranscript } from "./subagent-transcript"
 import { toolPart } from "./tool-part.test-helpers"
 
 afterEach(cleanup)
@@ -520,7 +534,7 @@ describe("subagents", () => {
     // goes to the Session its request came from.
     // A child the gateway no longer follows may still be at work, or done:
     // the card says neither, and offers no Stop it could not confirm.
-    it("says a child no longer followed is unconfirmed, and offers no Stop", async () => {
+    it("says a child no longer followed is unconfirmed", async () => {
       render(
         <ChildSessionControlsProvider controls={controls()}>
           <LocalThread
@@ -532,7 +546,6 @@ describe("subagents", () => {
 
       expect(await screen.findByText("Status unavailable")).toBeVisible()
       expect(screen.queryByText("Running")).toBeNull()
-      expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
     })
 
     it("answers each permission request on the child Session that asked it", async () => {
@@ -667,6 +680,203 @@ describe("subagents", () => {
       expect(interactions.respond).toHaveBeenCalledWith(request, {
         kind: "question",
         answers: [["Yes"]],
+      })
+    })
+
+    describe("in the side panel", () => {
+      const GOAL = "Reconcile September's supplier invoices"
+      /** The Session's thread beside its side panel, as the workspace lays them out. */
+      function PanelThread({
+        messages,
+        child,
+        locale = "en",
+      }: {
+        messages: readonly ThreadMessageLike[]
+        child?: ChildSessionControls
+        locale?: ToolUiLocale
+      }) {
+        const extras = useMemo(
+          () =>
+            child ? childSessionExtras.provide({ childSessions: child }) : {},
+          [child]
+        )
+        const runtime = useExternalStoreRuntime({
+          messages,
+          convertMessage: (message: ThreadMessageLike) => message,
+          onNew: async () => {},
+          extras,
+        })
+        return (
+          <AssistantRuntimeProvider runtime={runtime}>
+            <McpAppHostProvider
+              adapter={{} as McpAppAdapter}
+              agentId="agent-1"
+              sessionId="session-1"
+            >
+              <ToolUiLocaleProvider locale={locale}>
+                <Thread
+                  autoFocus={false}
+                  labels={threadLabels[locale]}
+                  components={{ ToolFallback: AosToolPresentation }}
+                />
+                <SubagentTranscript locale={locale} />
+              </ToolUiLocaleProvider>
+            </McpAppHostProvider>
+          </AssistantRuntimeProvider>
+        )
+      }
+      const working = { ...running, goal: GOAL }
+      /** A child at work: it read the ledger, searched, and now asks. */
+      const transcript = [
+        fromThreadMessageLike(
+          {
+            id: "child-brief",
+            role: "user",
+            content: [{ type: "text", text: `${GOAL}.` }],
+          },
+          "child-brief",
+          { type: "complete", reason: "stop" }
+        ),
+        fromThreadMessageLike(
+          {
+            id: "child-answer",
+            role: "assistant",
+            content: [
+              { type: "text", text: "Opening the September ledger." },
+              {
+                type: "tool-call",
+                toolCallId: "child-read",
+                toolName: "read_file",
+                args: {},
+                argsText: "{}",
+                result: "48 invoices",
+              },
+              {
+                type: "tool-call",
+                toolCallId: "child-search",
+                toolName: "web_search",
+                args: {},
+                argsText: "{}",
+                result: "Supplier price list",
+              },
+              { type: "text", text: "Invoices 1 to 20 match their orders." },
+              asking("child-email", "Email the supplier about invoice 21?"),
+            ],
+          },
+          "child-answer",
+          { type: "requires-action", reason: "tool-calls" }
+        ),
+      ]
+
+      it.each([
+        ["en", enToolUiLabels, "Read 1 file and searched the web once"],
+        ["he", heToolUiLabels, "קרא קובץ אחד וחיפש ברשת פעם אחת"],
+      ] as const)(
+        "opens the child's transcript to read only, in %s",
+        async (locale, labels, run) => {
+          const user = userEvent.setup()
+          render(
+            <PanelThread
+              locale={locale}
+              child={controls()}
+              messages={threadWith(working, transcript)}
+            />
+          )
+
+          await user.click(
+            await screen.findByRole("button", {
+              name: labels.subagent.viewTranscript,
+            })
+          )
+          const panel = await screen.findByRole("region", { name: GOAL })
+          expect(
+            within(panel).getByText("Invoices 1 to 20 match their orders.")
+          ).toBeVisible()
+          expect(within(panel).getByText(run)).toBeVisible()
+          expect(
+            within(panel).getByRole("button", {
+              name: labels.subagent.closeTranscript,
+            })
+          ).toHaveFocus()
+          expect(within(panel).queryByRole("textbox")).toBeNull()
+          expect(
+            within(panel).queryByRole("button", {
+              name: threadLabels[locale].edit,
+            })
+          ).toBeNull()
+          // The row answers the child's request; the panel only shows it.
+          expect(
+            screen.getByRole("button", { name: labels.permission.allowOnce })
+          ).toBeVisible()
+          expect(
+            within(panel).queryByRole("button", {
+              name: labels.permission.allowOnce,
+            })
+          ).toBeNull()
+        }
+      )
+
+      it("stops a child that offers to be stopped alone, and offers no Stop otherwise", async () => {
+        const user = userEvent.setup()
+        const child = controls()
+        const { rerender } = render(
+          <PanelThread child={child} messages={threadWith(working, [])} />
+        )
+        await user.click(
+          await screen.findByRole("button", { name: "View transcript" })
+        )
+        const panel = await screen.findByRole("region", { name: GOAL })
+
+        await user.click(
+          within(panel).getByRole("button", { name: "Stop subagent" })
+        )
+        expect(child.cancel).toHaveBeenCalledExactlyOnceWith(CHILD_ID)
+
+        for (const settled of [
+          { ...working, cancellable: false },
+          { ...working, status: "unknown" },
+        ]) {
+          rerender(
+            <PanelThread child={child} messages={threadWith(settled, [])} />
+          )
+          expect(
+            within(panel).queryByRole("button", { name: "Stop subagent" })
+          ).toBeNull()
+        }
+      })
+
+      it("opens a provider's own text transcript verbatim", async () => {
+        const user = userEvent.setup()
+        render(
+          <PanelThread
+            messages={[
+              {
+                id: "a1",
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool-call",
+                    toolCallId: "delegate",
+                    toolName: "delegate_subagent",
+                    args: { task: GOAL },
+                    argsText: "{}",
+                    result: {
+                      status: "completed",
+                      transcript: "All 48 invoices match.",
+                    },
+                  },
+                ],
+              },
+            ]}
+          />
+        )
+        await user.click(
+          await screen.findByRole("button", { name: "View transcript" })
+        )
+        const panel = await screen.findByRole("region", { name: GOAL })
+        expect(
+          within(panel).getByText("All 48 invoices match.")
+        ).toHaveAttribute("dir", "auto")
       })
     })
   })

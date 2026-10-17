@@ -178,7 +178,9 @@ function HostedMcpApp({
   // While the view shows in the side panel, which mounts it afresh, its message
   // keeps its own and passes on what the call reports.
   const pipped =
-    host.pip !== undefined && sameMcpAppTarget(host.pip.target, target)
+    host.pip !== undefined &&
+    host.pip.kind !== "transcript" &&
+    sameMcpAppTarget(host.pip.target, target)
   useEffect(() => {
     if (pipped) updatePip(target, { input, result, cancelled })
   }, [cancelled, input, pipped, result, target, updatePip])
@@ -254,7 +256,7 @@ const viewTitle = (
 /** The side panel's view, named in `locale`, while one is there. */
 export function useMcpAppPip(locale: ToolUiLocale) {
   const host = useMcpAppHost()
-  if (!host?.pip) return undefined
+  if (!host?.pip || host.pip.kind === "transcript") return undefined
   const labels = locale === "he" ? heToolUiLabels : enToolUiLabels
   return { title: viewTitle(labels, host.pip), leave: host.leavePip }
 }
@@ -280,7 +282,7 @@ type McpAppPipPanelProps = {
  */
 export function McpAppPipPanel({ locale, failureNotice }: McpAppPipPanelProps) {
   const host = useMcpAppHost()
-  if (!host?.pip) return null
+  if (!host?.pip || host.pip.kind === "transcript") return null
   return (
     <ToolUiLocaleProvider locale={locale}>
       <PipPanel

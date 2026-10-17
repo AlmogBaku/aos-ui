@@ -480,25 +480,52 @@ export const Thread: FC<ThreadProps> = ({
   )
 
   return (
-    <ThreadLabelsContext.Provider value={localizedLabels}>
+    <ThreadScope
+      labels={localizedLabels}
+      direction={direction}
+      components={components}
+    >
+      <AttachmentLabelsContext.Provider value={localizedAttachmentLabels}>
+        <MessageRewindContext.Provider value={messageRewind}>
+          <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
+            <ThreadChildSessionControls>
+              <CompactionDataUI />
+              <NoticeDataUI />
+              <ThreadRoot
+                isEmpty={isEmpty}
+                autoFocus={autoFocus}
+                direction={direction}
+              />
+            </ThreadChildSessionControls>
+          </ThreadComposerFeaturesContext.Provider>
+        </MessageRewindContext.Provider>
+      </AttachmentLabelsContext.Provider>
+    </ThreadScope>
+  )
+}
+
+/**
+ * What a message body reads from its thread: its labels, its direction, and
+ * the components it renders parts with. A surface showing messages outside
+ * the Thread, such as a subagent's transcript, provides its own.
+ */
+export function ThreadScope({
+  labels,
+  direction = "ltr",
+  components = EMPTY_COMPONENTS,
+  children,
+}: {
+  labels: ThreadLabels
+  direction?: LocaleDirection
+  components?: ThreadComponents
+  children: ReactNode
+}) {
+  return (
+    <ThreadLabelsContext.Provider value={labels}>
       <ThreadDirectionContext.Provider value={direction}>
-        <AttachmentLabelsContext.Provider value={localizedAttachmentLabels}>
-          <MessageRewindContext.Provider value={messageRewind}>
-            <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
-              <ThreadComponentsContext.Provider value={components}>
-                <ThreadChildSessionControls>
-                  <CompactionDataUI />
-                  <NoticeDataUI />
-                  <ThreadRoot
-                    isEmpty={isEmpty}
-                    autoFocus={autoFocus}
-                    direction={direction}
-                  />
-                </ThreadChildSessionControls>
-              </ThreadComponentsContext.Provider>
-            </ThreadComposerFeaturesContext.Provider>
-          </MessageRewindContext.Provider>
-        </AttachmentLabelsContext.Provider>
+        <ThreadComponentsContext.Provider value={components}>
+          {children}
+        </ThreadComponentsContext.Provider>
       </ThreadDirectionContext.Provider>
     </ThreadLabelsContext.Provider>
   )
@@ -2079,13 +2106,13 @@ const TurnText: FC = () => {
   )
 }
 
-const AssistantMessage: FC = () => {
+/**
+ * An assistant turn's content: its working status, its parts grouped by the
+ * turn fold, its sources, and why it failed or stopped, with nothing that acts
+ * on the message itself.
+ */
+export const AssistantMessageBody: FC = () => {
   const reading = useVoiceMessageReading()
-  const completedWithoutContent = useAuiState(
-    (state) =>
-      state.message.status?.type === "complete" &&
-      state.message.content.length === 0
-  )
   const turnParts = useAuiState(selectTurnParts)
   const turnStatus = useAuiState(selectTurnStatus)
   const groupBy = useMemo(
@@ -2093,12 +2120,123 @@ const AssistantMessage: FC = () => {
     [turnParts, turnStatus]
   )
   const labels = useContext(ThreadLabelsContext)
+  const { ToolFallback: ToolFallbackComponent = ToolFallback } = useContext(
+    ThreadComponentsContext
+  )
+
+  return (
+    <div
+      data-slot="aui_assistant-message-content"
+      className="px-2 leading-7 wrap-break-word text-foreground"
+      dir="auto"
+    >
+      <div
+        className="contents"
+        data-searchable-message-text={reading ? "" : undefined}
+      >
+        <InlineReadAloud />
+      </div>
+      <TurnWorkingStatus />
+      <MessagePrimitive.GroupedParts groupBy={groupBy}>
+        {({ part, children }) => {
+          switch (part.type) {
+            case "group-working":
+              return (
+                <TurnWorkingFold indices={part.indices}>
+                  {children}
+                </TurnWorkingFold>
+              )
+            case "group-tool":
+              return (
+                <ToolRunGroup
+                  renderTool={ToolFallbackComponent}
+                  indices={part.indices}
+                />
+              )
+            case "group-subagents":
+              return (
+                <SubagentGroup
+                  renderTool={ToolFallbackComponent}
+                  indices={part.indices}
+                />
+              )
+            case "group-reasoning":
+              return (
+                <TurnReasoning indices={part.indices}>{children}</TurnReasoning>
+              )
+            case "text":
+              return reading ? <></> : <TurnText />
+            case "reasoning":
+              return <MarkdownText />
+            case "tool-call":
+              return (part.toolUI ?? isAosRichTool(part)) ? (
+                <div className="-mx-2 py-2">
+                  {part.toolUI ?? <ToolFallbackComponent {...part} />}
+                </div>
+              ) : null
+            case "data":
+              return <div className="-mx-2">{part.dataRendererUI}</div>
+            case "file":
+              return (
+                <div data-slot="aui_assistant-message-file" className="py-1">
+                  <File {...part} />
+                </div>
+              )
+            case "image":
+              return (
+                <div data-slot="aui_assistant-message-image" className="py-1">
+                  <MessageImage {...part} />
+                </div>
+              )
+            case "indicator":
+              return (
+                <span
+                  data-slot="aui_assistant-message-indicator"
+                  className="animate-pulse font-sans motion-reduce:animate-none"
+                  aria-hidden="true"
+                >
+                  {"●"}
+                </span>
+              )
+            default:
+              return null
+          }
+        }}
+      </MessagePrimitive.GroupedParts>
+      <MessagePrimitive.Parts>
+        {({ part }) => {
+          // MessagePrimitive.Parts falls back to its default renderer for
+          // null. Return false so non-source parts are not rendered twice.
+          if (part.type !== "source") return false
+          return (
+            <div data-slot="aui_assistant-message-source" className="py-1">
+              <Source
+                {...part}
+                labels={{
+                  openSource: labels.openSource,
+                  documentSource: labels.documentSource,
+                }}
+              />
+            </div>
+          )
+        }}
+      </MessagePrimitive.Parts>
+      <MessageError />
+      <MessageStopNotice />
+    </div>
+  )
+}
+
+const AssistantMessage: FC = () => {
+  const completedWithoutContent = useAuiState(
+    (state) =>
+      state.message.status?.type === "complete" &&
+      state.message.content.length === 0
+  )
+  const labels = useContext(ThreadLabelsContext)
   const direction = useContext(ThreadDirectionContext)
   const messageRewind = useContext(MessageRewindContext)
-  const {
-    AssistantIdentity,
-    ToolFallback: ToolFallbackComponent = ToolFallback,
-  } = useContext(ThreadComponentsContext)
+  const { AssistantIdentity } = useContext(ThreadComponentsContext)
   const entrance = useMessageEntrance()
 
   const ACTION_BAR_PT = "pt-1.5"
@@ -2120,113 +2258,7 @@ const AssistantMessage: FC = () => {
         className={cn("relative -mb-7.5 pb-7.5", entrance)}
       >
         {AssistantIdentity ? <AssistantIdentity /> : null}
-        <div
-          data-slot="aui_assistant-message-content"
-          className="px-2 leading-7 wrap-break-word text-foreground"
-          dir="auto"
-        >
-          <div
-            className="contents"
-            data-searchable-message-text={reading ? "" : undefined}
-          >
-            <InlineReadAloud />
-          </div>
-          <TurnWorkingStatus />
-          <MessagePrimitive.GroupedParts groupBy={groupBy}>
-            {({ part, children }) => {
-              switch (part.type) {
-                case "group-working":
-                  return (
-                    <TurnWorkingFold indices={part.indices}>
-                      {children}
-                    </TurnWorkingFold>
-                  )
-                case "group-tool":
-                  return (
-                    <ToolRunGroup
-                      renderTool={ToolFallbackComponent}
-                      indices={part.indices}
-                    />
-                  )
-                case "group-subagents":
-                  return (
-                    <SubagentGroup
-                      renderTool={ToolFallbackComponent}
-                      indices={part.indices}
-                    />
-                  )
-                case "group-reasoning":
-                  return (
-                    <TurnReasoning indices={part.indices}>
-                      {children}
-                    </TurnReasoning>
-                  )
-                case "text":
-                  return reading ? <></> : <TurnText />
-                case "reasoning":
-                  return <MarkdownText />
-                case "tool-call":
-                  return (part.toolUI ?? isAosRichTool(part)) ? (
-                    <div className="-mx-2 py-2">
-                      {part.toolUI ?? <ToolFallbackComponent {...part} />}
-                    </div>
-                  ) : null
-                case "data":
-                  return <div className="-mx-2">{part.dataRendererUI}</div>
-                case "file":
-                  return (
-                    <div
-                      data-slot="aui_assistant-message-file"
-                      className="py-1"
-                    >
-                      <File {...part} />
-                    </div>
-                  )
-                case "image":
-                  return (
-                    <div
-                      data-slot="aui_assistant-message-image"
-                      className="py-1"
-                    >
-                      <MessageImage {...part} />
-                    </div>
-                  )
-                case "indicator":
-                  return (
-                    <span
-                      data-slot="aui_assistant-message-indicator"
-                      className="animate-pulse font-sans motion-reduce:animate-none"
-                      aria-hidden="true"
-                    >
-                      {"●"}
-                    </span>
-                  )
-                default:
-                  return null
-              }
-            }}
-          </MessagePrimitive.GroupedParts>
-          <MessagePrimitive.Parts>
-            {({ part }) => {
-              // MessagePrimitive.Parts falls back to its default renderer for
-              // null. Return false so non-source parts are not rendered twice.
-              if (part.type !== "source") return false
-              return (
-                <div data-slot="aui_assistant-message-source" className="py-1">
-                  <Source
-                    {...part}
-                    labels={{
-                      openSource: labels.openSource,
-                      documentSource: labels.documentSource,
-                    }}
-                  />
-                </div>
-              )
-            }}
-          </MessagePrimitive.Parts>
-          <MessageError />
-          <MessageStopNotice />
-        </div>
+        <AssistantMessageBody />
 
         <div
           data-slot="aui_assistant-message-footer"

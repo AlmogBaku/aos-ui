@@ -4,12 +4,15 @@ import {
   CircleHelp,
   Clock3,
   LoaderCircle,
+  PanelRightOpen,
 } from "lucide-react"
 import type { ThreadMessage } from "@assistant-ui/react"
 import { lazy, Suspense, useCallback, useSyncExternalStore } from "react"
 import { z } from "zod"
 
+import { useMcpAppHost } from "@/components/mcp-apps/mcp-app-host"
 import { useRuntimeInteractions } from "@/components/runtime-interactions/pending-interaction-context"
+import { Button } from "@/components/ui/button"
 import { RuntimeQuestionComposer } from "@/components/runtime-interactions/question-composer"
 import type { ChildSessionControls } from "@/runtime-adapters/child-sessions"
 import type { RuntimeInteractionAdapter } from "@/runtime-adapters/contracts"
@@ -82,22 +85,45 @@ export const activityPayloadSchema = z
 export type ActivityPayload = z.infer<typeof activityPayloadSchema>
 export type ActivityChildStatus = z.infer<typeof activityStatusSchema>
 
+type PayloadPart = Pick<RichToolPart, "args" | "result" | "toolName">
+
+/** The call's args and result as an activity payload, when they fit one. */
+export function readActivityPayload(
+  part: PayloadPart
+): ActivityPayload | undefined {
+  const parsed = activityPayloadSchema.safeParse({
+    args: part.args,
+    result: part.result,
+  })
+  return parsed.success ? parsed.data : undefined
+}
+
 /**
  * The activity payload of a call known only by its subagent metadata: its
  * validated args and result when they fit, and the subagent's goal otherwise.
  */
 export function subagentActivityPayload(
-  part: RichToolPart,
+  part: PayloadPart,
   subagent: AosSubagent
 ): ActivityPayload {
-  const parsed = activityPayloadSchema.safeParse({
-    args: part.args,
-    result: part.result,
-  })
-  return parsed.success
-    ? parsed.data
-    : { args: { task: subagent.goal ?? part.toolName } }
+  return (
+    readActivityPayload(part) ?? {
+      args: { task: subagent.goal ?? part.toolName },
+    }
+  )
 }
+
+/** What the subagent was set to do, by the most specific name it has. */
+export const activityTitle = (
+  payload: ActivityPayload | undefined,
+  subagent: AosSubagent | undefined
+) =>
+  subagent?.goal ??
+  payload?.result?.name ??
+  payload?.args.name ??
+  payload?.args.skill ??
+  payload?.args.task ??
+  payload?.args.description
 
 /**
  * How far a subagent row's child has got: what its child Session reports,
@@ -105,14 +131,10 @@ export function subagentActivityPayload(
  */
 export function activityStatusOf(part: RichToolPart): ToolUiActivityStatus {
   const subagent = readAosToolArtifact(part.artifact)?.subagent
-  const parsed = activityPayloadSchema.safeParse({
-    args: part.args,
-    result: part.result,
-  })
   return (
     subagentStatus(subagent?.status) ??
     getChildStatus(
-      parsed.success ? parsed.data : undefined,
+      readActivityPayload(part),
       normalizeRichToolState(part).phase
     )
   )
@@ -142,24 +164,20 @@ export function ActivityTool({
   payload,
   kind,
   subagent,
+  requests = true,
 }: {
   part: RichToolPart
   payload: ActivityPayload
   kind: ToolUiActivityKind
   /** ACP subagent metadata; its goal, status, and summary lead when present. */
   subagent?: AosSubagent
+  /** Whether the child's requests open under the row to be answered. */
+  requests?: boolean
 }) {
   const state = normalizeRichToolState(part)
   const { direction, labels, locale } = useToolUiLocale()
   const controls = useChildSessionControls()
-  const title =
-    subagent?.goal ??
-    payload.result?.name ??
-    payload.args.name ??
-    payload.args.skill ??
-    payload.args.task ??
-    payload.args.description ??
-    labels.activities[kind]
+  const title = activityTitle(payload, subagent) ?? labels.activities[kind]
   const summary = subagent?.summary ?? payload.result?.summary
   const status =
     subagentStatus(subagent?.status) ?? getChildStatus(payload, state.phase)
@@ -175,6 +193,9 @@ export function ActivityTool({
       ? (summary ?? failureOf(part.messages))
       : summary
   const childSessionId = subagent?.childSessionId
+  const readable = Boolean(
+    childSessionId || part.messages?.length || payload.result?.transcript
+  )
 
   return (
     <div
@@ -198,6 +219,7 @@ export function ActivityTool({
               {formatToolDuration(elapsedMs, labels.assistant.duration)}
             </span>
           )}
+          {readable ? <TranscriptMark toolCallId={part.toolCallId} /> : null}
         </div>
         {line ? (
           <p
@@ -220,7 +242,7 @@ export function ActivityTool({
           </p>
         ) : null}
       </div>
-      {childSessionId ? (
+      {requests && childSessionId ? (
         <div className="ps-10 pe-3.5">
           <ChildRequests
             part={part}
@@ -231,6 +253,37 @@ export function ActivityTool({
         </div>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * Opens the row's transcript in the side panel, where the runtime has one;
+ * the panel hands the focus back to it once it closes.
+ */
+function TranscriptMark({ toolCallId }: { toolCallId: string }) {
+  const host = useMcpAppHost()
+  const { labels } = useToolUiLocale()
+  if (!host) return null
+  const { agentId, sessionId, showInPip } = host
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-xs"
+      className="-my-1 shrink-0 text-muted-foreground [@media(pointer:coarse)]:size-11"
+      aria-label={labels.subagent.viewTranscript}
+      title={labels.subagent.viewTranscript}
+      data-artifact-open-id={`transcript:${toolCallId}`}
+      onClick={(event) =>
+        showInPip({
+          kind: "transcript",
+          target: { agentId, sessionId, toolCallId },
+          opener: event.currentTarget,
+        })
+      }
+    >
+      <PanelRightOpen aria-hidden="true" className="rtl:-scale-x-100" />
+    </Button>
   )
 }
 

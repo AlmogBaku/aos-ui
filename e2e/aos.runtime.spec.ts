@@ -1353,10 +1353,12 @@ test("Gateway renders a turn's tools, diff, terminal, compaction, subagent, stop
     await expect(page.getByText(shown, { exact: true })).toBeVisible()
   await page.keyboard.press("Escape")
 
-  // The subagent's child Session opens from its activity to read, from what
-  // its parent's turn carried: nothing loads or resumes the child.
-  await page.getByRole("button", { name: "Open session", exact: true }).click()
-  const childSession = page.getByRole("dialog", {
+  // The subagent's transcript opens beside the conversation to read, from
+  // what its parent's turn carried: nothing loads or resumes the child.
+  await page
+    .getByRole("button", { name: "View transcript", exact: true })
+    .click()
+  const childSession = page.getByRole("region", {
     name: "Check the pricing page",
   })
   await expect(
