@@ -111,8 +111,9 @@ function SideQuestionRow({
         aria-hidden="true"
         className={cn(
           "mt-0.5 size-4 shrink-0 text-muted-foreground",
-          state === "asking" && "text-primary motion-safe:animate-spin",
-          state === "answered" && "text-primary",
+          state === "asking" && "motion-safe:animate-spin",
+          state === "answered" && "text-success",
+          state === "needs-input" && "text-warning",
           state === "failed" && "text-destructive"
         )}
       />
