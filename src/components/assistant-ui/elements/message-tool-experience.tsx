@@ -37,7 +37,7 @@ type ToolPart = Pick<
   status: Pick<ToolCallMessagePartStatus, "type">
 }
 
-type RuntimeToolPart = Extract<EnrichedPartState, { type: "tool-call" }>
+export type RuntimeToolPart = Extract<EnrichedPartState, { type: "tool-call" }>
 
 const summaryOnlyToolNames = new Set([
   "skill",
@@ -99,12 +99,17 @@ function isRuntimeToolPart(part: unknown): part is RuntimeToolPart {
   )
 }
 
-export function createToolPartSelector() {
+/**
+ * The tool calls among `parts` that `keeps` takes, as one list that keeps its
+ * identity while they do.
+ */
+export function createToolPartSelector(
+  keeps: (part: RuntimeToolPart) => boolean = isOrdinaryToolPart
+) {
   let previous: readonly RuntimeToolPart[] = []
   return (parts: readonly unknown[]) => {
     const next = parts.filter(
-      (part): part is RuntimeToolPart =>
-        isRuntimeToolPart(part) && isOrdinaryToolPart(part)
+      (part): part is RuntimeToolPart => isRuntimeToolPart(part) && keeps(part)
     )
     if (
       previous.length === next.length &&

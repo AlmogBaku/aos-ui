@@ -308,24 +308,18 @@ describe("subagents", () => {
     expect(isAosRichTool(part)).toBe(rich)
   })
 
-  it("shows a subagent as activity, whatever its tool is called", async () => {
+  it("shows a subagent as one row, whatever its tool is called", async () => {
     expect(isAosRichTool(subagentPart)).toBe(true)
     render(<AosToolPresentation {...subagentPart} />)
 
-    expect(await screen.findByText("Check the pricing tiers")).toBeVisible()
-    for (const fact of [
-      "Model opus",
-      "Depth 1",
-      "Completed",
-      "18K tokens",
-      "Took 1m 12s",
-      "Read 3 files",
-      "Wrote 1 file",
-    ])
-      expect(screen.getByText(fact)).toBeInTheDocument()
+    const goal = await screen.findByText("Check the pricing tiers")
+    expect(goal).toHaveAttribute("title", "Check the pricing tiers")
+    expect(screen.getByRole("status")).toHaveTextContent("Completed")
+    expect(screen.getByText("1m 12s")).toBeVisible()
+    expect(screen.queryByText("Model opus")).toBeNull()
   })
 
-  // The summary used to be dropped on the way to the card.
+  // The summary used to be dropped on the way to the row.
   it("shows the summary its child Session reports", async () => {
     render(
       <AosToolPresentation
@@ -338,7 +332,7 @@ describe("subagents", () => {
     expect(await screen.findByText("The tiers match the page.")).toBeVisible()
   })
 
-  it("keeps a failed subagent's status rather than a bare error", async () => {
+  it("keeps a failed subagent's status and reason rather than a bare error", async () => {
     render(
       <AosToolPresentation
         {...toolPart(
@@ -346,23 +340,116 @@ describe("subagents", () => {
             toolName: "spawn_agent",
             status: { type: "incomplete", reason: "error" },
           },
-          { subagent: { ...subagent, status: "failed" } }
+          {
+            subagent: {
+              ...subagent,
+              status: "failed",
+              summary: "interviews-q3.docx could not be opened.",
+            },
+          }
         )}
       />
     )
-    expect(await screen.findByText("Failed")).toBeInTheDocument()
+    expect(await screen.findByRole("status")).toHaveTextContent("Failed")
     expect(screen.getByText("Check the pricing tiers")).toBeVisible()
+    expect(
+      screen.getByText("interviews-q3.docx could not be opened.")
+    ).toBeVisible()
   })
 
-  it("localizes the subagent facts in Hebrew", async () => {
+  it("reads the row in Hebrew", async () => {
     render(
       <ToolUiLocaleProvider locale="he">
         <AosToolPresentation {...subagentPart} />
       </ToolUiLocaleProvider>
     )
-    expect(await screen.findByText("עומק 1")).toBeInTheDocument()
-    expect(screen.getByText("כתב קובץ אחד")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "פתיחת שיחה" })).toBeVisible()
+    expect(await screen.findByRole("status")).toHaveTextContent("הושלם")
+    expect(screen.getByText("1 דק׳ 12 שנ׳")).toBeVisible()
+  })
+
+  describe("in a batch", () => {
+    const GOALS = [
+      "Research Northwind's 2026 pricing",
+      "Reconcile September's supplier invoices",
+      "Draft follow-ups to the trade-show leads",
+    ]
+    const batch = (statuses: readonly string[]): ThreadMessageLike[] => [
+      {
+        id: "u1",
+        role: "user",
+        content: [{ type: "text", text: "Prepare the board meeting" }],
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: statuses.map((status, index) => ({
+          type: "tool-call",
+          toolCallId: `aos-subagent-child-${index}`,
+          toolName: "subagent",
+          args: {},
+          argsText: "{}",
+          artifact: withAosToolArtifact(undefined, {
+            subagent: {
+              id: `child-${index}`,
+              childSessionId: `child-${index}`,
+              goal: GOALS[index],
+              status,
+            },
+          }),
+        })),
+      },
+    ]
+
+    it.each([
+      [
+        "stays open while a child runs",
+        ["running", "completed", "failed"],
+        false,
+        true,
+        ["1 running", "1 done", "1 failed"],
+      ],
+      [
+        "collapses once every child is done",
+        ["completed", "completed", "unknown"],
+        false,
+        false,
+        ["2 done", "1 status unavailable"],
+      ],
+      [
+        "keeps the reader's own close over a running child",
+        ["running", "waiting"],
+        true,
+        false,
+        ["1 running", "1 waiting"],
+      ],
+      [
+        "keeps the reader's own open once every child is done",
+        ["completed", "failed"],
+        true,
+        true,
+        ["1 done", "1 failed"],
+      ],
+    ] as const)(
+      "counts each child by its own state and %s",
+      async (_case, statuses, toggles, open, counts) => {
+        const user = userEvent.setup()
+        render(
+          <LocalThread
+            toolFallback={AosToolPresentation}
+            initialMessages={batch(statuses)}
+          />
+        )
+        const header = await screen.findByRole("button", {
+          name: new RegExp(`^${statuses.length} subagents`),
+        })
+        if (toggles) await user.click(header)
+
+        expect(header).toHaveAttribute("aria-expanded", String(open))
+        for (const count of counts)
+          expect(within(header).getByText(count)).toBeInTheDocument()
+        expect(screen.queryByText(GOALS[0]!) !== null).toBe(open)
+      }
+    )
   })
 
   describe("over its child Session", () => {
@@ -411,36 +498,6 @@ describe("subagents", () => {
       cancelRunning: () => 0,
     })
 
-    it("stops a child that offers to be stopped alone, and offers no Stop otherwise", async () => {
-      const user = userEvent.setup()
-      const child = controls()
-      const { rerender } = render(
-        <ChildSessionControlsProvider controls={child}>
-          <LocalThread
-            toolFallback={AosToolPresentation}
-            initialMessages={threadWith(running, [])}
-          />
-        </ChildSessionControlsProvider>
-      )
-
-      await user.click(
-        await screen.findByRole("button", { name: "Stop subagent" })
-      )
-      expect(child.cancel).toHaveBeenCalledExactlyOnceWith(CHILD_ID)
-
-      rerender(
-        <ChildSessionControlsProvider controls={child}>
-          <LocalThread
-            key="settled"
-            toolFallback={AosToolPresentation}
-            initialMessages={threadWith({ ...running, cancellable: false }, [])}
-          />
-        </ChildSessionControlsProvider>
-      )
-      await screen.findByText("Check the pricing tiers")
-      expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
-    })
-
     /** A call in the child's transcript that asks a permission. */
     const asking = (toolCallId: string, prompt: string) =>
       ({
@@ -475,7 +532,6 @@ describe("subagents", () => {
 
       expect(await screen.findByText("Status unavailable")).toBeVisible()
       expect(screen.queryByText("Running")).toBeNull()
-      expect(screen.queryByText("Transcript is loading…")).toBeNull()
       expect(screen.queryByRole("button", { name: "Stop subagent" })).toBeNull()
     })
 
@@ -612,31 +668,6 @@ describe("subagents", () => {
         kind: "question",
         answers: [["Yes"]],
       })
-    })
-
-    it("opens the child Session's transcript to read, and to read only", async () => {
-      const user = userEvent.setup()
-      render(
-        <LocalThread
-          toolFallback={AosToolPresentation}
-          initialMessages={threadWith({ ...subagent, status: "completed" }, [
-            childTurn([
-              { type: "text", text: "The **tiers** match the page." },
-            ]),
-          ])}
-        />
-      )
-
-      await user.click(
-        await screen.findByRole("button", { name: "Open session" })
-      )
-      const view = await screen.findByRole("dialog", {
-        name: "Check the pricing tiers",
-      })
-      expect(within(view).getByText("tiers")).toBeVisible()
-      expect(within(view).queryByRole("textbox")).toBeNull()
-      expect(within(view).queryByRole("button", { name: "Edit" })).toBeNull()
-      expect(within(view).queryByRole("button", { name: "Refresh" })).toBeNull()
     })
   })
 })

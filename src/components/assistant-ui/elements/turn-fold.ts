@@ -28,6 +28,7 @@ export type TurnPart = {
   readonly toolName?: string
   readonly toolUI?: unknown
   readonly artifact?: unknown
+  readonly approval?: unknown
 }
 
 /** The tool-UI registry `MessagePrimitive.GroupedParts` hands to a `groupBy`. */
@@ -35,7 +36,11 @@ export type TurnGroupContext = {
   readonly toolUIs?: Readonly<Record<string, unknown>>
 }
 
-export type TurnGroupKey = "group-working" | "group-reasoning" | "group-tool"
+export type TurnGroupKey =
+  | "group-working"
+  | "group-reasoning"
+  | "group-tool"
+  | "group-subagents"
 
 export type TurnLayout = {
   /** A live turn folds nothing, so only a settled turn has a fold. */
@@ -53,6 +58,7 @@ const WORKING_REASONING: readonly TurnGroupKey[] = [
 const WORKING_TOOL: readonly TurnGroupKey[] = ["group-working", "group-tool"]
 const REASONING: readonly TurnGroupKey[] = ["group-reasoning"]
 const TOOL: readonly TurnGroupKey[] = ["group-tool"]
+const SUBAGENTS: readonly TurnGroupKey[] = ["group-subagents"]
 
 /**
  * `MessagePrimitive.GroupedParts` memoizes its tree on this fingerprint instead
@@ -112,6 +118,20 @@ export function isFirstClassPart(
 ): boolean {
   if (part.type === "tool-call") return !isOrdinaryToolPart(part, context)
   return FIRST_CLASS_TYPES.has(part.type)
+}
+
+/**
+ * A first-class call that reads as a subagent row: a child's own entry, or a
+ * delegation's card when it settled without spawning one. A delegation still
+ * asking a permission reads as that request instead.
+ */
+export function isSubagentPart(part: TurnPart): boolean {
+  if (part.type !== "tool-call" || part.approval !== undefined) return false
+  if (part.toolUI !== undefined) return false
+  return (
+    readAosToolArtifact(part.artifact)?.subagent !== undefined ||
+    part.toolName === "delegate_subagent"
+  )
 }
 
 /** Parts a settled fold absorbs: mid-turn prose, reasoning, ordinary tools. */
@@ -186,6 +206,7 @@ export function isFoldedAt(layout: TurnLayout, index: number | undefined) {
  * place, so the order stays chronological:
  *
  * - Nothing folds while the turn runs.
+ * - Consecutive subagent rows form one `group-subagents`, outside the fold.
  * - A first-class part or the final answer splits the fold into adjacent
  *   `group-working` runs; only the run that opens the turn's work reports the
  *   turn's duration, and a later run names what it ran.
@@ -199,7 +220,8 @@ export function createTurnGroupBy(
 ) {
   const positions = new Map(parts.map((part, index) => [part, index]))
   const groupBy = (part: TurnPart, context?: TurnGroupContext) => {
-    if (isFirstClassPart(part, context)) return OUTSIDE
+    if (isFirstClassPart(part, context))
+      return isSubagentPart(part) ? SUBAGENTS : OUTSIDE
     const folded = isFoldedAt(layout, positions.get(part))
     switch (part.type) {
       case "reasoning":

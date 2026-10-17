@@ -22,6 +22,7 @@ import {
   useRememberedDisclosure,
 } from "@/components/assistant-ui/elements/disclosure-memory"
 import { ToolRunGroup } from "@/components/assistant-ui/elements/message-tool-experience"
+import { SubagentGroup } from "@/components/tool-ui/subagent-group"
 import {
   ReasoningContent,
   ReasoningRoot,
@@ -2143,6 +2144,13 @@ const AssistantMessage: FC = () => {
                 case "group-tool":
                   return (
                     <ToolRunGroup
+                      renderTool={ToolFallbackComponent}
+                      indices={part.indices}
+                    />
+                  )
+                case "group-subagents":
+                  return (
+                    <SubagentGroup
                       renderTool={ToolFallbackComponent}
                       indices={part.indices}
                     />
