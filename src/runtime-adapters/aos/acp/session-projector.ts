@@ -548,8 +548,9 @@ const isPlaced = (state: ProjectorState, child: ChildSession) =>
  * Gives the child its entry. One its spawning call names reads in that call's
  * turn, right after the call and the siblings placed before it, so a batch
  * reads in announcement order, and the call counts the children it spawned;
- * until the call appears, the child waits for it. A child no call names
- * reads in the turn it was announced beside.
+ * until the call appears, the child waits for it. The entry starts when its
+ * call did, the one start a child's work has, since its own reports carry
+ * none. A child no call names reads in the turn it was announced beside.
  */
 function placeChild(
   state: ProjectorState,
@@ -569,15 +570,24 @@ function placeChild(
   const entryId = childCallId(child)
   return withMessages(
     state,
-    withMessage(state.messages, owner.id, owner.role, (message) =>
-      mapCalls(
-        insertToolCallAfter(message, after, { toolCallId: entryId, ...ENTRY }),
+    withMessage(state.messages, owner.id, owner.role, (message) => {
+      const spawn = message.parts.find(
+        (part) => part.source === "tool" && part.call.toolCallId === spawnId
+      )
+      const startedAt = spawn?.source === "tool" ? spawn.call.startedAt : undefined
+      return mapCalls(
+        insertToolCallAfter(
+          message,
+          after,
+          { toolCallId: entryId, ...ENTRY },
+          { startedAt }
+        ),
         (call) =>
           call.toolCallId === spawnId
             ? { ...call, delegated: siblings.length + 1 }
             : call
       )
-    )
+    })
   )
 }
 

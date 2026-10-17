@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -44,6 +45,8 @@ import {
   type ToolUiLocale,
 } from "./index"
 import { SubagentTranscript } from "./subagent-transcript"
+import { useFakeClock } from "../../../test/support/fake-clock"
+
 import { toolPart } from "./tool-part.test-helpers"
 
 afterEach(cleanup)
@@ -323,14 +326,31 @@ describe("subagents", () => {
   })
 
   it("shows a subagent as one row, whatever its tool is called", async () => {
+    const clock = useFakeClock()
     expect(isAosRichTool(subagentPart)).toBe(true)
     render(<AosToolPresentation {...subagentPart} />)
 
-    const goal = await screen.findByText("Check the pricing tiers")
+    const goal = screen.getByText("Check the pricing tiers")
     expect(goal).toHaveAttribute("title", "Check the pricing tiers")
     expect(screen.getByRole("status")).toHaveTextContent("Completed")
     expect(screen.getByText("1m 12s")).toBeVisible()
     expect(screen.queryByText("Model opus")).toBeNull()
+
+    // A child at work has no duration yet, so it ticks from its call's start.
+    cleanup()
+    render(
+      <AosToolPresentation
+        {...toolPart(
+          { toolName: "subagent", timing: { startedAt: Date.now() - 123_000 } },
+          {
+            subagent: { id: "child-2", goal: subagent.goal, status: "running" },
+          }
+        )}
+      />
+    )
+    expect(screen.getByText("2m 3s")).toBeVisible()
+    await act(() => clock.advance(1_000))
+    expect(screen.getByText("2m 4s")).toBeVisible()
   })
 
   // The summary used to be dropped on the way to the row.

@@ -1906,9 +1906,10 @@ describe("applyUpdate child Sessions", () => {
       (next, [update, meta]) => applyChildUpdate(next, childId, update, meta),
       state
     )
+  const SPAWN_START = "2026-10-17T09:00:00.000Z"
   const spawnCall = toolCall(
     { title: "delegate", name: "delegate_task", status: "in_progress" },
-    TOOL_META
+    { ...TOOL_META, startedAt: SPAWN_START }
   )
   const announced = fold([
     spawnCall,
@@ -1964,6 +1965,10 @@ describe("applyUpdate child Sessions", () => {
     expect(toThreadMessages(state)).toHaveLength(1)
     expect(callIds(state)).toEqual(["t1", ENTRY_ID])
     expect(aosOf(state)).toEqual({ delegated: 1 })
+    // The child's reports carry no start, so it works from its call's.
+    expect(toolPartOf(state, ENTRY_ID)?.timing).toEqual({
+      startedAt: Date.parse(SPAWN_START),
+    })
     expect(entryOf(state)).toEqual({
       id: CHILD_ID,
       childSessionId: CHILD_ID,
@@ -2153,6 +2158,7 @@ describe("applyUpdate child Sessions", () => {
     ])
     const card = toolPartOf(state, "aos-subagent-child-9")
     expect(card?.toolName).toBe("subagent")
+    expect(card?.timing).toBeUndefined()
     expect(readAosToolArtifact(card?.artifact)?.subagent).toMatchObject({
       id: "child-9",
       goal: "Orphan",
