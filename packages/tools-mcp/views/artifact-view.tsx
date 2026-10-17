@@ -244,6 +244,7 @@ function Preview({
           height={room.height}
           labels={labels}
           read={app.readServerResource}
+          openLink={app.openLink}
         />
       )
     case "text":

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { z } from "zod"
 
 import { AGENT_HTML_DOMAINS } from "../../../../shared/presentation/views"
 import type { ViewLabels } from "../locale"
@@ -48,20 +49,110 @@ const ZOOM_SCRIPT = `addEventListener("wheel", (event) => {
   root.style.zoom = String(Math.min(Math.max(zoom, 1), ${MAX_ZOOM}))
 }, { passive: false })`
 
+/** The message the file's frame sends the view for a link the file opens. */
+export const AGENT_LINK = "aos/openLink"
+
+/** What the stand-ins replace and reach in the file's window. */
+export type AgentWindow = Pick<
+  Window,
+  "localStorage" | "sessionStorage" | "addEventListener" | "open"
+> & { parent: Pick<Window, "postMessage"> }
+
+/**
+ * Stands in for what the file's opaque origin takes from it. Web storage
+ * lives in memory for the life of the preview. A click on an https link the
+ * page left to the browser, and `window.open` with an https address, go up to
+ * the view as a `linkType` message; any other address stays the page's own.
+ * The file's frame runs it from its source, so it reaches nothing outside
+ * itself.
+ */
+export function installStandIns(page: AgentWindow, linkType: string) {
+  // As the standard does, it keeps every key and value as a string.
+  const memory = () => {
+    const items = new Map<string, string>()
+    return {
+      get length() {
+        return items.size
+      },
+      key: (index: number) => [...items.keys()][index] ?? null,
+      getItem: (key: string) => items.get(String(key)) ?? null,
+      setItem: (key: string, value: string) => {
+        items.set(String(key), String(value))
+      },
+      removeItem: (key: string) => {
+        items.delete(String(key))
+      },
+      clear: () => {
+        items.clear()
+      },
+    }
+  }
+  Object.defineProperties(page, {
+    localStorage: { value: memory() },
+    sessionStorage: { value: memory() },
+  })
+  const relay = (address: unknown) => {
+    let url: URL
+    try {
+      url = new URL(String(address))
+    } catch {
+      return false
+    }
+    if (url.protocol !== "https:") return false
+    page.parent.postMessage({ type: linkType, url: url.href }, "*")
+    return true
+  }
+  page.addEventListener("click", (event) => {
+    const link =
+      event.target instanceof Element ? event.target.closest("a[href]") : null
+    if (link && !event.defaultPrevented && relay(link.getAttribute("href")))
+      event.preventDefault()
+  })
+  page.open = (address) => {
+    relay(address)
+    return null
+  }
+}
+
+/** The stand-ins as the file's frame runs them, on its own window. */
+const STAND_INS_SCRIPT = `(${installStandIns.toString()})(window, ${JSON.stringify(AGENT_LINK)})`
+
+const agentLinkSchema = z.object({
+  type: z.literal(AGENT_LINK),
+  url: z.url({ protocol: /^https$/u }),
+})
+
+/**
+ * The https address a message from the file's own frame asks the view to
+ * open; `undefined` for a message from anywhere else, of any other shape, or
+ * for any other scheme.
+ */
+export function agentLink(
+  { source, data }: { source: MessageEventSource | null; data: unknown },
+  frame: MessageEventSource | null | undefined
+) {
+  return source !== null && source === frame
+    ? agentLinkSchema.safeParse(data).data?.url
+    : undefined
+}
+
 /**
  * The file's HTML with the policy as the first child of its head, so it
- * governs every script the file holds, and the zoom script after it. The
- * page's `injectHtmlCsp` does the same for a view; the view cannot import
- * the page's code.
+ * governs every script the file holds, and the zoom script and the stand-ins
+ * after it, so they run before the file's own. The page's `injectHtmlCsp`
+ * does the same for a view; the view cannot import the page's code.
  */
 function withPolicy(html: string) {
   const document = new DOMParser().parseFromString(html, "text/html")
   const meta = document.createElement("meta")
   meta.httpEquiv = "Content-Security-Policy"
   meta.content = AGENT_HTML_CSP
-  const script = document.createElement("script")
-  script.textContent = ZOOM_SCRIPT
-  document.head.prepend(meta, script)
+  const scripts = [ZOOM_SCRIPT, STAND_INS_SCRIPT].map((source) => {
+    const script = document.createElement("script")
+    script.textContent = source
+    return script
+  })
+  document.head.prepend(meta, ...scripts)
   return `<!doctype html>${document.documentElement.outerHTML}`
 }
 
@@ -69,20 +160,32 @@ function withPolicy(html: string) {
  * An HTML file, run with its scripts in a frame of its own, beside its source
  * highlighted as HTML with a Copy of its own, either `height` pixels tall. The tabs between them sit
  * among the view's controls; the arrow keys, Home, and End move between them.
+ * A link the file opens goes to `openLink`.
  */
 export function HtmlPreview({
   text,
   height,
   labels,
   read,
+  openLink,
 }: {
   text: string
   height: number
   labels: ViewLabels["artifact"]
   read: ViewApp["readServerResource"]
+  openLink: ViewApp["openLink"]
 }) {
   const html = useMemo(() => withPolicy(text), [text])
   const [tab, setTab] = useState<(typeof TABS)[number]>("preview")
+  const frame = useRef<HTMLIFrameElement>(null)
+  useEffect(() => {
+    const relay = (event: MessageEvent) => {
+      const url = agentLink(event, frame.current?.contentWindow)
+      if (url !== undefined) void openLink({ url }).catch(() => undefined)
+    }
+    window.addEventListener("message", relay)
+    return () => window.removeEventListener("message", relay)
+  }, [openLink])
   return (
     <div className="flex flex-col" style={{ height }}>
       <Tabs
@@ -97,6 +200,7 @@ export function HtmlPreview({
           // Scripts without the same origin: the file runs in an opaque
           // origin of its own, so it reaches neither this view nor the page.
           <iframe
+            ref={frame}
             sandbox="allow-scripts"
             srcDoc={html}
             title={labels.htmlTitle}

@@ -172,7 +172,7 @@ test("the artifact view shows preview.png alone in its message", async ({
   )
 })
 
-test("the artifact view runs test.html sandboxed, refusing its fetch and its navigation", async ({
+test("the artifact view runs test.html sandboxed with storage, opening its link in a new tab and refusing its fetch and its navigation", async ({
   page,
 }) => {
   await page.goto("/en")
@@ -191,9 +191,17 @@ test("the artifact view runs test.html sandboxed, refusing its fetch and its nav
     .click()
   const htmlView = panelView(page, "test.html")
   const htmlInner = htmlView.frameLocator('iframe[title="HTML preview"]')
+  // The file reads its storage before it says its scripts are on.
   await expect(htmlInner.getByText("scripts are on")).toBeVisible()
   await expect(htmlInner.getByText("fetch blocked")).toBeVisible()
   await expect(htmlInner.getByText("fetch allowed")).toBeHidden()
+  // Its https link opens in a new tab, kept off the network here.
+  await page
+    .context()
+    .route("https://example.invalid/**", (route) => route.fulfill())
+  const opened = page.waitForEvent("popup")
+  await htmlInner.getByRole("link", { name: "Open the report" }).click()
+  await expect(await opened).toHaveURL("https://example.invalid/report")
   // The file may try to take its frame to another page, by script or by a
   // refresh; the view's frame-src refuses the load, the page stays where it
   // was, and the Preview tab shows the file again.
