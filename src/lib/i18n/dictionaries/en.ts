@@ -165,6 +165,11 @@ export const en = {
       description: "Send a prompt in a new Session and stay here",
       hint: "<prompt>",
     },
+    btw: {
+      title: "Ask a side question",
+      description: "Ask about this Session without adding to it",
+      hint: "<question>",
+    },
     title: { description: "Rename this Session", hint: "<name>" },
     stop: {
       title: "Stop",
@@ -244,6 +249,25 @@ export const en = {
       backgroundTurnRefused: "The new Session could not start: {reason}",
       voiceUnavailable: "Voice input is not available here.",
     },
+  },
+  sideQuestions: {
+    one: "Side question",
+    several: "{count} side questions",
+    notSaved: "not saved to this Session",
+    asking: "Answering from this conversation so far…",
+    needsInput: "It needs your input. Continue in a fork to answer.",
+    failed: "This question could not be answered.",
+    status: {
+      asking: "Answering",
+      answered: "Answered",
+      "needs-input": "Needs your input",
+      failed: "Failed",
+    },
+    copy: "Copy",
+    copied: "Copied",
+    continue: "Continue in a fork",
+    dismiss: "Dismiss",
+    dismissAll: "Dismiss all",
   },
   appearance: {
     label: "Appearance",

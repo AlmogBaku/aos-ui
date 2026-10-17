@@ -14,6 +14,7 @@ import {
   type VoiceMediaState,
 } from "@/components/assistant-ui/voice/voice-media"
 import { awaitsApproval } from "@/components/runtime-interactions/pending-interaction-context"
+import type { SideQuestionStore } from "@/components/runtime-interactions/side-question-store"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { sameData } from "@/lib/utils"
 import { childSessionExtras } from "@/runtime-adapters/child-sessions"
@@ -98,18 +99,22 @@ export function useWorkspaceCommands({
   navigation,
   surface,
   reportActionError,
+  sideQuestions,
 }: {
   bundle: HarnessRuntime
   dictionary: Dictionary
   navigation: WorkspaceCommandNavigation
   surface: WorkspaceSurfaceRequests
   reportActionError: (error: unknown) => void
+  /** The tab's side-question tray, which `/btw` asks into. */
+  sideQuestions?: SideQuestionStore
 }): readonly WorkspaceCommand[] | undefined {
   const {
     assistantRuntime: runtime,
     workspace,
     interactions,
     forkSession: forkSessionInBackground,
+    sideQuestion,
     startTurn,
     messageRewind,
     media,
@@ -168,6 +173,15 @@ export function useWorkspaceCommands({
       forkSession: forkSessionInBackground ? forkSession : undefined,
       forkSessionInBackground,
       startTurn,
+      askSideQuestion:
+        sideQuestion && sideQuestions
+          ? (sessionId, question) =>
+              sideQuestions.ask(sideQuestion(sessionId, question), {
+                agentId: selectedAgentId,
+                sessionId,
+                question,
+              })
+          : undefined,
       reportActionError,
       cancelRun: () => runtime.thread.cancelRun(),
       childrenRunning: (facts & CHILDREN_RUNNING) !== 0,
@@ -221,6 +235,8 @@ export function useWorkspaceCommands({
     selectedAgentId,
     selectedAgentIsDraft,
     sessionActions?.rename,
+    sideQuestion,
+    sideQuestions,
     startTurn,
     surface,
     visibleThreadId,

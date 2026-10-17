@@ -22,6 +22,7 @@ import {
   useContext,
   useMemo,
   useState,
+  useSyncExternalStore,
 } from "react"
 
 import {
@@ -76,6 +77,11 @@ import { cn } from "@/lib/utils"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
 import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
 import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
+import {
+  SideQuestionContext,
+  SideQuestionStore,
+} from "@/components/runtime-interactions/side-question-store"
+import { useStableHandlers } from "@/hooks/use-stable-handlers"
 
 type AosUiWorkspaceProps = {
   runtime: HarnessRuntime
@@ -597,11 +603,28 @@ function WorkspaceContent({
     (reason: unknown) => setActionError(toError(reason)),
     [setActionError]
   )
+  // The tab's side questions, which `/btw` asks into and the tray shows.
+  const [sideQuestionStore] = useState(() => new SideQuestionStore())
+  const quietSessionIds = useSyncExternalStore(
+    sideQuestionStore.subscribe,
+    sideQuestionStore.quietSessionIds,
+    sideQuestionStore.quietSessionIds
+  )
+  const sideQuestionActions = useStableHandlers({
+    openSession: (sessionId: string, agentId: string) =>
+      openSession(sessionId, agentId),
+    reportError: reportActionError,
+  })
+  const sideQuestions = useMemo(
+    () => ({ store: sideQuestionStore, dictionary, ...sideQuestionActions }),
+    [dictionary, sideQuestionActions, sideQuestionStore]
+  )
   const commands = useWorkspaceCommands({
     bundle,
     dictionary,
     surface,
     reportActionError,
+    sideQuestions: sideQuestionStore,
     navigation: {
       selectedAgentId,
       selectedAgentIsDraft,
@@ -647,6 +670,7 @@ function WorkspaceContent({
         ? { agentId: selectedAgentId, sessionId: visibleThreadId }
         : null,
     conversationExposed: !managementOpen && !conversationObscured,
+    quietSessionIds,
     readNow,
     onOpenTarget: async (agentId, sessionId) => {
       // A notification opens its Session in view, never behind a drawer.
@@ -754,28 +778,30 @@ function WorkspaceContent({
               </div>
             ) : selectedAgent && conversationThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
-                {/* A reset key, not a React key: a key would remount the
+                <SideQuestionContext.Provider value={sideQuestions}>
+                  {/* A reset key, not a React key: a key would remount the
                     Thread on every switch and lose its composer state. */}
-                <LazyVisualBoundary
-                  resetKey={conversationThreadId}
-                  fallback={
-                    <p
-                      className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
-                      role="alert"
-                    >
-                      {workspaceCopy[locale].sessionUnavailable}
-                    </p>
-                  }
-                >
-                  <Thread
-                    autoFocus={false}
-                    direction={getLocaleDirection(locale)}
-                    labels={threadLabels[locale]}
-                    composerFeatures={threadComposerFeatures}
-                    messageRewind={bundle.messageRewind}
-                    components={activeThreadComponents}
-                  />
-                </LazyVisualBoundary>
+                  <LazyVisualBoundary
+                    resetKey={conversationThreadId}
+                    fallback={
+                      <p
+                        className="grid h-full place-items-center p-4 text-center text-sm text-muted-foreground"
+                        role="alert"
+                      >
+                        {workspaceCopy[locale].sessionUnavailable}
+                      </p>
+                    }
+                  >
+                    <Thread
+                      autoFocus={false}
+                      direction={getLocaleDirection(locale)}
+                      labels={threadLabels[locale]}
+                      composerFeatures={threadComposerFeatures}
+                      messageRewind={bundle.messageRewind}
+                      components={activeThreadComponents}
+                    />
+                  </LazyVisualBoundary>
+                </SideQuestionContext.Provider>
               </WorkspaceThreadChromeContext.Provider>
             ) : (
               <NoAgentEmpty

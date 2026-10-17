@@ -195,6 +195,23 @@ describe("buildInbox", () => {
     })
   })
 
+  it("lists no row for this tab's side-question forks", () => {
+    const inbox = buildInbox({
+      sessions: [
+        session("invoices", "ledger", "idle", "2026-09-05T10:00:00Z"),
+        session("invoices-fork", "ledger", "idle", "2026-09-05T11:00:00Z"),
+      ],
+      records: [],
+      ready: [],
+      agents,
+      titles,
+      quietSessionIds: new Set(["invoices-fork"]),
+    })
+    expect(summary(inbox.unread)).toEqual([
+      "invoices unread 2026-09-05T10:00:00Z",
+    ])
+  })
+
   it("draws a creator Session as the rail's draft, and names each row", () => {
     const inbox = buildInbox({
       sessions: [

@@ -77,12 +77,15 @@ export function buildInbox({
   ready,
   agents,
   titles,
+  quietSessionIds,
 }: {
   sessions: readonly SessionMetadata[]
   records: readonly ActivityRecord[]
   ready: readonly ReadyAgent[]
   agents: readonly InboxAgent[]
   titles: ReadonlyMap<string, string>
+  /** This tab's side-question forks, which their tray answers instead. */
+  quietSessionIds?: ReadonlySet<string>
 }): Inbox {
   const newest = new Map<string, ActivityRecord>()
   for (const record of records) {
@@ -92,7 +95,7 @@ export function buildInbox({
   }
   const rows = sessions.flatMap((session): InboxRow[] => {
     const agent = agents.find(({ id }) => id === session.agentId)
-    if (!agent) return []
+    if (!agent || quietSessionIds?.has(session.sessionId)) return []
     const record = newest.get(scope(session))
     const state =
       session.status === "waiting-for-input"
