@@ -366,14 +366,15 @@ export function patchToolCall(
 export function insertToolCallAfter(
   message: ProjectedMessage,
   after: ReadonlySet<string>,
-  patch: ToolCallPatch
+  patch: ToolCallPatch,
+  meta: ToolMetaPatch = {}
 ): ProjectedMessage {
   if (findCall([message], byId(patch.toolCallId)))
-    return patchToolCall(message, patch, {})
+    return patchToolCall(message, patch, meta)
   const at = message.parts.findLastIndex(
     (part) => part.source === "tool" && after.has(part.call.toolCallId)
   )
-  const call = mergeCall({ toolCallId: patch.toolCallId }, patch, {})
+  const call = mergeCall({ toolCallId: patch.toolCallId }, patch, meta)
   const { parts } = message
   return {
     ...message,

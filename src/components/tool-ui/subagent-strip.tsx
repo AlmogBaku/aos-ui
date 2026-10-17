@@ -105,6 +105,11 @@ export function SubagentStrip() {
           aria-hidden="true"
           className="size-3.5 shrink-0 motion-safe:animate-spin"
         />
+        {/* Alone above the composer, the line names what it counts. */}
+        <span className="font-medium whitespace-nowrap text-foreground">
+          {labels.subagentGroup.title(entries.length)}
+        </span>
+        <span aria-hidden="true">·</span>
         <SubagentCounts
           counts={subagentCounts(
             entries.map(({ status }) => status),

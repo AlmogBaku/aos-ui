@@ -55,6 +55,7 @@ it("counts the running subagents of every turn, and leaves once the last one fin
     />
   )
   const strip = screen.getByRole("region", { name: "Running subagents" })
+  expect(within(strip).getByText("3 subagents")).toBeInTheDocument()
   expect(within(strip).getByText("2 running")).toBeInTheDocument()
   expect(within(strip).getByText("1 done")).toBeInTheDocument()
 

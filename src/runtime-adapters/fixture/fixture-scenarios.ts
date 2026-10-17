@@ -257,14 +257,19 @@ const childCall = (
 ) =>
   toolPart(toolName, {}, result, { toolCallId: `child-${toolName}`, ...extra })
 
-/** A child Session's own entry after the call that spawned it. */
+/**
+ * A child Session's own entry after the call that spawned it, started when
+ * that call did.
+ */
 function subagentEntry(
   sessionId: string,
   subagent: Omit<AosSubagent, "id" | "childSessionId">,
-  messages: ThreadMessage[]
+  messages: ThreadMessage[],
+  startedAt?: number
 ) {
   return toolPart("subagent", {}, undefined, {
     toolCallId: `aos-subagent-${sessionId}`,
+    ...(startedAt === undefined ? {} : { timing: { startedAt } }),
     artifact: withAosToolArtifact(undefined, {
       subagent: {
         id: sessionId,
@@ -279,10 +284,18 @@ function subagentEntry(
 }
 
 /** The call that spawned `count` children, each read on its own entry. */
-const delegation = (task: string, count: number, result?: unknown) =>
+const delegation = (
+  task: string,
+  count: number,
+  result?: unknown,
+  startedAt?: number
+) =>
   toolPart("delegate_subagent", { task }, result, {
     toolCallId: `fixture-delegate-${count}`,
     artifact: withAosToolArtifact(undefined, { delegated: count }),
+    ...(startedAt === undefined
+      ? {}
+      : { timing: { startedAt, completedAt: startedAt + 1_000 } }),
   })
 
 const BOARD_PREP = {
@@ -294,14 +307,24 @@ const BOARD_PREP = {
   interviews: "Summarize last quarter's customer interviews into five themes",
 }
 
-/** Four children of one delegation, one in each state a child can be in. */
-function subagentBatchParts(): AssistantPart[] {
+/**
+ * Four children of one delegation, one in each state a child can be in. The
+ * batch started a few minutes before `now`, so the children still at work
+ * tick from that start.
+ */
+function subagentBatchParts(now: number): AssistantPart[] {
+  const startedAt = now - 280_000
   return [
     {
       type: "text",
       text: "I've started four agents on the board-meeting prep.",
     },
-    delegation("Prepare the board meeting", 4, "Started 4 subagents."),
+    delegation(
+      "Prepare the board meeting",
+      4,
+      "Started 4 subagents.",
+      startedAt
+    ),
     subagentEntry(
       "fixture-pricing",
       {
@@ -319,7 +342,8 @@ function subagentBatchParts(): AssistantPart[] {
           type: "text",
           text: "All three raised entry prices 8–12%; only Contoso added a free tier.",
         },
-      ])
+      ]),
+      startedAt
     ),
     subagentEntry(
       "fixture-invoices",
@@ -333,7 +357,8 @@ function subagentBatchParts(): AssistantPart[] {
           { type: "text", text: "Invoices 1 to 20 match their orders." },
         ],
         { type: "running" }
-      )
+      ),
+      startedAt
     ),
     subagentEntry(
       "fixture-follow-ups",
@@ -355,7 +380,8 @@ function subagentBatchParts(): AssistantPart[] {
           }),
         ],
         { type: "requires-action", reason: "tool-calls" }
-      )
+      ),
+      startedAt
     ),
     subagentEntry(
       "fixture-interviews",
@@ -374,7 +400,8 @@ function subagentBatchParts(): AssistantPart[] {
             message: "interviews-q3.docx couldn't be opened: access denied.",
           },
         }
-      )
+      ),
+      startedAt
     ),
     {
       type: "text",
@@ -481,7 +508,10 @@ function noticeParts(): AssistantPart[] {
   ]
 }
 
-export function buildFixtureScenario(prompt: string): FixtureScenario {
+export function buildFixtureScenario(
+  prompt: string,
+  now = Date.now()
+): FixtureScenario {
   const input = prompt.toLocaleLowerCase("en")
 
   if (input.includes("notice") || input.includes("heartbeat")) {
@@ -795,7 +825,7 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
   }
 
   if (input.includes("subagent batch")) {
-    return { name: "subagent-batch", parts: subagentBatchParts() }
+    return { name: "subagent-batch", parts: subagentBatchParts(now) }
   }
 
   if (input.includes("live subagent")) {
