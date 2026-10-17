@@ -1053,12 +1053,15 @@ test("Gateway restores history, offers commands, streams one turn, stops, and re
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.fill("/")
   const commandMenu = page.getByRole("listbox")
-  // Every provider command, after the workspace's own local `/new`.
-  await expect(commandMenu.getByRole("option")).toHaveCount(
-    slashCommands.length + 1
+  const options = commandMenu.getByRole("option")
+  // The workspace's own commands lead, from `/new`; every provider command
+  // follows them.
+  await expect(options.first()).toHaveAccessibleName(/^\/new\b/)
+  await expect(options.filter({ hasText: /^\/command-\d+\b/ })).toHaveCount(
+    slashCommands.length
   )
-  await expect(commandMenu.getByRole("option").first()).toHaveAccessibleName(
-    /^\/new\b/
+  await expect(options.last()).toHaveAccessibleName(
+    new RegExp(`^/${slashCommands.at(-1)!.name}\\b`)
   )
   for (let index = 0; index < 15; index += 1) await input.press("ArrowDown")
   await expect
