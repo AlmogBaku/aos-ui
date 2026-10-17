@@ -202,6 +202,14 @@ describe("describeToolRun", () => {
     ).toBe("Loaded 1 skill, delegated 1 task, inspected once, and used 1 tool")
   })
 
+  it("counts every child a batch delegation spawned", () => {
+    const batch = {
+      toolName: "delegate_subagent",
+      artifact: withAosToolArtifact(undefined, { delegated: 4 }),
+    }
+    expect(describeToolRun([batch], en, "en")).toBe("Delegated 4 tasks")
+  })
+
   it("describes the same run in Hebrew", () => {
     expect(describeToolRun(tools(["read_file", "read_doc"]), he, "he")).toBe(
       "קרא 2 קבצים"

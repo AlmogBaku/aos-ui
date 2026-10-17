@@ -16,6 +16,7 @@ import {
   type ToolPresentationPart,
 } from "@/components/tool-ui/tool-call-presentation"
 import type { RichToolPart } from "@/components/tool-ui/types"
+import { readAosToolArtifact } from "@/lib/tool-artifact"
 
 /**
  * The part fields a fold decision reads. An Assistant UI `PartState` and an
@@ -243,6 +244,12 @@ export function turnOutcome(
   }
 }
 
+/** A delegation counts each child it spawned, and itself when it spawned none. */
+const runCount = (part: ToolPresentationPart, kind: ToolRunKind) =>
+  kind === "delegated"
+    ? (readAosToolArtifact(part.artifact)?.delegated ?? 1)
+    : 1
+
 function toolRunKind(part: ToolPresentationPart): ToolRunKind {
   const kind = TOOL_RUN_KINDS[toolActionKind(part)]
   return kind === "searchedCode" && WEB_SEARCH.test(part.toolName.toLowerCase())
@@ -262,7 +269,7 @@ export function describeToolRun(
   const counts = new Map<ToolRunKind, number>()
   for (const part of parts) {
     const kind = toolRunKind(part)
-    counts.set(kind, (counts.get(kind) ?? 0) + 1)
+    counts.set(kind, (counts.get(kind) ?? 0) + runCount(part, kind))
   }
   if (counts.size === 0) return ""
   const sentence = new Intl.ListFormat(locale, { type: "conjunction" }).format(

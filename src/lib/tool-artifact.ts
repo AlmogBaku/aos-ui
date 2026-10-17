@@ -73,6 +73,8 @@ const subagentApprovalSchema = z.object({
 const subagentSchema = z.object({
   id: z.string(),
   goal: z.string().optional(),
+  /** What the child was asked to do, where its runtime describes it. */
+  brief: z.string().optional(),
   model: z.string().optional(),
   depth: z.number().optional(),
   status: z.string().optional(),
@@ -103,6 +105,8 @@ const toolArtifactSchema = z.object({
   diffs: z.array(diffSchema).optional(),
   terminals: z.array(terminalSchema).optional(),
   subagent: subagentSchema.optional(),
+  /** How many child Sessions this call spawned, each shown after it. */
+  delegated: z.number().optional(),
   app: mcpAppSchema.optional(),
 })
 

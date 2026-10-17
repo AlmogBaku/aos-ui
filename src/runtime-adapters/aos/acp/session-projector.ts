@@ -38,6 +38,7 @@ import {
   appendToolContent,
   completeTiming,
   countChunk,
+  insertToolCallAfter,
   isContentBlock,
   isRecord,
   isToolCallContent,
@@ -415,9 +416,9 @@ function toolMetaPatch(aos: ToolMeta | undefined): ToolMetaPatch {
 
 const SUBAGENT_CALL_PREFIX = "aos-subagent-"
 
-/** The call a child Session's card sits on: its spawning call, or its own. */
+/** The entry a child Session reads on, one per child, after its spawning call. */
 const childCallId = (child: ChildSession) =>
-  child.toolCallId ?? `${SUBAGENT_CALL_PREFIX}${child.sessionId}`
+  `${SUBAGENT_CALL_PREFIX}${child.sessionId}`
 
 /** ACP's state snapshot as the child's progress; an unknown state has none. */
 function childStatusOf(state: UpdatePayload): ChildStatus | undefined {
@@ -537,26 +538,67 @@ function withoutKey<T extends object>(value: T, key: keyof T): T {
   return copy
 }
 
+const ENTRY = { name: "subagent", status: "in_progress" } as const
+
+/** Whether the child already has its entry in the transcript. */
+const isPlaced = (state: ProjectorState, child: ChildSession) =>
+  toolCallOwner(state.messages, childCallId(child)) !== undefined
+
 /**
- * A child no call names gets one of its own, in the turn it was announced
- * beside, so its card still reads under a call rather than as the turn's own.
+ * Gives the child its entry. One its spawning call names reads in that call's
+ * turn, right after the call and the siblings placed before it, so a batch
+ * reads in announcement order, and the call counts the children it spawned;
+ * until the call appears, the child waits for it. A child no call names
+ * reads in the turn it was announced beside.
  */
-function placeChild(state: ProjectorState, child: ChildSession) {
-  if (child.toolCallId !== undefined) return state
+function placeChild(
+  state: ProjectorState,
+  child: ChildSession
+): ProjectorState {
+  const spawnId = child.toolCallId
+  if (spawnId === undefined) return placeUnnamed(state, child)
+  const owner = toolCallOwner(state.messages, spawnId)
+  if (!owner) return state
+  const siblings = [...(state.children?.values() ?? [])].filter(
+    (sibling) =>
+      sibling.toolCallId === spawnId &&
+      sibling.sessionId !== child.sessionId &&
+      isPlaced(state, sibling)
+  )
+  const after = new Set([spawnId, ...siblings.map(childCallId)])
+  const entryId = childCallId(child)
+  return withMessages(
+    state,
+    withMessage(state.messages, owner.id, owner.role, (message) =>
+      mapCalls(
+        insertToolCallAfter(message, after, { toolCallId: entryId, ...ENTRY }),
+        (call) =>
+          call.toolCallId === spawnId
+            ? { ...call, delegated: siblings.length + 1 }
+            : call
+      )
+    )
+  )
+}
+
+/** Re-reads every child onto its entry, placing one that has none yet. */
+function restampChildren(state: ProjectorState): ProjectorState {
+  let next = state
+  for (const child of state.children?.values() ?? [])
+    next = stampChild(
+      isPlaced(next, child) ? next : placeChild(next, child),
+      child.sessionId
+    )
+  return next
+}
+
+function placeUnnamed(state: ProjectorState, child: ChildSession) {
   const host =
     activeAssistantId(state) ??
     latestAssistantId(state.messages) ??
     requestHostId(state.execution.turnId)
   return onMessage(state, host, "assistant", (message) =>
-    patchToolCall(
-      message,
-      {
-        toolCallId: childCallId(child),
-        name: "subagent",
-        status: "in_progress",
-      },
-      {}
-    )
+    patchToolCall(message, { toolCallId: childCallId(child), ...ENTRY }, {})
   )
 }
 
@@ -573,6 +615,7 @@ function childView(child: ChildSession): ProjectedChild {
   const cached = childViews.get(child)
   if (cached) return cached
   const goal = child.title ?? child.description
+  const brief = child.description
   // A request no turn of the child's transcript can hold reads on its card.
   const approvals = unplacedApprovals(child.transcript).map(cardApproval)
   const subagent: AosSubagent = {
@@ -581,6 +624,7 @@ function childView(child: ChildSession): ProjectedChild {
     depth: child.depth,
     cancellable: child.cancellable,
     ...(goal === undefined ? {} : { goal }),
+    ...(brief === undefined ? {} : { brief }),
     ...(child.status === undefined ? {} : { status: child.status }),
     ...(child.tokens === undefined ? {} : { tokens: child.tokens }),
     ...(child.model === undefined ? {} : { model: child.model }),
@@ -622,15 +666,18 @@ function stampChild(state: ProjectorState, sessionId: string): ProjectorState {
   )
 }
 
-/** The children whose spawning call this is, now that it is projected. */
+/**
+ * Places the children whose spawning call this is, now that it is projected;
+ * one already placed stays where it is.
+ */
 function stampChildrenOf(
   state: ProjectorState,
   toolCallId: string
 ): ProjectorState {
   let next = state
   for (const child of state.children?.values() ?? [])
-    if (childCallId(child) === toolCallId)
-      next = stampChild(next, child.sessionId)
+    if (child.toolCallId === toolCallId && !isPlaced(next, child))
+      next = stampChild(placeChild(next, child), child.sessionId)
   return next
 }
 
@@ -1587,7 +1634,9 @@ export function clearTranscript(
  * Puts an older page's turns ahead of the transcript, with the child Sessions
  * the page announced. A turn that landed between two reads can sit on both
  * pages, so a turn the thread already holds keeps its current copy and the
- * page's is skipped, as does a child it already knows.
+ * page's is skipped, as does a child it already knows. Every child then reads
+ * on its entry: one whose spawning call came with the page, or whose call sits
+ * in a turn the thread kept, gets the entry it had none of.
  */
 export function prependMessages(
   state: ProjectorState,
@@ -1601,10 +1650,7 @@ export function prependMessages(
   if (unseen.length === 0 && adopted.length === 0) return state
   const prepended = withMessages(state, [...unseen, ...state.messages])
   return adoptOrphans(
-    adopted.reduce<ProjectorState>(
-      (next, child) => stampChild(withChild(next, child), child.sessionId),
-      prepended
-    )
+    restampChildren(adopted.reduce<ProjectorState>(withChild, prepended))
   )
 }
 

@@ -15,7 +15,16 @@ import type { RichToolFallbackComponent, RichToolPart } from "./types"
 
 function isRegisteredRichTool(part: RichToolPart) {
   if (part.approval !== undefined) return true
-  if (readAosToolArtifact(part.artifact)?.subagent) return true
+  const artifact = readAosToolArtifact(part.artifact)
+  if (artifact?.subagent) return true
+  // The delegating call is an ordinary row while it runs and once it spawned
+  // children, whose own entries follow it; its payload card shows only for a
+  // delegation that settled without one.
+  if (
+    part.toolName === "delegate_subagent" &&
+    (part.result === undefined || artifact?.delegated)
+  )
+    return false
   const registration = richToolRegistry[part.toolName]
   return registration?.validate(part).valid === true
 }

@@ -290,6 +290,24 @@ describe("subagents", () => {
     { kind: "other", subagent }
   )
 
+  const delegation = { toolName: "delegate_subagent", args: { task: "Price" } }
+  const settled = { ...delegation, result: { status: "completed" } }
+  it.each([
+    ["while it runs", false, toolPart(delegation)],
+    ["once it spawned children", false, toolPart(settled, { delegated: 2 })],
+    ["when it settled with none", true, toolPart(settled)],
+    [
+      "while it asks a permission",
+      true,
+      toolPart({
+        ...delegation,
+        approval: { id: "ask", prompt: "Delegate the pricing research?" },
+      }),
+    ],
+  ])("reads the delegating call %s as rich: %s", (_case, rich, part) => {
+    expect(isAosRichTool(part)).toBe(rich)
+  })
+
   it("shows a subagent as activity, whatever its tool is called", async () => {
     expect(isAosRichTool(subagentPart)).toBe(true)
     render(<AosToolPresentation {...subagentPart} />)
