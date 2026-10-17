@@ -4,6 +4,10 @@
 # authentication, so this wiring is its guard; test/containers/compose.test.ts
 # checks it.
 #
+# Each lane's MCP App sandbox address, a name or a port of its own, reaches the
+# aos-ui server whole, /api/v1 included: the server answers it with the sandbox
+# page and its script alone, and the gateway never serves it.
+#
 # Each site binds loopback unless AOS_UI_CADDY_BIND says otherwise: a
 # host-network deployment ignores Compose `ports:`, so the default lives here.
 # There is no access log, because a file address carries its pass in the query.
@@ -16,6 +20,9 @@
 http://:18080 {
 	bind {$AOS_UI_CADDY_BIND:127.0.0.1}
 	route {
+		# The sandbox origin's host and port, exactly; never a foreign host.
+		@sandbox expression `"{$AOS_UI_MCP_APP_SANDBOX_ORIGIN}".endsWith("//" + {http.request.hostport})`
+		reverse_proxy @sandbox {$AOS_UI_WEB_UPSTREAM:web:4200}
 		# Only this lane's own names, so a rebound DNS name gets nothing. The
 		# public host is unset by default, leaving loopback only. Two `not`
 		# lines, so a public host that is itself a loopback name is no

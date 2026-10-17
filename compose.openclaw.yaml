@@ -4,7 +4,7 @@
 # the guest lane beside it.
 services:
   gateway:
-    image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.11.0@sha256:7c76a02df496ad3136fa64d9df0ac11b1f2020288a577b08f39743c4e769562e}
+    image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.12.0@sha256:80cb72d5ae67882bc168378c67baa51634f6f595423e0885cfd2ba86172bb28b}
     user: "${AOS_UI_HOST_UID:-1000}:${AOS_UI_HOST_GID:-1000}"
     environment:
       HARNESS_GW_CONFIG_FILE: /run/harness-gw/config.yaml
@@ -49,12 +49,15 @@ services:
     environment:
       AOS_UI_GUEST_WEB_HOST: 0.0.0.0
       AOS_UI_GUEST_WEB_PORT: "4201"
+      AOS_UI_GUEST_PUBLIC_ORIGIN: ${AOS_UI_GUEST_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001},http://127.0.0.1:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}}
+      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: &guest-sandbox-origin ${AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}}
     expose:
       - "4201"
 
   caddy:
     environment:
       AOS_UI_GUEST_PUBLIC_HOST: ${AOS_UI_GUEST_PUBLIC_HOST:-localhost}
+      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: *guest-sandbox-origin
     ports:
       - ${AOS_UI_GUEST_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}:18081
     configs:

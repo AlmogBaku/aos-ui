@@ -90,7 +90,7 @@ published on `127.0.0.1`, whatever the operator bind address.
 | `AOS_UI_GUEST_PUBLIC_HOST`    | unset                                | Extra `Host` name the guest lane answers.                                  |
 | `AOS_UI_TOOLS_MCP_PORT`       | `4110`                               | Loopback host port for the `tools-mcp` service.                            |
 | `AOS_UI_HOST_UID`/`_GID`      | `1000`                               | Numeric owner of the mounted secret files; the gateway runs as this user.  |
-| `HARNESS_GW_IMAGE`            | `ghcr.io/almogbaku/harness-gw:0.11.0@sha256:7c76a02df496ad3136fa64d9df0ac11b1f2020288a577b08f39743c4e769562e` | Gateway image a harness overlay runs.                                      |
+| `HARNESS_GW_IMAGE`            | `ghcr.io/almogbaku/harness-gw:0.12.0@sha256:80cb72d5ae67882bc168378c67baa51634f6f595423e0885cfd2ba86172bb28b` | Gateway image a harness overlay runs.                                      |
 | `HARNESS_GW_CONFIG_FILE`      | required by a harness overlay        | Host path of the private gateway configuration.                            |
 
 Each harness overlay also requires its secret-file variables, such as

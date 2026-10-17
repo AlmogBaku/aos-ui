@@ -1,9 +1,12 @@
 # The guest lane, beside the operator site in ../Caddyfile and under the same
-# rules: its own names only, /api/v1 to the gateway's guest listener, and
-# everything else to the aos-ui server's guest listener.
+# rules: its sandbox address whole to the aos-ui server's guest listener, its
+# own names only, /api/v1 to the gateway's guest listener, and everything else
+# to the aos-ui server's guest listener.
 http://:18081 {
 	bind {$AOS_UI_CADDY_BIND:127.0.0.1}
 	route {
+		@sandbox expression `"{$AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN}".endsWith("//" + {http.request.hostport})`
+		reverse_proxy @sandbox {$AOS_UI_WEB_GUEST_UPSTREAM:web:4201}
 		@foreign {
 			not host 127.0.0.1 localhost
 			not host {$AOS_UI_GUEST_PUBLIC_HOST:localhost}
