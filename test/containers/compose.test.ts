@@ -427,12 +427,39 @@ describe("container orchestration", () => {
       AOS_UI_GATEWAY_GUEST_UPSTREAM: "127.0.0.1:4101",
       AOS_UI_WEB_UPSTREAM: "127.0.0.1:4200",
       AOS_UI_WEB_GUEST_UPSTREAM: "127.0.0.1:4201",
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18080",
+      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18081",
     })
     expect(web!.environment).toMatchObject({
       AOS_UI_WEB_HOST: "127.0.0.1",
       AOS_UI_GUEST_WEB_HOST: "127.0.0.1",
+      AOS_UI_PUBLIC_ORIGIN: "http://127.0.0.1:18080,http://localhost:18080",
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18080",
+      AOS_UI_GUEST_PUBLIC_ORIGIN:
+        "http://127.0.0.1:18081,http://localhost:18081",
+      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18081",
     })
     expect(toolsMcp!.command?.join(" ")).toContain("--host 127.0.0.1")
+  })
+
+  it("keeps each lane's origins overridable under host networking", () => {
+    const lanes = {
+      AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.aos.example.test",
+      AOS_UI_GUEST_PUBLIC_ORIGIN: "https://guest.example.test",
+      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.guest.example.test",
+    }
+    const { caddy, web } = composeConfig(
+      ["compose.yaml", "compose.hermes.yaml", "deploy/compose.host.yaml"],
+      harnessEnvironment("hermes", lanes)
+    ).services
+
+    expect(web.environment).toMatchObject(lanes)
+    expect(caddy.environment).toMatchObject({
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN: lanes.AOS_UI_MCP_APP_SANDBOX_ORIGIN,
+      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN:
+        lanes.AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN,
+    })
   })
 
   it("moves bundled OpenCode onto host loopback with the host-network overlay", () => {
