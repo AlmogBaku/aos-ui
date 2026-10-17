@@ -227,17 +227,19 @@ export function ActivityTool({
               "line-clamp-2 ps-6.5 text-xs text-muted-foreground",
               failed && "text-destructive"
             )}
-            dir="auto"
           >
             {failed ? (
               <span aria-hidden="true">
                 {labels.activityStatuses.failed} ·{" "}
               </span>
             ) : null}
+            {/* The child's own words keep their direction in either locale. */}
             {active ? (
-              <ShimmerLabel aria-live="off">{line}</ShimmerLabel>
+              <ShimmerLabel aria-live="off">
+                <bdi>{line}</bdi>
+              </ShimmerLabel>
             ) : (
-              <span>{line}</span>
+              <bdi>{line}</bdi>
             )}
           </p>
         ) : null}

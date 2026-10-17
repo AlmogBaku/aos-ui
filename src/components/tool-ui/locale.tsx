@@ -192,6 +192,8 @@ export type ToolUiLocaleLabels = {
   subagentGroup: {
     title: (count: number) => string
     counts: Record<ToolUiActivityStatus, (count: number) => string>
+    /** Names the line above the composer while a subagent runs. */
+    running: string
   }
   generic: {
     malformed: (displayName: string) => string
@@ -382,6 +384,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
       failed: (count) => `${count} failed`,
       unknown: (count) => `${count} status unavailable`,
     },
+    running: "Running subagents",
   },
   generic: {
     malformed: (displayName) => `Could not safely render ${displayName}`,
@@ -608,6 +611,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       unknown: (count) =>
         count === 1 ? "1 שמצבו אינו זמין" : `${count} שמצבם אינו זמין`,
     },
+    running: "סוכני משנה בעבודה",
   },
   generic: {
     malformed: (displayName) => `לא ניתן להציג בבטחה: ${displayName}`,

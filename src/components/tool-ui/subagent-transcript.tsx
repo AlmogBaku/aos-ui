@@ -38,29 +38,15 @@ import {
   type ToolUiLocale,
   type ToolUiLocaleLabels,
 } from "./locale"
-import { isActiveStatus, subagentSpan, subagentStatus } from "./subagent-status"
+import {
+  findEntry,
+  isActiveStatus,
+  subagentSpan,
+  subagentStatus,
+  type ToolCallContent,
+} from "./subagent-status"
 import { formatToolDuration } from "./tool-call-presentation"
 import { useToolElapsedMs } from "./tool-row-meta"
-
-type ToolCallContent = Extract<
-  ThreadMessage["content"][number],
-  { type: "tool-call" }
->
-
-/** The call `toolCallId` names, wherever the thread's transcripts nest it. */
-function findEntry(
-  messages: readonly ThreadMessage[],
-  toolCallId: string
-): ToolCallContent | undefined {
-  for (const message of messages)
-    for (const part of message.content) {
-      if (part.type !== "tool-call") continue
-      if (part.toolCallId === toolCallId) return part
-      const nested = part.messages && findEntry(part.messages, toolCallId)
-      if (nested) return nested
-    }
-  return undefined
-}
 
 /** The entry's subagent facts, its payload, and how far it has got. */
 function entryFacts(entry: ToolCallContent, labels: ToolUiLocaleLabels) {
@@ -292,9 +278,9 @@ function TranscriptFacts({
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       <p className="flex min-w-0 flex-1 flex-wrap gap-x-3.5 gap-y-0.5">
         {facts.map((fact) => (
-          <bdi key={fact} className="tabular-nums" dir="auto">
+          <span key={fact} className="tabular-nums">
             {fact}
-          </bdi>
+          </span>
         ))}
       </p>
       {stop ? (
@@ -318,12 +304,11 @@ function Brief({ text }: { text: string }) {
     <div className="border-s-2 border-border ps-3 text-xs text-muted-foreground">
       <p
         className={folds && !expanded ? "line-clamp-2" : "whitespace-pre-wrap"}
-        dir="auto"
       >
         <span className="me-1.5 font-medium text-foreground">
           {labels.subagent.brief}
         </span>
-        {text}
+        <bdi>{text}</bdi>
       </p>
       {folds ? (
         <button

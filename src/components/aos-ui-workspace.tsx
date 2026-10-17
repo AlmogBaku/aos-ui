@@ -37,6 +37,7 @@ import {
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
+import { SubagentStrip } from "@/components/tool-ui/subagent-strip"
 import {
   SubagentTranscript,
   useSubagentTranscriptPip,
@@ -443,6 +444,19 @@ function SessionTodoDock() {
   )
 }
 
+/**
+ * What sits above the composer: the Session's todos, then its running
+ * subagents.
+ */
+function SessionComposerDocks() {
+  return (
+    <>
+      <SessionTodoDock />
+      <SubagentStrip />
+    </>
+  )
+}
+
 function SelectedAgentIdentity() {
   const chrome = useContext(WorkspaceThreadChromeContext)
   return <AgentIdentity agent={chrome?.selectedAgent ?? null} />
@@ -450,7 +464,7 @@ function SelectedAgentIdentity() {
 
 const threadComponents = {
   AssistantIdentity: SelectedAgentIdentity,
-  BeforeComposer: SessionTodoDock,
+  BeforeComposer: SessionComposerDocks,
   ToolFallback: AosToolPresentation,
 }
 

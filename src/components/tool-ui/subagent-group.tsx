@@ -72,9 +72,20 @@ export function SubagentCounts({
 }
 
 /** Subagent rows in one bordered list. */
-export function SubagentList({ children }: { children: ReactNode }) {
+export function SubagentList({
+  className,
+  children,
+}: {
+  className?: string
+  children: ReactNode
+}) {
   return (
-    <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+    <ul
+      className={cn(
+        "divide-y divide-border overflow-hidden rounded-xl border border-border bg-card",
+        className
+      )}
+    >
       {children}
     </ul>
   )

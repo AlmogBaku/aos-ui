@@ -1,4 +1,4 @@
-import type { ToolCallMessagePart } from "@assistant-ui/react"
+import type { ThreadMessage, ToolCallMessagePart } from "@assistant-ui/react"
 
 import type { AosSubagent } from "@/lib/tool-artifact"
 
@@ -125,4 +125,24 @@ export function longestSpan(spans: readonly Span[]): Span {
       longest === undefined || length(span) > length(longest) ? span : longest,
     undefined
   )
+}
+
+export type ToolCallContent = Extract<
+  ThreadMessage["content"][number],
+  { type: "tool-call" }
+>
+
+/** The call `toolCallId` names, wherever the thread's transcripts nest it. */
+export function findEntry(
+  messages: readonly ThreadMessage[],
+  toolCallId: string
+): ToolCallContent | undefined {
+  for (const message of messages)
+    for (const part of message.content) {
+      if (part.type !== "tool-call") continue
+      if (part.toolCallId === toolCallId) return part
+      const nested = part.messages && findEntry(part.messages, toolCallId)
+      if (nested) return nested
+    }
+  return undefined
 }
