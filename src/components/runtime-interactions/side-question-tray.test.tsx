@@ -2,6 +2,7 @@ import { act, cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { LocalThread } from "@/components/assistant-ui/elements/thread.aui.test-helpers"
 import { en } from "@/lib/i18n/dictionaries/en"
 import type { SideQuestionSnapshot } from "@/runtime-adapters/contracts"
 
@@ -38,17 +39,19 @@ function fakeQuestion() {
   }
 }
 
-/** One question asked about the Session the tray already shows. */
+/**
+ * One question asked about the Session the tray already shows, above a real
+ * composer, as the thread places it.
+ */
 function renderTray() {
   const question = fakeQuestion()
   const store = new SideQuestionStore()
   const openSession = vi.fn(async () => undefined)
-  render(
-    <SessionSideQuestions
-      workspace={{ store, dictionary: en, openSession, reportError: vi.fn() }}
-      sessionId="session-1"
-    />
+  const workspace = { store, dictionary: en, openSession, reportError: vi.fn() }
+  const Tray = () => (
+    <SessionSideQuestions workspace={workspace} sessionId="session-1" />
   )
+  render(<LocalThread initialMessages={[]} beforeComposer={Tray} />)
   act(() =>
     store.ask(question.handle, {
       agentId: "agent-1",
@@ -97,5 +100,7 @@ describe("side-question tray", () => {
     expect(question.handle.dismiss).toHaveBeenCalledOnce()
     expect(question.handle.keep).not.toHaveBeenCalled()
     expect(screen.queryByRole("region", { name: copy.one })).toBeNull()
+    // The last row gone, focus goes to the composer, never the page.
+    expect(screen.getByRole("textbox", { name: "Message input" })).toHaveFocus()
   })
 })

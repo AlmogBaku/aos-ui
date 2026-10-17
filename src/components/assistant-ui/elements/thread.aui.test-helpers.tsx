@@ -162,6 +162,7 @@ export function LocalThread({
   initialMessages = INITIAL_MESSAGES,
   toolFallback,
   composer,
+  beforeComposer,
   composerFeatures,
   enableMessageQueue = false,
   attachmentAdapter,
@@ -176,6 +177,7 @@ export function LocalThread({
   initialMessages?: readonly ThreadMessageLike[]
   toolFallback?: ThreadComponents["ToolFallback"]
   composer?: ThreadComponents["Composer"]
+  beforeComposer?: ThreadComponents["BeforeComposer"]
   composerFeatures?: ComposerFeatureViewModel
   enableMessageQueue?: boolean
   attachmentAdapter?: AttachmentAdapter
@@ -205,7 +207,11 @@ export function LocalThread({
           direction={direction}
           autoFocus={false}
           composerFeatures={composerFeatures}
-          components={{ ToolFallback: toolFallback, Composer: composer }}
+          components={{
+            ToolFallback: toolFallback,
+            Composer: composer,
+            BeforeComposer: beforeComposer,
+          }}
           messageRewind={messageRewind}
         />
       </ToolUiLocaleProvider>

@@ -4,6 +4,7 @@ import { useAuiState } from "@assistant-ui/react"
 import { AlertCircle, Check, CircleHelp, LoaderCircle, X } from "lucide-react"
 import {
   useCallback,
+  useRef,
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
@@ -32,13 +33,24 @@ const statusIcons = {
 } satisfies Record<SideQuestionSnapshot["state"], unknown>
 
 /** Escape closes what holds focus, and goes no further. */
-function onEscape(close: () => void) {
-  return (event: KeyboardEvent) => {
-    if (event.key !== "Escape") return
-    event.preventDefault()
-    event.stopPropagation()
-    close()
-  }
+function closeOnEscape(event: KeyboardEvent, close: () => void) {
+  if (event.key !== "Escape") return
+  event.preventDefault()
+  event.stopPropagation()
+  close()
+}
+
+/**
+ * Focuses the composer's message input, found the way its attachments find
+ * it: the composer shares the thread's viewport with the tray.
+ */
+function focusMessageInput(from: Element | null) {
+  from
+    ?.closest('[data-slot="aui_thread-viewport"]')
+    ?.querySelector<HTMLTextAreaElement>(
+      '[data-slot="aui_composer-shell"] textarea:not([aria-hidden=true])'
+    )
+    ?.focus({ preventScroll: true })
 }
 
 function SideQuestionRow({
@@ -93,7 +105,7 @@ function SideQuestionRow({
   return (
     <li
       className="flex gap-2.5 px-3.5 pt-2.5 pb-3 not-first:border-t not-first:border-border/60"
-      onKeyDown={onEscape(onDismiss)}
+      onKeyDown={(event) => closeOnEscape(event, onDismiss)}
     >
       <Icon
         aria-hidden="true"
@@ -188,6 +200,8 @@ export function SessionSideQuestions({
     store.entries,
     store.entries
   )
+  const trayRef = useRef<HTMLElement>(null)
+  const headerDismissRef = useRef<HTMLButtonElement>(null)
   const shown = entries.filter((entry) => entry.sessionId === sessionId)
   if (shown.length === 0) return null
   const copy = dictionary.sideQuestions
@@ -195,23 +209,30 @@ export function SessionSideQuestions({
   const title = several
     ? copy.several.replace("{count}", String(shown.length))
     : copy.one
-  const dismiss = (id: string) => {
-    void store.dismiss(id).catch(workspace.reportError)
+  // Focus inside the tray never falls to the page: it stays in the tray while
+  // a row remains, and goes to the message input once none does.
+  const dismiss = (ids: readonly string[]) => {
+    const tray = trayRef.current
+    const focused = tray?.contains(document.activeElement) ?? false
+    for (const id of ids) void store.dismiss(id).catch(workspace.reportError)
+    if (!focused) return
+    if (ids.length < shown.length) headerDismissRef.current?.focus()
+    else focusMessageInput(tray)
   }
-  const dismissAll = () => {
-    for (const { id } of shown) dismiss(id)
-  }
+  const dismissAll = () => dismiss(shown.map(({ id }) => id))
 
   return (
     <section
+      ref={trayRef}
       aria-label={title}
       className="overflow-hidden border-y border-border/60 bg-background @md:rounded-2xl @md:border @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:w-full @min-[64rem]/workspace:max-w-(--thread-content-max-width) dark:bg-popover"
-      onKeyDown={onEscape(dismissAll)}
+      onKeyDown={(event) => closeOnEscape(event, dismissAll)}
     >
       <div className="flex items-center gap-2 border-b border-border/60 py-1.5 ps-3.5 pe-1.5 text-xs text-muted-foreground">
         <span className="font-medium text-foreground">{title}</span>
         <span className="min-w-0 flex-1 truncate">· {copy.notSaved}</span>
         <Button
+          ref={headerDismissRef}
           type="button"
           variant="ghost"
           size="icon-sm"
@@ -227,7 +248,7 @@ export function SessionSideQuestions({
             key={entry.id}
             entry={entry}
             workspace={workspace}
-            onDismiss={() => dismiss(entry.id)}
+            onDismiss={() => dismiss([entry.id])}
           />
         ))}
       </ul>
