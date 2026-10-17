@@ -28,7 +28,9 @@ import {
   isSandboxHost,
   lanePageFrameSrc,
   MCP_APP_SANDBOX_SCRIPT_PATH,
+  namesSandboxFile,
   sandboxPagePolicy,
+  SERVICE_WORKER_HEADER,
 } from "./shared/mcp-app-sandbox.ts"
 import { requestedFile } from "./server/static.ts"
 import {
@@ -59,17 +61,18 @@ function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   })
 }
 
+const DEV_SERVER_PORT = 3000
+
 type LaneOriginsOf = (request: IncomingMessage) => LaneOrigins
 
 /**
  * The operator lane's origins (`readLaneOrigins`), the only lane these servers
- * serve: its settings, or, where they are unset, loopback names on the port a
- * request reached, which is this server's own.
+ * serve: its settings, or, where they are unset, loopback names on `port`, the
+ * port a request reached, which is this server's own.
  */
-function laneOriginsOf(environment: NodeJS.ProcessEnv): LaneOriginsOf {
+function laneOriginsAt(environment: NodeJS.ProcessEnv) {
   const settings = LANE_ORIGIN_SETTINGS.operator
-  return ({ socket }) => {
-    const port = socket.localPort
+  return (port: number | undefined) => {
     const loopback: Record<string, string> = {
       [settings.publicOrigins]: `http://localhost:${port},http://127.0.0.1:${port}`,
       [settings.mcpAppSandboxOrigin]: `http://sandbox.localhost:${port}`,
@@ -224,8 +227,10 @@ const notFound = (response: ServerResponse) => {
  * The web server's MCP App sandbox rule (`server/web.ts`), ahead of every
  * other answer these servers give: on the sandbox address only the sandbox
  * page, under its view's policy, and its relay script, each by the file the
- * request names; on the lane's own addresses neither, and pages that frame
- * the sandbox origin alone.
+ * request names and never as a service worker's script; on the lane's own
+ * addresses neither, by that file or by any path whose last segment names one,
+ * as these servers rewrite paths to files, and pages that frame the sandbox
+ * origin alone.
  */
 function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
   const secure = (server: ViteDevServer | PreviewServer, root: string) => {
@@ -242,11 +247,16 @@ function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
       const requested = requestedFile(root, url.pathname)
       const file = requested === undefined ? undefined : files.get(requested)
       if (!isSandboxHost(origins, request.headers.host ?? "")) {
-        if (file !== undefined) return notFound(response)
+        if (file !== undefined || namesSandboxFile(url.pathname))
+          return notFound(response)
         response.setHeader("content-security-policy", lanePageFrameSrc(origins))
         return next()
       }
-      if (file === undefined) return notFound(response)
+      if (
+        file === undefined ||
+        request.headers[SERVICE_WORKER_HEADER] !== undefined
+      )
+        return notFound(response)
       // Served by its own path, which no fallback page answers.
       request.url = `${file}${url.search}`
       if (file === MCP_APP_SANDBOX_PATH) {
@@ -435,9 +445,13 @@ export default defineConfig(({ mode }) => {
     environment.AOS_UI_RUNTIME_MODE ??
     DEFAULT_RUNTIME_MODE
   ).replace(/[^a-zA-Z0-9_-]/g, "-")
-  const originsOf = laneOriginsOf(environment)
-  const sandboxOrigin =
-    environment[LANE_ORIGIN_SETTINGS.operator.mcpAppSandboxOrigin]
+  const originsAt = laneOriginsAt(environment)
+  const originsOf: LaneOriginsOf = (request) =>
+    originsAt(request.socket.localPort)
+  // Read once now, so a malformed setting stops the server and names itself;
+  // the sandbox's name, which no port changes, joins the allowed hosts.
+  const sandboxName = new URL(originsAt(DEV_SERVER_PORT).mcpAppSandboxOrigin)
+    .hostname
   const allowedHosts = (
     environment.AOS_UI_ALLOWED_HOSTS ??
     environment.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
@@ -445,8 +459,7 @@ export default defineConfig(({ mode }) => {
     ?.split(",")
     .map((host) => host.trim())
     .filter(Boolean)
-    // Vite already answers `*.localhost`, the sandbox's loopback default.
-    .concat(sandboxOrigin ? [new URL(sandboxOrigin).hostname] : [])
+    .concat(sandboxName)
   const gatewayProxy = {
     "/api/v1": {
       target: environment.AOS_UI_GATEWAY_TARGET ?? "http://127.0.0.1:4100",
@@ -543,7 +556,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host: "127.0.0.1",
-      port: 3000,
+      port: DEV_SERVER_PORT,
       allowedHosts,
       proxy: gatewayProxy,
     },

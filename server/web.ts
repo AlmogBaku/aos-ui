@@ -8,7 +8,9 @@ import {
   isSandboxHost,
   lanePageFrameSrc,
   MCP_APP_SANDBOX_SCRIPT_PATH,
+  namesSandboxFile,
   sandboxPagePolicy,
+  SERVICE_WORKER_HEADER,
 } from "../shared/mcp-app-sandbox"
 import { createStaticHandler, requestedFile } from "./static"
 
@@ -132,8 +134,9 @@ async function readOperatorConfig(path: string) {
  * absent here.
  *
  * The lane's sandbox address serves the MCP App sandbox page and its script
- * alone, and the lane's own addresses serve neither, each by the file a
- * request names however its path is spelled.
+ * alone, never as a service worker's script, and the lane's own addresses
+ * serve neither, by the file a request resolves to and by any path whose last
+ * segment names one.
  */
 export function createWebApp(options: WebAppOptions) {
   const { origins, root } = options
@@ -165,7 +168,8 @@ export function createWebApp(options: WebAppOptions) {
   }
 
   async function sandbox(request: Request, file: string | undefined) {
-    if (!sandboxFiles.has(file)) return notFound()
+    if (!sandboxFiles.has(file) || request.headers.has(SERVICE_WORKER_HEADER))
+      return notFound()
     if (request.method !== "GET" && request.method !== "HEAD")
       return new Response(null, { status: 405 })
     const response = (await serveStatic(request)) ?? notFound()
@@ -181,7 +185,8 @@ export function createWebApp(options: WebAppOptions) {
     const { host, pathname } = new URL(request.url)
     const file = requestedFile(root, pathname)
     if (isSandboxHost(origins, host)) return sandbox(request, file)
-    if (sandboxFiles.has(file)) return page(notFound())
+    if (sandboxFiles.has(file) || namesSandboxFile(pathname))
+      return page(notFound())
     if (guest && guestReserved(pathname)) return page(notFound())
     if (request.method !== "GET" && request.method !== "HEAD")
       return page(new Response(null, { status: 405 }))

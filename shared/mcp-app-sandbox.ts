@@ -75,6 +75,30 @@ export function sandboxPagePolicy(
   })
 }
 
+/**
+ * Whether a lane address refuses a request path as one that may reach the
+ * sandbox page or its script under a spelling a server rewrites, such as
+ * `/mcp-app-sandbox`, `/public/mcp-app-sandbox.html`, or `/@fs/…`: its last
+ * segment, decoded and lowercased, starts with `mcp-app-sandbox`. A path that
+ * cannot be decoded is refused too.
+ */
+export function namesSandboxFile(pathname: string): boolean {
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return true
+  }
+  const last = decoded.split("/").filter(Boolean).at(-1) ?? ""
+  return last.toLowerCase().startsWith("mcp-app-sandbox")
+}
+
+/**
+ * The header a browser sends when it fetches a service worker's script. The
+ * sandbox origin answers none, so nothing installs a worker there.
+ */
+export const SERVICE_WORKER_HEADER = "service-worker"
+
 /** Whether a request's `Host` names the lane's sandbox address. */
 export const isSandboxHost = (origins: LaneOrigins, host: string) =>
   host.toLowerCase() === new URL(origins.mcpAppSandboxOrigin).host

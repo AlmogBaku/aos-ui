@@ -170,6 +170,16 @@ describe("web server", () => {
       expect(
         (await get(app, MCP_APP_SANDBOX_SCRIPT_PATH, sandbox)).status
       ).toBe(200)
+      // `worker-src 'self'` names this origin, so it serves no worker script.
+      expect(
+        (
+          await app(
+            new Request(`${sandbox}${MCP_APP_SANDBOX_SCRIPT_PATH}`, {
+              headers: { "service-worker": "script" },
+            })
+          )
+        ).status
+      ).toBe(404)
       for (const path of [
         "/",
         "/api/v1/healthz",
@@ -181,7 +191,7 @@ describe("web server", () => {
     }
   )
 
-  it("serves neither sandbox file on a lane's own addresses, however its path is spelled", async () => {
+  it("serves neither sandbox file on a lane's own addresses, however its path is spelled, nor any path naming one", async () => {
     const { guest, operator } = await builtApp()
 
     for (const [app, lane] of [
@@ -194,7 +204,16 @@ describe("web server", () => {
           `/${MCP_APP_SANDBOX_PATH}`,
           "/mcp-app-sandbox%2Ehtml",
           `${MCP_APP_SANDBOX_PATH}/`,
+          // Resolves to the page, though its last segment names nothing.
+          `${MCP_APP_SANDBOX_PATH}%2F.`,
           MCP_APP_SANDBOX_SCRIPT_PATH,
+          // Paths a server may rewrite to a sandbox file.
+          "/mcp-app-sandbox",
+          "/MCP-App-Sandbox",
+          "/%6Dcp-app-sandbox",
+          "/mcp-app-sandbox/",
+          "/public/mcp-app-sandbox.html",
+          "/@fs/app/public/mcp-app-sandbox.js",
         ])
           expect((await get(app, path, origin)).status).toBe(404)
   })
@@ -294,7 +313,15 @@ describe("web server settings", () => {
     ],
     [
       { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://localhost:3000" },
-      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must differ from every origin in AOS_UI_PUBLIC_ORIGIN$/u,
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must differ in host and port from every origin in AOS_UI_PUBLIC_ORIGIN$/u,
+    ],
+    // Routing tells origins apart by host and port alone.
+    [
+      {
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://aos.example.test",
+      },
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must differ in host and port from every origin in AOS_UI_PUBLIC_ORIGIN$/u,
     ],
     [
       { AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test" },
@@ -303,6 +330,28 @@ describe("web server settings", () => {
     [
       { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.example.test" },
       /^AOS_UI_MCP_APP_SANDBOX_ORIGIN is not a loopback origin, but AOS_UI_PUBLIC_ORIGIN lists http:\/\/localhost:3000, which is$/u,
+    ],
+    [
+      {
+        AOS_UI_PUBLIC_ORIGIN:
+          "http://localhost:3000,http://127.evil.example.test:3000",
+      },
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN is a loopback origin, but AOS_UI_PUBLIC_ORIGIN lists http:\/\/127\.evil\.example\.test:3000, which is not$/u,
+    ],
+    [
+      { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://127.0.0.1:3005" },
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must be a name below localhost/u,
+    ],
+    [
+      { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://localhost:3005" },
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must be a name below localhost/u,
+    ],
+    [
+      {
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.example.test",
+      },
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must be https:, since AOS_UI_PUBLIC_ORIGIN lists https:\/\/aos\.example\.test/u,
     ],
     [
       { AOS_UI_GUEST_WEB_PORT: "3001", AOS_UI_GUEST_PUBLIC_ORIGIN: undefined },
@@ -318,24 +367,25 @@ describe("web server settings", () => {
     [
       {
         AOS_UI_GUEST_WEB_PORT: "3001",
-        AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3000",
+        AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.localhost:3000",
       },
-      /^AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN must differ from AOS_UI_MCP_APP_SANDBOX_ORIGIN$/u,
+      /^AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN must differ in host and port from AOS_UI_MCP_APP_SANDBOX_ORIGIN$/u,
     ],
     [
       {
         AOS_UI_GUEST_WEB_PORT: "3001",
-        AOS_UI_GUEST_PUBLIC_ORIGIN:
-          "http://localhost:3001,http://sandbox.localhost:3000",
+        AOS_UI_GUEST_PUBLIC_ORIGIN: "https://sandbox.localhost:3000",
+        AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "https://guest.localhost:3001",
       },
-      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must differ from every origin in AOS_UI_GUEST_PUBLIC_ORIGIN$/u,
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must differ in host and port from every origin in AOS_UI_GUEST_PUBLIC_ORIGIN$/u,
     ],
     [
       {
         AOS_UI_GUEST_WEB_PORT: "3001",
-        AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "http://localhost:3000",
+        AOS_UI_PUBLIC_ORIGIN: "http://localhost:3000,http://aos.localhost:3000",
+        AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "https://aos.localhost:3000",
       },
-      /^AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN must differ from every origin in AOS_UI_PUBLIC_ORIGIN$/u,
+      /^AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN must differ in host and port from every origin in AOS_UI_PUBLIC_ORIGIN$/u,
     ],
     [
       {
@@ -349,6 +399,20 @@ describe("web server settings", () => {
     expect(() =>
       readWebServerConfig(env({ ...OPERATOR_LANE, ...GUEST_LANE, ...values }))
     ).toThrow(message)
+  })
+
+  it("reads an https lane whose sandbox is an https name of its own", () => {
+    expect(
+      readWebServerConfig(
+        env({
+          AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+          AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos.example.test:8443",
+        })
+      ).listeners[0]?.origins
+    ).toEqual({
+      publicOrigins: ["https://aos.example.test"],
+      mcpAppSandboxOrigin: "https://aos.example.test:8443",
+    })
   })
 
   it("binds a wildcard host once the private container exposure is acknowledged", () => {
