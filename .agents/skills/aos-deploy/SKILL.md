@@ -45,7 +45,38 @@ browser uses. Point `HARNESS_GW_CONFIG_FILE` at the absolute host path in
 `/etc/aos-ui/aos-ui.env`, beside the harness overlay's secret-file variables
 (`HARNESS_GW_HERMES_TOKEN_FILE`, `HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE`, or
 the OpenClaw and OpenCode equivalents). Set `AOS_UI_PUBLIC_HOST` and
-`AOS_UI_GUEST_PUBLIC_HOST` to the names the browser uses. The gateway's `invite` command requires `--config` or
+`AOS_UI_GUEST_PUBLIC_HOST` to the names the browser uses.
+
+**Before configuring addresses, ask for:**
+
+1. The exact origin(s) the browser will open the operator lane at (comma-separated if more than one), for `AOS_UI_PUBLIC_ORIGIN`.
+2. The sandbox address for the operator lane: a separate registrable domain (`https://sandbox.agents.example`) or the lane's name on another port (`https://agents.example:8443`), for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A sibling subdomain is allowed but shares cookies with the parent domain.
+3. The same pair for the guest lane when it is active (`AOS_UI_GUEST_PUBLIC_ORIGIN`, `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN`).
+
+Set all four in `/etc/aos-ui/aos-ui.env` (or `.env` for a Compose-only deployment). The web server refuses to start if any is missing, not an exact origin, or overlapping another.
+
+**Reverse proxy rules for the sandbox address:**
+
+- Route every request for the sandbox address to the web server (Caddy and then `web:4200`), never to the gateway.
+- Keep the original `Host` header.
+- Never add the sandbox origin to the gateway's `allowedOrigins`.
+- Give the sandbox address no wider network exposure than its lane.
+
+Do not set `AOS_GATEWAY_URL` to a sandbox address; the gateway answers 421 for that hostname.
+
+**After setting addresses, check:**
+
+```bash
+# Sandbox address must not reach the gateway:
+curl -I https://<sandbox-address>/api/v1/healthz    # expect 404
+
+# Lane address must refuse the sandbox page:
+curl -I https://<lane-address>/mcp-app-sandbox.html  # expect 404
+
+# Sandbox address must serve the page with correct frame-ancestors:
+curl -I https://<sandbox-address>/mcp-app-sandbox.html
+# Content-Security-Policy header must include: frame-ancestors https://<lane-address>
+``` The gateway's `invite` command requires `--config` or
 `HARNESS_GW_CONFIG_FILE`; it never discovers a default path. On a host whose
 exit-node routes capture the Docker bridges, or whose Hermes listens on host
 loopback, fill the unit's `@AOS_HOST_NETWORK@` slot with

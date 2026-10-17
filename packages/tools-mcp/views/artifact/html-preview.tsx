@@ -19,6 +19,11 @@ const CDNS = AGENT_HTML_DOMAINS.join(" ")
  * images and media from `data:` and `blob:` addresses. It connects to nothing
  * and reaches no other host, frame, form, or plugin. Its frame also inherits
  * the view's own policy, which only narrows this one.
+ *
+ * In addition to this CSP, `installStandIns` is injected before the page's
+ * own scripts and gives it in-memory `localStorage` and `sessionStorage` for
+ * the life of the preview, and relays `https:` link clicks and `window.open`
+ * calls to the view as `ui/open-link`.
  */
 export const AGENT_HTML_CSP = [
   "default-src 'none'",

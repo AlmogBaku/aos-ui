@@ -394,11 +394,12 @@ offers Mute or Unmute notifications only where the runtime can store the mute.
   says so and drops the download it cannot honor.
 - **MCP Apps:** the one exception to "never run arbitrary HTML". A tool whose
   own MCP server declares a `ui://` view renders that server-authored HTML as
-  an inline card in the message, inside an opaque-origin double iframe with a
-  CSP built from the view's declared domains and its call's own file
-  addresses; nothing else ever runs there, save the artifact view's Agent
-  HTML, which runs its inline scripts one frame deeper with an opaque origin
-  of its own and no network, frame, or form. The card follows the App's
+  an inline card in the message, inside a double iframe on the lane's sandbox
+  origin (each view's own CSP, built from its declared domains and its call's
+  file addresses); nothing else ever runs there, save the artifact view's Agent
+  HTML, which runs its inline scripts one frame deeper with an opaque origin of
+  its own and no network, frame, or form directly — with in-memory storage for
+  the preview and https links relayed through the workspace. The card follows the App's
   requested height up to 80% of the viewport. The App may ask for fullscreen,
   which covers the viewport in place under the side panel's header (the
   view's name, the shown file's type, and a localized close control that takes

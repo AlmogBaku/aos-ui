@@ -27,12 +27,24 @@ file.
 Unknown fields are rejected. Published HTML Artifacts load no external assets
 in preview.
 
-The aos-ui web server serves the operator's file with one field added,
-`buildId`, read from `dist/build-id`. The guest surface needs no file: it
-answers a generated `{ "surface": "guest" }` with the same `buildId`. The
-browser refetches the configuration on reconnect and when the tab regains
-focus, and reloads once when the served `buildId` differs from the build it is
-running.
+The aos-ui web server serves the operator's file with three fields always
+added, overriding any with those names the file contains:
+
+- `buildId` — the served build, read from `dist/build-id`; the browser reloads once when it differs from the build it is running.
+- `publicOrigins` — the comma-separated value of `AOS_UI_PUBLIC_ORIGIN`, parsed into an array.
+- `mcpAppSandboxOrigin` — the value of `AOS_UI_MCP_APP_SANDBOX_ORIGIN`.
+
+The browser uses `publicOrigins` and `mcpAppSandboxOrigin` to decide whether
+to show MCP App views: it shows views only when its own origin is in
+`publicOrigins` and the sandbox origin differs from that. A workspace opened at
+an address not in `publicOrigins`, or opened at the sandbox origin itself, shows
+views as unavailable and names the setting.
+
+The guest surface needs no file: it answers a generated `{ "surface": "guest"
+}` with `buildId`, `publicOrigins`, and `mcpAppSandboxOrigin` from the guest
+lane's settings. The browser refetches the configuration on reconnect and when
+the tab regains focus, and reloads once when the served `buildId` differs from
+the build it is running.
 
 ## Local development
 
@@ -61,15 +73,25 @@ from its own checkout; see
 gets 405, and every `/api` path is 404, because the gateway answers `/api/v1`
 beside it.
 
-| Variable                     | Default                           | Use                                                                                                    |
-| ---------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `AOS_UI_WEB_HOST`            | `127.0.0.1`                       | Operator surface bind address: `127.0.0.1`, `::1`, or a wildcard with `AOS_UI_WEB_EXPOSURE`.           |
-| `AOS_UI_WEB_PORT`            | `3000`                            | Operator surface port. Compose uses `4200`.                                                            |
-| `AOS_UI_GUEST_WEB_PORT`      | unset                             | Guest surface port; the guest surface runs only when it is set. Compose's harness overlays use `4201`. |
-| `AOS_UI_GUEST_WEB_HOST`      | `127.0.0.1`                       | Guest surface bind address, under the same rule as `AOS_UI_WEB_HOST`.                                  |
-| `AOS_UI_WEB_EXPOSURE`        | unset                             | `private-container` allows a wildcard bind (`0.0.0.0` or `::`) inside a private container network.     |
-| `AOS_UI_STATIC_ROOT`         | `/app/dist`                       | The built app, holding `build-id` beside the assets.                                                   |
-| `AOS_UI_RUNTIME_CONFIG_FILE` | `/run/aos-ui/runtime-config.json` | The operator's public runtime configuration.                                                           |
+| Variable                             | Default                                                                        | Use                                                                                                                                                          |
+| ------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AOS_UI_WEB_HOST`                    | `127.0.0.1`                                                                    | Operator surface bind address: `127.0.0.1`, `::1`, or a wildcard with `AOS_UI_WEB_EXPOSURE`.                                                                 |
+| `AOS_UI_WEB_PORT`                    | `3000`                                                                         | Operator surface port. Compose uses `4200`.                                                                                                                  |
+| `AOS_UI_PUBLIC_ORIGIN`               | required; Compose defaults to `http://localhost:<port>,http://127.0.0.1:<port>` | The exact origins the browser opens the operator lane at, comma-separated. Must be exact origins (`new URL(v).origin === v`). Served in `/runtime-config.json` as `publicOrigins`. |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN`      | required; Compose defaults to `http://sandbox.localhost:<port>`                 | The sandbox origin MCP App views load from. Must be an exact origin distinct from every entry in `AOS_UI_PUBLIC_ORIGIN`. Loopback exactly when the lane is. Served in `/runtime-config.json` as `mcpAppSandboxOrigin`. |
+| `AOS_UI_GUEST_WEB_PORT`              | unset                                                                          | Guest surface port; the guest surface runs only when it is set. Compose's harness overlays use `4201`.                                                        |
+| `AOS_UI_GUEST_WEB_HOST`              | `127.0.0.1`                                                                    | Guest surface bind address, under the same rule as `AOS_UI_WEB_HOST`.                                                                                        |
+| `AOS_UI_GUEST_PUBLIC_ORIGIN`         | required with `AOS_UI_GUEST_WEB_PORT`; Compose defaults to loopback on `AOS_UI_GUEST_PUBLISHED_PORT` | Guest-lane public origins, comma-separated. Same rules as `AOS_UI_PUBLIC_ORIGIN`. Must not overlap the operator lane's origins. |
+| `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN` | required with `AOS_UI_GUEST_WEB_PORT`; Compose defaults to `http://sandbox.localhost:<guestport>` | Guest-lane sandbox origin. Must differ from the operator sandbox and from all public origins on both lanes. |
+| `AOS_UI_WEB_EXPOSURE`                | unset                                                                          | `private-container` allows a wildcard bind (`0.0.0.0` or `::`) inside a private container network.                                                           |
+| `AOS_UI_STATIC_ROOT`                 | `/app/dist`                                                                    | The built app, holding `build-id` beside the assets.                                                                                                         |
+| `AOS_UI_RUNTIME_CONFIG_FILE`         | `/run/aos-ui/runtime-config.json`                                              | The operator's public runtime configuration.                                                                                                                  |
+
+The web server refuses to start when any required origin setting is missing,
+not an exact origin, or overlapping another. The guest origin settings are
+required only when `AOS_UI_GUEST_WEB_PORT` is set. See
+[MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins) for naming
+and proxy guidance.
 
 The guest surface never serves `/auth`, `/sw.js`, or `/manifest.webmanifest`.
 
@@ -104,11 +126,16 @@ overlays) gives each lane one origin: `/api/v1/*`, HTTP and WebSocket, goes to
 that lane's gateway listener, and everything else to that lane's aos-ui web
 server listener. The lane is the port, never the path.
 
-- Each site answers only `127.0.0.1`, `localhost`, and the optional
-  `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other name gets 421.
-  Setting either variable to a loopback name is harmless. Compose maps an
-  empty value to `localhost`; run outside Compose, Caddy refuses to start with
-  either variable set but empty.
+- Each site also matches its sandbox address (by host and port from
+  `AOS_UI_MCP_APP_SANDBOX_ORIGIN` or `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN`)
+  and routes every request for it — any path — to the web server. This matcher
+  runs before the `/api/v1` route, so the gateway never receives a sandbox
+  request.
+- Each site answers only `127.0.0.1`, `localhost`, the sandbox address, and the
+  optional `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other name
+  gets 421. Setting either `PUBLIC_HOST` variable to a loopback name is
+  harmless. Compose maps an empty value to `localhost`; run outside Compose,
+  Caddy refuses to start with either variable set but empty.
 - `AOS_UI_CADDY_BIND` sets the bind address (default `127.0.0.1`; Compose sets
   `0.0.0.0` inside the container and publishes the port on loopback).
 - The upstreams default to the Compose service names and are overridden by

@@ -143,17 +143,20 @@ the guest lane. An external TLS reverse proxy is optional.
   charts, maps, tools, and Mermaid; never execute generated code or
   arbitrary HTML in the browser. The one exception is an MCP App: HTML its own
   MCP server authored as a `ui://` resource, rendered only inside the
-  opaque-origin double iframe with a CSP built from its declared domains. The
-  browser never talks to an MCP server; every App request goes through the
-  gateway, scoped to the tool call's own Session, and the card keeps its textual
-  details. Inside it, Agent HTML a file-showing view previews runs its scripts
-  in a nested `sandbox="allow-scripts"` frame: an opaque origin with no
-  same-origin access, popups, forms, or top navigation, under a policy whose
-  `connect-src`, `frame-src`, `base-uri`, and `form-action` are `'none'`, so it
-  reaches no file and no network beyond the scripts, styles, and fonts it may
-  load from the public CDNs `AGENT_HTML_DOMAINS` names (Google Fonts and
-  Tailwind's Play CDN). Add a host there only if no one but its owner
-  publishes to it and no one else can read who asked.
+  double iframe on the lane's sandbox origin, under each view's own CSP built
+  from its declared domains. The browser never talks to an MCP server; every
+  App request goes through the gateway, scoped to the tool call's own Session,
+  and the card keeps its textual details. Inside it, Agent HTML a file-showing
+  view previews runs its scripts in a nested `sandbox="allow-scripts"` frame:
+  an opaque origin with no same-origin access, popups, forms, or top navigation,
+  under a policy whose `connect-src`, `frame-src`, `base-uri`, and
+  `form-action` are `'none'`, so it reaches no file and no network directly. It
+  gets in-memory `localStorage` and `sessionStorage` for the life of the
+  preview, and its `https:` link clicks and `window.open` calls are relayed by
+  the view to the workspace as `ui/open-link`. It may load scripts, styles, and
+  fonts from the public CDNs `AGENT_HTML_DOMAINS` names (Google Fonts and
+  Tailwind's Play CDN). Add a host there only if no one but its owner publishes
+  to it and no one else can read who asked.
 - Preserve the separation between compact, inspectable execution history and
   first-class assistant outcomes. Final prose and meaningful rich UI remain
   visible message content; follow `DESIGN.md` for the governing principles.

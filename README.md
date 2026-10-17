@@ -123,12 +123,19 @@ The fixture is deterministic and cannot create or modify native Agents. Continue
 
 Compose runs three pieces behind one origin per lane: Caddy, the only
 published port; the aos-ui web server (`bun run web:serve`), which serves the
-built app and `/runtime-config.json`; and, under a harness overlay, the
-harness-gw gateway, which answers `/api/v1`. Each harness overlay pulls the
-gateway image pinned by digest; set `HARNESS_GW_IMAGE` to run another build.
-Runtime selection comes from
-`/runtime-config.json`, so operators can switch between the gateway and
-explicit fixture mode without rebuilding the frontend.
+built app, `/runtime-config.json`, and the MCP App sandbox page; and, under a
+harness overlay, the harness-gw gateway, which answers `/api/v1`. Each harness
+overlay pulls the gateway image pinned by digest; set `HARNESS_GW_IMAGE` to run
+another build. Runtime selection comes from `/runtime-config.json`, so operators
+can switch between the gateway and explicit fixture mode without rebuilding the
+frontend.
+
+Each lane also needs a sandbox origin (`AOS_UI_MCP_APP_SANDBOX_ORIGIN`, and
+`AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN` for the guest lane) — a separate address
+from which MCP App views load. Compose defaults all four origin settings to
+loopback, so local development and fixture mode need no configuration. For a
+named deployment, set `AOS_UI_PUBLIC_ORIGIN` and `AOS_UI_MCP_APP_SANDBOX_ORIGIN`
+in `.env`; see [MCP App sandbox origins](docs/deployment.md#mcp-app-sandbox-origins).
 
 For a containerized fixture preview:
 

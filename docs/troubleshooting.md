@@ -215,6 +215,44 @@ Voice requires either the relevant native runtime STT/TTS configuration or a `vo
   expose MCP tools, so the tools are not callable through AOS. This is an
   upstream limit, not a configuration error.
 
+## MCP App views show as unavailable
+
+Views display as unavailable in their card when the workspace cannot load the
+sandbox page. The card names the reason.
+
+**"MCP App views are not available at this address."** The workspace's own
+origin is not in the lane's `publicOrigins` list, or it equals the sandbox
+origin. This happens when:
+
+- `AOS_UI_PUBLIC_ORIGIN` (or `AOS_UI_GUEST_PUBLIC_ORIGIN` for the guest lane)
+  does not list the exact origin the browser used to open the page. Check that
+  the value is a comma-separated list of exact origins (`https://agents.example`,
+  not `https://agents.example/`) and that the browser's address bar shows one of
+  them. The workspace opened at the sandbox origin itself shows the same message.
+- The `/runtime-config.json` response is missing `publicOrigins` or
+  `mcpAppSandboxOrigin`. Check that the web server is running and that both
+  settings are set; `curl -s http://127.0.0.1:3000/runtime-config.json | bun -e
+  "const d=await Bun.stdin.json(); console.log(d.publicOrigins, d.mcpAppSandboxOrigin)"`.
+
+**The sandbox page does not load.** The sandbox address is unreachable, or the
+proxy is misrouting it. Verify:
+
+1. The sandbox address is routed to the web server, not the gateway.
+   `curl -I https://sandbox.agents.example/api/v1/healthz` must return 404, not
+   200 or a gateway response.
+2. The reverse proxy keeps the original `Host` header. The web server and Caddy
+   both identify the sandbox by host and port; a proxy that rewrites `Host`
+   makes them treat the request as a lane request, which returns 404 for the
+   sandbox page.
+3. The sandbox name resolves to the right address and has a valid TLS
+   certificate.
+
+**421 from the gateway for a non-browser caller.** A shell tool such as
+`aos-invite-link` uses `AOS_GATEWAY_URL`. If that URL's hostname matches the
+sandbox address, the gateway answers 421 (it does not serve the sandbox name).
+Set `AOS_GATEWAY_URL` to one of the gateway's listed origins or to a loopback
+address (`http://127.0.0.1:4100`).
+
 ## A published Artifact cannot load
 
 ### present_artifact file not loading
@@ -269,7 +307,7 @@ explains each listing code.
 For HTML files shown in the `present_artifact` card:
 
 - The view loads no external or relative resources; an HTML file that needs them must inline everything.
-- Inline scripts run, but in an opaque origin with no network: a script that fetches, opens a frame, submits a form, or reads storage fails in the preview.
+- Inline scripts run in an opaque origin with no network: a script that fetches, opens a frame, or submits a form fails in the preview. Web storage (`localStorage`, `sessionStorage`) is available through an in-memory stand-in for the life of the preview; property-style access (`localStorage.foo`) is not supported, use `getItem`/`setItem`. An `https:` link click or `window.open` is relayed to the workspace and opens in a new tab.
 - Images and media from `blob:` addresses stay blank; inline them as `data:` addresses.
 
 For PDFs:
