@@ -33,6 +33,7 @@ export type ReadyAgentSummary = {
   /** Generated robot avatar token, `shape/palette`; absent when unset. */
   avatar?: string
   visibility?: AgentVisibility
+  /** The aos adapter reads it from the harness's own Agent metadata. */
   role?: "creator"
   /** The operator silenced this Agent's notifications; absent when not. */
   muted?: true
@@ -106,6 +107,7 @@ export type WorkspaceActivityEvent =
       requestMore?: number
     })
   | (ActivityBase & { type: "attention-resolved"; requestId: string })
+  // The aos adapter reports these itself, from the creator Session's turns.
   | (ActivityBase & { type: "agent-ready" | "agent-activation-failed" })
 
 export type SessionMetadata = {

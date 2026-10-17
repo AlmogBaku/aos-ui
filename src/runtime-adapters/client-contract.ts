@@ -22,14 +22,36 @@ type ClientAgentCatalogEntry = Awaited<
   ReturnType<Client.AcpWorkspaceClient["listAgentCatalog"]>
 >[number]
 
+/**
+ * The aos adapter reads the client's `_meta` into `role` and reports created
+ * Agents itself (`aos/aos-agent-creation.ts`); everything else is the client's.
+ */
+type AdapterActivity = Extract<
+  Contract.WorkspaceActivityEvent,
+  { type: "agent-ready" | "agent-activation-failed" }
+>
+
 export type ClientMatchesContract = [
   Assert<Same<Client.AgentVisibility, Contract.AgentVisibility>>,
   Assert<Same<Client.AgentUpdate, Contract.AgentUpdate>>,
-  Assert<Same<ClientAgentSummary, Contract.AgentSummary>>,
-  Assert<Same<ClientAgentCatalogEntry, Contract.AgentCatalogEntry>>,
+  Assert<
+    Same<Omit<ClientAgentSummary, "_meta">, Omit<Contract.AgentSummary, "role">>
+  >,
+  Assert<Same<ClientAgentCatalogEntry["summary"], ClientAgentSummary>>,
+  Assert<
+    Same<
+      Omit<ClientAgentCatalogEntry, "summary">,
+      Omit<Contract.AgentCatalogEntry, "summary">
+    >
+  >,
   Assert<Same<Client.SessionStatus, Contract.SessionStatus>>,
   Assert<Same<Client.ActivityBase, Contract.ActivityBase>>,
-  Assert<Same<Client.WorkspaceActivityEvent, Contract.WorkspaceActivityEvent>>,
+  Assert<
+    Same<
+      Client.WorkspaceActivityEvent,
+      Exclude<Contract.WorkspaceActivityEvent, AdapterActivity>
+    >
+  >,
   Assert<Same<Client.SessionMetadata, Contract.SessionMetadata>>,
   Assert<
     Same<Client.SessionActionCapabilities, Contract.SessionActionCapabilities>

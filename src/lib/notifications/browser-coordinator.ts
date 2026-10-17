@@ -1,6 +1,7 @@
 import { z } from "zod"
-import { categoryOf, type PushLocale } from "@harness-gw/sdk/protocol"
+import type { PushLocale } from "@harness-gw/sdk/protocol"
 import type { ActivityRecord } from "./activity"
+import { categoryOf } from "./category"
 import type { ActivityStore } from "./store"
 import type { BrowserNotificationPort } from "./browser-port"
 import {

@@ -1,7 +1,7 @@
 "use client"
 
 import type { ActivityRecord } from "@/lib/notifications/activity"
-import { categoryOf } from "@harness-gw/sdk/protocol"
+import { categoryOf } from "@/lib/notifications/category"
 import type { ActivityContext } from "@/lib/notifications/policy"
 import {
   defaultBrowserPreferences,

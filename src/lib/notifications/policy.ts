@@ -1,6 +1,6 @@
-import { categoryOf } from "@harness-gw/sdk/protocol"
-
 import type { WorkspaceActivityEvent } from "@/runtime-adapters/contracts"
+
+import { categoryOf } from "./category"
 
 /** Whether the operator has answered the one-time ask for OS notifications. */
 export type BrowserAskState = "pending" | "accepted" | "declined"

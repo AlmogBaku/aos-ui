@@ -38,6 +38,7 @@ import {
   watchTabBuild,
 } from "@/runtime-adapters/aos/acp/tab"
 import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
+import { withAgentCreation } from "./aos-agent-creation"
 
 // Lazy logger for background error reporting in this module.
 let _compositionLog: ReturnType<typeof tabAcpLogger> | undefined
@@ -129,9 +130,18 @@ function ReadyAosRuntimeProvider({
     }
   }, [connection])
   const connectionStatus = useConnectionOutage(connection)
+  // The wrapper finds the creator and reports the Agents it makes, so every
+  // consumer below reads it, never the bare client.
   const client = useMemo(
     () =>
-      createAcpWorkspaceClient({ connection, rest, logger: compositionLog() }),
+      withAgentCreation(
+        createAcpWorkspaceClient({
+          connection,
+          rest,
+          logger: compositionLog(),
+        }),
+        { logger: compositionLog() }
+      ),
     [connection, rest]
   )
   const mountedClient = useRef<typeof client>(undefined)
