@@ -11,8 +11,9 @@ import { SessionSideQuestions } from "./side-question-tray"
 
 const copy = en.sideQuestions
 const QUESTION = "Which competitor did it start with?"
+/** The Agent answers in markdown, as it writes a message. */
 const ANSWER =
-  "Contoso: its pricing page changed last week, and it's the one the board asked about."
+  "**Contoso**: its pricing page changed last week, and it's the one the board asked about."
 
 /** A side question the test answers by hand. */
 function fakeQuestion() {
@@ -73,7 +74,11 @@ describe("side-question tray", () => {
     expect(within(tray).getByText(copy.asking)).toBeVisible()
 
     question.publish({ state: "answered", answer: ANSWER, sessionId: "fork-1" })
-    expect(within(tray).getByRole("status")).toHaveTextContent(ANSWER)
+    // Rendered as markdown: the emphasis, never the asterisks.
+    expect(
+      await within(tray).findByText("Contoso", { selector: "strong" })
+    ).toBeVisible()
+    expect(within(tray).getByRole("status")).not.toHaveTextContent("**")
 
     await userEvent.click(screen.getByRole("button", { name: copy.continue }))
     expect(question.handle.keep).toHaveBeenCalledOnce()

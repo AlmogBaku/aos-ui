@@ -1,6 +1,6 @@
 "use client"
 
-import { useAuiState } from "@assistant-ui/react"
+import { TextMessagePartProvider, useAuiState } from "@assistant-ui/react"
 import { AlertCircle, Check, CircleHelp, LoaderCircle, X } from "lucide-react"
 import {
   useCallback,
@@ -10,6 +10,8 @@ import {
   type KeyboardEvent,
 } from "react"
 
+import { markdownPlainText } from "@/components/assistant-ui/elements/conversation-search"
+import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 import { formatDuration } from "@/components/tool-ui/tool-call-presentation"
 import { useToolElapsedMs } from "@/components/tool-ui/tool-row-meta"
@@ -81,10 +83,11 @@ function SideQuestionRow({
   const { isCopied, copyToClipboard } = useCopyToClipboard()
   const [keeping, setKeeping] = useState(false)
   const Icon = statusIcons[state]
-  // Announced once the question settles; the streaming text stays quiet.
+  // Announced once the question settles, as the words it renders, never its
+  // markdown; the streaming text stays quiet.
   const announcement =
-    state === "answered"
-      ? answer
+    state === "answered" && answer !== undefined
+      ? markdownPlainText(answer)
       : state === "failed"
         ? copy.failed
         : state === "needs-input"
@@ -136,12 +139,15 @@ function SideQuestionRow({
           )}
         </div>
         {answer ? (
-          <p
-            className="mt-1 text-sm leading-relaxed whitespace-pre-wrap"
-            dir="auto"
-          >
-            {answer}
-          </p>
+          // The answer is the Agent's markdown, rendered as a message's text is.
+          <div className="mt-1" dir="auto">
+            <TextMessagePartProvider
+              text={answer}
+              isRunning={state === "asking"}
+            >
+              <MarkdownText smooth={false} />
+            </TextMessagePartProvider>
+          </div>
         ) : null}
         {state === "asking" && !answer ? (
           <p className="mt-1 text-xs text-muted-foreground">
