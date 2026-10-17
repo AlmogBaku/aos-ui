@@ -52,13 +52,18 @@ a Content Security Policy built for the particular view the query names:
 Caddy, and any reverse proxy in front of it, must pass the page's headers
 through unchanged and must not add a CSP or `X-Frame-Options` of its own.
 
-**Requests** the view makes carry the sandbox origin, not `null`; an App server
-may check that origin if it chooses.
+**Requests** the view makes carry the sandbox origin; that identifies the lane,
+not the App or its server. An App server that checks the request origin sees
+the lane's sandbox address, not the calling Agent or tool.
 
 **Shared storage.** All views on one lane share the sandbox origin — the spec's
-default. Their stored data persists across Agents, Sessions, and App servers on
-that lane: one view can read another App's storage if both run on the same lane.
-Per-App origins (a non-goal) would isolate them.
+default. Their stored data persists across Agents, Sessions, and App servers:
+one view can read another view's page and storage, and act as it — call its
+server's tools and use its delegated permissions such as clipboard write. With
+a second view on the page, a hostile App can reload a neighbouring sandbox page
+with a query it chose and run code there under the policy it picked; the per-view
+policy binds a view acting alone. Per-App origins (a non-goal) would close these
+paths.
 
 **Lane restriction.** The workspace loads views only when its own origin is in
 the lane's `publicOrigins` list and differs from the sandbox origin. A workspace
@@ -76,7 +81,9 @@ AOS builds the view's CSP from its declared `_meta.ui.csp`:
 | `frameDomains`    | `https://host` or `https://*.host`                                                    |
 | `baseUriDomains`  | `https://host` or `https://*.host`                                                    |
 
-Anything else is dropped, and an empty list means none. Inline scripts and
+Anything else is dropped, and an empty list means none. Declared domains whose
+host and port match a lane's own origin or the sandbox origin are also dropped
+from the built policy (a wildcard that covers them is kept). Inline scripts and
 styles are allowed, and scripts may compile WebAssembly (`'wasm-unsafe-eval'`),
 as a document renderer's decoders do; `object-src` and `form-action` are
 `'none'`. Web workers may start from the view's own `blob:` URLs, as a WebGL

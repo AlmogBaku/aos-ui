@@ -220,9 +220,9 @@ Voice requires either the relevant native runtime STT/TTS configuration or a `vo
 Views display as unavailable in their card when the workspace cannot load the
 sandbox page. The card names the reason.
 
-**"MCP App views are not available at this address."** The workspace's own
-origin is not in the lane's `publicOrigins` list, or it equals the sandbox
-origin. This happens when:
+**"Apps show only at an address `AOS_UI_PUBLIC_ORIGIN` lists, and this page is at `<origin>`."** (Hebrew: "יישומונים מוצגים רק בכתובת שמופיעה ב־`AOS_UI_PUBLIC_ORIGIN`, והדף הזה נמצא ב־`<origin>`.")
+The workspace's own origin is not in the lane's `publicOrigins` list, or it
+equals the sandbox origin. This happens when:
 
 - `AOS_UI_PUBLIC_ORIGIN` (or `AOS_UI_GUEST_PUBLIC_ORIGIN` for the guest lane)
   does not list the exact origin the browser used to open the page. Check that
@@ -238,7 +238,7 @@ origin. This happens when:
 proxy is misrouting it. Verify:
 
 1. The sandbox address is routed to the web server, not the gateway.
-   `curl -I https://sandbox.agents.example/api/v1/healthz` must return 404, not
+   `curl -I https://agents-sandbox.example/api/v1/healthz` must return 404, not
    200 or a gateway response.
 2. The reverse proxy keeps the original `Host` header. The web server and Caddy
    both identify the sandbox by host and port; a proxy that rewrites `Host`
@@ -247,11 +247,13 @@ proxy is misrouting it. Verify:
 3. The sandbox name resolves to the right address and has a valid TLS
    certificate.
 
-**421 from the gateway for a non-browser caller.** A shell tool such as
-`aos-invite-link` uses `AOS_GATEWAY_URL`. If that URL's hostname matches the
-sandbox address, the gateway answers 421 (it does not serve the sandbox name).
-Set `AOS_GATEWAY_URL` to one of the gateway's listed origins or to a loopback
-address (`http://127.0.0.1:4100`).
+**421 from the gateway for a non-browser caller.** The gateway answers 421 for
+any `Host` that is not in its allowed origins and is not exactly `localhost`,
+`127.0.0.1`, or `[::1]`. This includes container names, `host.docker.internal`,
+and sandbox addresses. `AOS_GATEWAY_URL` must name a host the gateway's listener
+allows. Under bridged Compose, `http://127.0.0.1:4100` is not reachable from
+inside a container; use the service name instead (`http://gateway:4100`). Under
+host networking, `http://127.0.0.1:4100` reaches the gateway directly.
 
 ## A published Artifact cannot load
 

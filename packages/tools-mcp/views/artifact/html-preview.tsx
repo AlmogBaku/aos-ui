@@ -22,8 +22,9 @@ const CDNS = AGENT_HTML_DOMAINS.join(" ")
  *
  * In addition to this CSP, `installStandIns` is injected before the page's
  * own scripts and gives it in-memory `localStorage` and `sessionStorage` for
- * the life of the preview, and relays `https:` link clicks and `window.open`
- * calls to the view as `ui/open-link`.
+ * the life of the preview. `https:` link clicks and `window.open` calls post
+ * an `aos/openLink` message to the view (via `parent.postMessage`); the view
+ * calls `ui/open-link` to open the URL in the workspace.
  */
 export const AGENT_HTML_CSP = [
   "default-src 'none'",

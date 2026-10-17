@@ -50,14 +50,16 @@ the build it is running.
 
 Vite derives the same public shape when no configuration file is supplied.
 
-| Variable                                 | Default                     | Use                                                                                         |
-| ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------- |
-| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                       | Public runtime JSON file. Also read by the web server; required in every non-fixture setup. |
-| `AOS_UI_RUNTIME_MODE`                    | `aos`                       | `aos` or explicit `fixture`.                                                                |
-| `AOS_UI_GATEWAY_TARGET`                  | `http://127.0.0.1:4100`     | Gateway that Vite forwards `/api/v1` (HTTP and WebSocket) to.                               |
-| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                      | Set `false` to hide model selection.                                                        |
-| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                      | Set `false` to hide context usage.                                                          |
-| `AOS_UI_TOOLS_MCP_URL`                   | `http://127.0.0.1:4110/mcp` | Tools MCP server URL that `bun run opencode:serve` registers as `aos-ui`.                   |
+| Variable                                 | Default                                            | Use                                                                                         |
+| ---------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                                              | Public runtime JSON file. Also read by the web server; required in every non-fixture setup. |
+| `AOS_UI_RUNTIME_MODE`                    | `aos`                                              | `aos` or explicit `fixture`.                                                                |
+| `AOS_UI_GATEWAY_TARGET`                  | `http://127.0.0.1:4100`                            | Gateway that Vite forwards `/api/v1` (HTTP and WebSocket) to.                               |
+| `AOS_UI_PUBLIC_ORIGIN`                   | `http://localhost:<port>,http://127.0.0.1:<port>`  | Comma-separated lane origins. Vite defaults to the port it serves on; set this when Vite is behind a named address such as a tailnet name. |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN`          | `http://sandbox.localhost:<port>`                  | MCP App sandbox origin. Vite defaults to the same port; set this to match when `AOS_UI_PUBLIC_ORIGIN` is set. |
+| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                                             | Set `false` to hide model selection.                                                        |
+| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                                             | Set `false` to hide context usage.                                                          |
+| `AOS_UI_TOOLS_MCP_URL`                   | `http://127.0.0.1:4110/mcp`                        | Tools MCP server URL that `bun run opencode:serve` registers as `aos-ui`.                   |
 
 The gateway privately selects and authenticates exactly one Hermes, OpenClaw,
 or OpenCode runtime. Hermes is the primary and first-supported harness. There
@@ -67,11 +69,12 @@ from its own checkout; see
 
 ## Web server
 
-`bun run web:serve` (`server/cli.ts`) serves the built app, the page policy
-(the guest page's CSP and framing headers), `/runtime-config.json`, and a
-`/healthz` liveness check. It answers `GET` and `HEAD` only; any other method
-gets 405, and every `/api` path is 404, because the gateway answers `/api/v1`
-beside it.
+`bun run web:serve` (`server/cli.ts`) serves the built app, the lane's page
+policy (both the operator and guest pages carry `frame-src` naming their sandbox
+origin; the guest page also carries a full CSP and framing headers),
+`/runtime-config.json`, and a `/healthz` liveness check. It answers `GET` and
+`HEAD` only; any other method gets 405, and every `/api` path is 404, because
+the gateway answers `/api/v1` beside it.
 
 | Variable                             | Default                                                                        | Use                                                                                                                                                          |
 | ------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -87,11 +90,17 @@ beside it.
 | `AOS_UI_STATIC_ROOT`                 | `/app/dist`                                                                    | The built app, holding `build-id` beside the assets.                                                                                                         |
 | `AOS_UI_RUNTIME_CONFIG_FILE`         | `/run/aos-ui/runtime-config.json`                                              | The operator's public runtime configuration.                                                                                                                  |
 
+An exact origin passes `isMcpAppPolicyOrigin`: lowercase label characters, an
+`http:` or `https:` scheme, no IPv6 literal, and no path component. The sandbox
+address answers 404 to service-worker script requests (`Service-Worker:` header)
+so nothing installs a worker there.
+
 The web server refuses to start when any required origin setting is missing,
-not an exact origin, or overlapping another. The guest origin settings are
-required only when `AOS_UI_GUEST_WEB_PORT` is set. See
-[MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins) for naming
-and proxy guidance.
+not an exact origin, overlapping another in host and port, an `http:` sandbox
+under an `https:` lane, or a loopback sandbox that is not a `*.localhost` name.
+The guest origin settings are required only when `AOS_UI_GUEST_WEB_PORT` is
+set. See [MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins) for
+naming and proxy guidance.
 
 The guest surface never serves `/auth`, `/sw.js`, or `/manifest.webmanifest`.
 

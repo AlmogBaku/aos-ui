@@ -132,13 +132,18 @@ fixture mode need no extra configuration:
 ### Choosing a sandbox address
 
 The sandbox address is a separate name or the same name on another port. A name
-on a registrable domain of its own — `https://sandbox.agents.example` beside
+on a registrable domain of its own — `https://agents-sandbox.example` beside
 `https://agents.example` — is the recommended choice: it keeps the two
-addresses in entirely separate cookie jars and distinct `SameSite` contexts. A
-sibling subdomain or a different port on the same name is permitted, but views
-running there can set cookies on the parent domain and ride its `SameSite=Lax`
-or `SameSite=None` cookies. AOS itself sets only a locale preference cookie, so
-the main concern is cookies your App servers may set.
+addresses in entirely separate cookie jars and distinct `SameSite` contexts.
+
+A sibling subdomain (`https://sandbox.agents.example`) or a different port on
+the same name (`https://agents.example:8443`) is the same site as the lane.
+Views running there can set `Domain=agents.example` cookies and receive the
+lane's `SameSite` cookies on every request, `SameSite=Strict` included.
+Chromium also shares the lane's renderer process with a same-site origin. AOS
+itself sets only a locale preference cookie, but App servers may set broader
+ones; prefer a separate registrable domain unless the deployment controls the
+full cookie space.
 
 For loopback development, the sandbox must be a `*.localhost` name such as
 `http://sandbox.localhost:3000`, never `localhost` or a loopback address on
@@ -180,26 +185,36 @@ If you terminate TLS in front of Caddy or run a different reverse proxy:
 - **Never add the sandbox origin to the gateway's `allowedOrigins`.** The sandbox address has nothing to do with the gateway's origin policy.
 - **Give the sandbox address no wider network exposure than its lane.** If the operator lane is loopback-only, keep the sandbox loopback-only.
 
-The gateway answers 421 to any request whose `Host` header names an origin it
-does not serve and is not exactly `localhost`, `127.0.0.1`, or `[::1]`. A proxy
-that accidentally sends sandbox requests to the gateway will see 421. Non-browser
-callers that reach the gateway by shell tool, such as `aos-invite-link` via
-`AOS_GATEWAY_URL`, must use one of the gateway's listed origins or a loopback
-address; never set `AOS_GATEWAY_URL` to a sandbox origin.
+For a **port-form sandbox** (`https://agents.example:8443` beside
+`https://agents.example`), add a TLS listener on port 8443 that forwards to the
+same Caddy lane port (`:18080`) keeping the `Host` header. Caddy's `@sandbox`
+matcher routes requests for that host and port to the web server, as with a
+separate name; the gateway on port 4100 never sees port-8443 requests.
+
+The gateway answers 421 to any request whose `Host` header names a host and
+port it does not serve and that is not exactly `localhost`, `127.0.0.1`, or
+`[::1]`. A proxy that accidentally sends sandbox requests to the gateway will
+see 421. Non-browser callers that reach the gateway by shell tool, such as
+`aos-invite-link` via `AOS_GATEWAY_URL`, must name a host in the gateway's
+allowed origins list, or exactly `localhost`, `127.0.0.1`, or `[::1]`; never
+set `AOS_GATEWAY_URL` to a sandbox origin.
 
 ### Verify after deployment
 
 ```bash
 # Sandbox address returns 404 for /api/v1 — it never reaches the gateway:
-curl -I https://sandbox.agents.example/api/v1/healthz
+curl -I https://agents-sandbox.example/api/v1/healthz
 
 # Lane address returns 404 for the sandbox page under every spelling:
 curl -I https://agents.example/mcp-app-sandbox.html
 curl -I "https://agents.example//mcp-app-sandbox.html"
 
 # Sandbox address serves the page (200) with the lane's origins in frame-ancestors:
-curl -I https://sandbox.agents.example/mcp-app-sandbox.html
+curl -I https://agents-sandbox.example/mcp-app-sandbox.html
 # Content-Security-Policy: … frame-ancestors https://agents.example; …
+
+# Gateway answers 421 for a host it does not serve:
+curl -I -H "Host: agents-sandbox.example" http://127.0.0.1:4100/api/v1/healthz
 ```
 
 ### Guest lane sandbox

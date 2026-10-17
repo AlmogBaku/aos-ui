@@ -50,19 +50,19 @@ the OpenClaw and OpenCode equivalents). Set `AOS_UI_PUBLIC_HOST` and
 **Before configuring addresses, ask for:**
 
 1. The exact origin(s) the browser will open the operator lane at (comma-separated if more than one), for `AOS_UI_PUBLIC_ORIGIN`.
-2. The sandbox address for the operator lane: a separate registrable domain (`https://sandbox.agents.example`) or the lane's name on another port (`https://agents.example:8443`), for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A sibling subdomain is allowed but shares cookies with the parent domain.
+2. The sandbox address for the operator lane: a separate registrable domain (`https://agents-sandbox.example` beside `https://agents.example`) or the lane's name on another port (`https://agents.example:8443`), for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A sibling subdomain (`https://sandbox.agents.example`) is the same site and shares `SameSite=Strict` cookies; prefer a separate registrable domain.
 3. The same pair for the guest lane when it is active (`AOS_UI_GUEST_PUBLIC_ORIGIN`, `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN`).
 
-Set all four in `/etc/aos-ui/aos-ui.env` (or `.env` for a Compose-only deployment). The web server refuses to start if any is missing, not an exact origin, or overlapping another.
+Set all four in `/etc/aos-ui/aos-ui.env` (or `.env` for a Compose-only deployment). The web server refuses to start if any is missing, not an exact origin, or overlapping another in host and port.
 
 **Reverse proxy rules for the sandbox address:**
 
-- Route every request for the sandbox address to the web server (Caddy and then `web:4200`), never to the gateway.
+- Route every request for the sandbox address to the web server (Caddy and then `web:4200` for the operator lane, `web:4201` for the guest lane), never to the gateway.
 - Keep the original `Host` header.
 - Never add the sandbox origin to the gateway's `allowedOrigins`.
 - Give the sandbox address no wider network exposure than its lane.
 
-Do not set `AOS_GATEWAY_URL` to a sandbox address; the gateway answers 421 for that hostname.
+`AOS_GATEWAY_URL` must name a host the gateway's listener allows, or exactly `localhost`, `127.0.0.1`, or `[::1]`; any other host gets 421. Never set it to a sandbox origin.
 
 **After setting addresses, check:**
 
@@ -70,13 +70,19 @@ Do not set `AOS_GATEWAY_URL` to a sandbox address; the gateway answers 421 for t
 # Sandbox address must not reach the gateway:
 curl -I https://<sandbox-address>/api/v1/healthz    # expect 404
 
-# Lane address must refuse the sandbox page:
-curl -I https://<lane-address>/mcp-app-sandbox.html  # expect 404
+# Lane address must refuse the sandbox page under every spelling:
+curl -I https://<lane-address>/mcp-app-sandbox.html   # expect 404
+curl -I "https://<lane-address>//mcp-app-sandbox.html" # expect 404
 
 # Sandbox address must serve the page with correct frame-ancestors:
 curl -I https://<sandbox-address>/mcp-app-sandbox.html
 # Content-Security-Policy header must include: frame-ancestors https://<lane-address>
-``` The gateway's `invite` command requires `--config` or
+
+# Gateway answers 421 for a host it does not serve:
+curl -I -H "Host: <sandbox-address-host>" http://127.0.0.1:4100/api/v1/healthz
+```
+
+The gateway's `invite` command requires `--config` or
 `HARNESS_GW_CONFIG_FILE`; it never discovers a default path. On a host whose
 exit-node routes capture the Docker bridges, or whose Hermes listens on host
 loopback, fill the unit's `@AOS_HOST_NETWORK@` slot with

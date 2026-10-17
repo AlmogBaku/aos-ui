@@ -21,10 +21,9 @@ export type PresentationView = {
  * loads from them signals nothing to anyone. A host anyone may publish to,
  * such as an npm mirror whose per-file hit counts are public, would.
  *
- * Note: Agent HTML now also has in-memory storage (via the stand-in) and can
- * relay `https:` links to the workspace. The CDN risk assessment still holds:
- * a page loading from these CDNs signals nothing beyond what an ordinary https
- * link click would.
+ * Agent HTML also has in-memory storage (via the stand-in) and relays `https:`
+ * links to the workspace. Loading from these CDNs signals nothing beyond what
+ * an ordinary https link click would.
  */
 export const AGENT_HTML_DOMAINS = [
   "https://fonts.googleapis.com",
