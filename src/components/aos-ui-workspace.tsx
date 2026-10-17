@@ -86,6 +86,7 @@ import {
   SideQuestionContext,
   SideQuestionStore,
 } from "@/components/runtime-interactions/side-question-store"
+import { SideQuestionTray } from "@/components/runtime-interactions/side-question-tray"
 import { useStableHandlers } from "@/hooks/use-stable-handlers"
 
 type AosUiWorkspaceProps = {
@@ -451,14 +452,15 @@ function SessionTodoDock() {
 }
 
 /**
- * What sits above the composer: the Session's todos, then its running
- * subagents.
+ * What sits above the composer: the Session's todos, its running subagents,
+ * then its side questions, nearest the composer that asked them.
  */
 function SessionComposerDocks() {
   return (
     <>
       <SessionTodoDock />
       <SubagentStrip />
+      <SideQuestionTray />
     </>
   )
 }
