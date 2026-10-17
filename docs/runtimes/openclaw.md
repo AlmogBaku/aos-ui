@@ -6,8 +6,8 @@ operated OpenClaw Gateway over WebSocket, using its device identity and device
 token from private files. There is no browser Gateway route, and AOS does not
 manage OpenClaw or model credentials.
 
-This page covers running AOS against OpenClaw and registering the AOS UI tools
-and creator. The gateway's OpenClaw adapter (device scopes, pairing, MCP App
+This page covers running AOS against OpenClaw and registering the AOS UI
+tools. The gateway's OpenClaw adapter (device scopes, pairing, MCP App
 relaying, file reads, icon writes) is documented in harness-gw's
 [`docs/runtimes/openclaw.md`](https://github.com/AlmogBaku/harness-gw/blob/main/docs/runtimes/openclaw.md).
 
@@ -130,21 +130,17 @@ Guests get no file addresses on OpenClaw, and a sandboxed or remote Session
 cannot serve `present_artifact` files. OpenClaw's own native media appears
 after the Session is reloaded, not while the turn streams.
 
-### Creator Agent
+### No New Agent
 
-OpenClaw's Agent summary has no field for a role, so AOS treats the Agent with
-the reserved id `aos-agent-creator` as the creator behind **New Agent** and
-keeps it out of the roster. Create it with `openclaw agents add` and give its
-workspace a copy of the `aos-agent-creator` skill. After the user confirms a
-definition, the creator runs `openclaw agents add` as the skill's
-`reference/harness-openclaw.md` describes, so it needs OpenClaw's command
-execution tool.
+The gateway passes no Agent metadata through from OpenClaw, so no Agent is
+marked as the creator and AOS offers no **New Agent**. An Agent installed
+earlier as `aos-agent-creator` shows as an ordinary Agent.
 
 ## Agent icons
 
 Each Agent's icon is stored in the `identity.avatar` field of the Agent's own
-authored entry in `agents.list`. Only a non-creator Agent with its own entry
-can change its icon; the implicit default Agent cannot. Visibility changes are
+authored entry in `agents.list`. Only an Agent with its own entry can change
+its icon; the implicit default Agent cannot. Visibility changes are
 unsupported on OpenClaw. OpenClaw's own Control UI reads `identity.avatar` as
 a file path, so after AOS writes a token such as `ring/blue` it may show a
 broken or default avatar there. The first workspace open against a gateway

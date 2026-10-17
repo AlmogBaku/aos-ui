@@ -124,8 +124,9 @@ definition, `.opencode/skills/aos-agent-creator/SKILL.md` with its
 `reference/harness-opencode.md`, and `.opencode/skills/aos-invite-link/SKILL.md`
 into the worktree, and refuses to start if they would conflict with existing
 content or if the target port is already occupied. The creator may write only
-a new `.opencode/agents/<id>.md` file. The gateway does not yet report it as
-the creator, so AOS does not offer **New Agent** on OpenCode.
+a new `.opencode/agents/<id>.md` file. The gateway passes no Agent metadata
+through from OpenCode, so nothing marks it as the creator and AOS does not
+offer **New Agent** on OpenCode.
 
 The launcher accepts these environment variables:
 

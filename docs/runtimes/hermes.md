@@ -247,8 +247,10 @@ Images attached to a user message stay Artifacts either way.
 
 The creator behind **New Agent** is an ordinary profile, conventionally
 `aos-agent-creator`, that loads the `aos-agent-creator` skill. Its marker lives
-in its `profile.yaml`, and no `hermes` command sets it; the gateway keeps the
-marked profile out of the Agent roster and management surfaces:
+in its `profile.yaml`, and no `hermes` command sets it. The gateway passes the
+profile's `ui_meta.aos` through unread as the Agent's `_meta.aos`, and AOS, not
+the gateway, keeps the marked profile out of the Agent roster and management
+surfaces:
 
 ```yaml
 ui_meta:
@@ -257,6 +259,9 @@ ui_meta:
   hermes-bots:
     hidden: true
 ```
+
+Every key in `ui_meta.aos` reaches the operator's browser, so it must never
+hold a path, token, or other private value.
 
 The marker grants no authority. After the user confirms a definition, the
 creator writes the new profile with `hermes profile create` and the other
@@ -272,10 +277,10 @@ another profile's tokens into it.
 Each Agent's icon is an opaque `silhouette/tone` token stored in
 `ui_meta.aos.avatar` of the profile; a value that does not match
 `/^[a-z0-9-]{1,32}\/[a-z0-9-]{1,32}$/` reads as no icon. Every editable profile
-can change its icon; the creator profile never can. The first time the
-workspace opens against a gateway that serves icons, it saves one for every
-visible, editable Agent. The compare-and-set write is described in harness-gw's
-Hermes guide.
+can change its icon, though AOS never offers the creator profile's. The first
+time the workspace opens against a gateway that serves icons, it saves one for
+every visible, editable Agent. The compare-and-set write is described in
+harness-gw's Hermes guide.
 
 ## What AOS shows
 

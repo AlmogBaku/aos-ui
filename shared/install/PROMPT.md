@@ -12,7 +12,8 @@ Before you change anything, establish with the operator:
 - the tools MCP URL the harness can reach (default
   `http://127.0.0.1:4110/mcp`); on Hermes and OpenCode the harness-gw gateway must
   reach it too, because it reads the chart, map, and stats views itself;
-- whether to install the hidden Agent creator behind AOS's **New Agent**;
+- on Hermes, whether to install the hidden Agent creator behind AOS's
+  **New Agent** (OpenClaw and OpenCode offer no New Agent);
 - the operator gateway origin, if Agents should issue guest invitations.
 
 Then:

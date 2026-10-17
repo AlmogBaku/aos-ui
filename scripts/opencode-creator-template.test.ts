@@ -29,7 +29,6 @@ describe("packaged OpenCode Agent and harness configuration", () => {
     expect(builder.metadata).toMatchObject({
       mode: "primary",
       hidden: true,
-      aos_ui_role: "creator",
       permission: {
         "*": "deny",
         edit: {

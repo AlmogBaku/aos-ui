@@ -11,7 +11,6 @@ export const creatorAgentDefinition = `---
 description: Create and configure OpenCode Agents for this workspace.
 mode: primary
 hidden: true
-aos_ui_role: creator
 permission:
   "*": deny
   read: allow

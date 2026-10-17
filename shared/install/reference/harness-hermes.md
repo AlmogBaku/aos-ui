@@ -78,6 +78,9 @@ _ui_meta_revisions:
   hermes-bots: 1
 ```
 
+Every key in `ui_meta.aos` reaches the operator's browser, so never put a path,
+token, or other private value there.
+
 The creator writes Agents through the `hermes` CLI, so its profile must keep
 Hermes's terminal tool. A new profile has no model credentials of its own:
 the operator signs it in with `hermes -p aos-agent-creator auth add`. Never

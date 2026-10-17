@@ -238,7 +238,8 @@ Prefer Assistant UI's established concepts, primitives, and components over
 parallel local implementations. Customize through supported composition seams;
 when a product requirement truly needs a replacement, document the unsupported
 case and keep the custom surface as narrow as possible.
-Native runtimes own the catalog, visibility, creator role, and persistence.
+Native runtimes own the catalog, visibility, the creator's marker, and
+persistence; the gateway passes that marker through unread and aos-ui reads it.
 The gateway uses Hermes native HTTP/WebSocket APIs without adding a workspace
 database or provider registry, and aos-ui adds none either.
 
@@ -418,10 +419,9 @@ Additional checks by area:
   installing the new package.
 - Live harness acceptance requires credentials and approved disposable external
   targets. No runtime ships an Agent-creation tool. The creator is a Hermes
-  profile marked `ui_meta.aos.role: creator`, the OpenClaw Agent with the
-  reserved id `aos-agent-creator`, or the OpenCode launcher's hidden
-  `agent-builder`, which AOS does not yet report as the creator; each creates
-  Agents through its harness's own means, so a live creation run writes a real
-  Agent. `shared/install/PROMPT.md` installs the tools, skills, and creator. Do not treat
-  mocked or skipped journeys as live passes; never change existing user
-  Agents/profiles for routine tests.
+  profile marked `ui_meta.aos.role: creator`, which harness-gw passes through
+  unread as the Agent's `_meta.aos` and aos-ui alone reads; it creates Agents
+  with the `hermes` CLI, so a live creation run writes a real profile. OpenClaw
+  and OpenCode offer no New Agent. `shared/install/PROMPT.md` installs the
+  tools, skills, and creator. Do not treat mocked or skipped journeys as live
+  passes; never change existing user Agents/profiles for routine tests.

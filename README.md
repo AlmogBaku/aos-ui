@@ -45,7 +45,7 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
   `present_artifact`, which shows a file in a live card with PDF rendering,
   image preview, text view, and sandboxed HTML — with pip, download, and refresh
 - Agent icons and visibility management, and `New Agent` creation through a
-  runtime's hidden creator where one is configured
+  hidden Hermes creator profile where one is configured
 - Activity history, opt-in browser notifications, optional Web Push, and an
   installable app window
 - English LTR and Hebrew RTL layouts with keyboard-first navigation and a
