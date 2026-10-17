@@ -98,6 +98,11 @@ describe("childStatusOf", () => {
     ],
     ["a settled call as done", { status: settled }, "completed"],
     ["a failed call as failed", { isError: true, status: settled }, "failed"],
+    [
+      "a stopped call as stopped, not failed",
+      { status: { type: "incomplete", reason: "cancelled" } },
+      "stopped",
+    ],
   ] as const)("reads %s", (_case, part, status) => {
     expect(childStatusOf(part)).toBe(status)
   })

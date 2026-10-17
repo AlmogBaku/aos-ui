@@ -450,11 +450,11 @@ describe("subagents", () => {
         false,
       ],
       [
-        "collapses once every child is done",
-        ["completed", "completed", "unknown"],
+        "collapses once every child has ended",
+        ["completed", "cancelled", "unknown"],
         false,
         false,
-        ["2 done", "1 status unavailable"],
+        ["1 done", "1 stopped", "1 status unavailable"],
         true,
       ],
       [

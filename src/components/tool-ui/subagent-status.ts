@@ -28,9 +28,10 @@ export function subagentStatus(
       return "completed"
     case "failed":
     case "error":
+      return "failed"
     case "cancelled":
     case "canceled":
-      return "failed"
+      return "stopped"
     // A child nothing follows any longer may still run, or be done.
     case "unknown":
       return "unknown"
@@ -55,8 +56,9 @@ function phaseStatus(phase: RichToolPhase): ToolUiActivityStatus {
       return "running"
     case "pending":
       return "waiting"
-    case "failed":
     case "cancelled":
+      return "stopped"
+    case "failed":
     case "expired":
     case "unavailable":
       return "failed"

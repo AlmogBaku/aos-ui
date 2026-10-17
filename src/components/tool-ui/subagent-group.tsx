@@ -37,6 +37,7 @@ const COUNT_ORDER: readonly ToolUiActivityStatus[] = [
   "running",
   "waiting",
   "completed",
+  "stopped",
   "failed",
   "unknown",
 ]

@@ -2,6 +2,7 @@ import {
   Check,
   CircleAlert,
   CircleHelp,
+  CircleStop,
   Clock3,
   LoaderCircle,
   PanelRightOpen,
@@ -565,6 +566,7 @@ const activityStatusIcons: Record<ToolUiActivityStatus, typeof LoaderCircle> = {
   waiting: Clock3,
   completed: Check,
   failed: CircleAlert,
+  stopped: CircleStop,
   unknown: CircleHelp,
 }
 
@@ -583,7 +585,8 @@ function ActivityStatusIcon({ status }: { status: ToolUiActivityStatus }) {
           status === "waiting" && "text-warning",
           status === "completed" && "text-success",
           status === "failed" && "text-destructive",
-          status === "unknown" && "text-muted-foreground"
+          (status === "stopped" || status === "unknown") &&
+            "text-muted-foreground"
         )}
       />
       <span className="sr-only">{labels.activityStatuses[status]}</span>

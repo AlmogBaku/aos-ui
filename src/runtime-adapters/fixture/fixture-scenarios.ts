@@ -292,10 +292,11 @@ const BOARD_PREP = {
     "Reconcile September's 48 supplier invoices against their purchase orders",
   followUps: "Draft follow-up emails to the twelve leads from the trade show",
   interviews: "Summarize last quarter's customer interviews into five themes",
+  churn: "Compare churn by plan over the last four quarters",
 }
 
 /**
- * Four children of one delegation, one in each state a child can be in. Like
+ * Five children of one delegation, one in each state a child can be in. Like
  * every live fixture frame, the children carry no start: the fixed fixture
  * clock is long past, so a running row shows no timer here.
  */
@@ -303,9 +304,9 @@ function subagentBatchParts(): AssistantPart[] {
   return [
     {
       type: "text",
-      text: "I've started four agents on the board-meeting prep.",
+      text: "I've started five agents on the board-meeting prep.",
     },
-    delegation("Prepare the board meeting", 4, "Started 4 subagents."),
+    delegation("Prepare the board meeting", 5, "Started 5 subagents."),
     subagentEntry(
       "fixture-pricing",
       {
@@ -378,6 +379,21 @@ function subagentBatchParts(): AssistantPart[] {
             message: "interviews-q3.docx couldn't be opened: access denied.",
           },
         }
+      )
+    ),
+    subagentEntry(
+      "fixture-churn",
+      { goal: BOARD_PREP.churn, status: "cancelled", durationMs: 8_000 },
+      childTranscript(
+        "fixture-churn",
+        `${BOARD_PREP.churn}.`,
+        [
+          {
+            type: "text",
+            text: "Pulling churn by plan from the billing export.",
+          },
+        ],
+        { type: "incomplete", reason: "cancelled" }
       )
     ),
     {

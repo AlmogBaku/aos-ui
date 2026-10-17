@@ -19,6 +19,8 @@ export type ToolUiActivityStatus =
   | "waiting"
   | "completed"
   | "failed"
+  /** Stopped before it finished, as the operator's Stop stops it. */
+  | "stopped"
   /** Nothing confirms how the activity ended, nor that it still runs. */
   | "unknown"
 export type ToolUiActionKind =
@@ -361,6 +363,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     waiting: "Waiting",
     completed: "Completed",
     failed: "Failed",
+    stopped: "Stopped",
     unknown: "Status unavailable",
   },
   subagent: {
@@ -385,6 +388,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
       waiting: (count) => `${count} waiting`,
       completed: (count) => `${count} done`,
       failed: (count) => `${count} failed`,
+      stopped: (count) => `${count} stopped`,
       unknown: (count) => `${count} status unavailable`,
     },
     running: "Running subagents",
@@ -588,6 +592,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     waiting: "בהמתנה",
     completed: "הושלם",
     failed: "נכשל",
+    stopped: "נעצר",
     unknown: "המצב אינו זמין",
   },
   subagent: {
@@ -612,6 +617,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       waiting: (count) => `${count} בהמתנה`,
       completed: (count) => (count === 1 ? "1 הושלם" : `${count} הושלמו`),
       failed: (count) => (count === 1 ? "1 נכשל" : `${count} נכשלו`),
+      stopped: (count) => (count === 1 ? "1 נעצר" : `${count} נעצרו`),
       unknown: (count) =>
         count === 1 ? "1 שמצבו אינו זמין" : `${count} שמצבם אינו זמין`,
     },
