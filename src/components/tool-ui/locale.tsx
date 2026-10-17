@@ -171,24 +171,29 @@ export type ToolUiLocaleLabels = {
   questionProgressLabel: string
   activities: Record<ToolUiActivityKind, string>
   activityStatuses: Record<ToolUiActivityStatus, string>
-  activityTranscript: {
-    title: string
-    loading: string
-    unavailable: string
-  }
   subagent: {
     model: (model: string) => string
-    depth: (depth: number) => string
     tokens: (tokens: string) => string
-    duration: (duration: string) => string
     filesRead: (count: number) => string
     filesWritten: (count: number) => string
-    openSession: string
+    /** Opens the child's transcript in the side panel, to read. */
+    viewTranscript: string
+    closeTranscript: string
+    /** The entry the panel showed left the conversation. */
+    transcriptUnavailable: string
+    /** Heads what the child was asked to do. */
+    brief: string
+    showMore: string
+    showLess: string
     /** Stops the child's own work; its parent runs on. */
     stop: string
-    /** Says the opened child Session is shown, never continued. */
-    readOnly: string
-    closeSession: string
+  }
+  /** A batch of subagents: how many, and how many are in each state. */
+  subagentGroup: {
+    title: (count: number) => string
+    counts: Record<ToolUiActivityStatus, (count: number) => string>
+    /** Names the line above the composer while a subagent runs. */
+    running: string
   }
   generic: {
     malformed: (displayName: string) => string
@@ -356,23 +361,30 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     failed: "Failed",
     unknown: "Status unavailable",
   },
-  activityTranscript: {
-    title: "Transcript",
-    loading: "Transcript is loading…",
-    unavailable: "Transcript unavailable.",
-  },
   subagent: {
     model: (model) => `Model ${model}`,
-    depth: (depth) => `Depth ${depth}`,
     tokens: (tokens) => `${tokens} tokens`,
-    duration: (duration) => `Took ${duration}`,
     filesRead: (count) => (count === 1 ? "Read 1 file" : `Read ${count} files`),
     filesWritten: (count) =>
       count === 1 ? "Wrote 1 file" : `Wrote ${count} files`,
-    openSession: "Open session",
+    viewTranscript: "View transcript",
+    closeTranscript: "Close transcript",
+    transcriptUnavailable: "This transcript is no longer available.",
+    brief: "Brief",
+    showMore: "Show more",
+    showLess: "Show less",
     stop: "Stop subagent",
-    readOnly: "The subagent's own Session, to read only.",
-    closeSession: "Close session",
+  },
+  subagentGroup: {
+    title: (count) => (count === 1 ? "1 subagent" : `${count} subagents`),
+    counts: {
+      running: (count) => `${count} running`,
+      waiting: (count) => `${count} waiting`,
+      completed: (count) => `${count} done`,
+      failed: (count) => `${count} failed`,
+      unknown: (count) => `${count} status unavailable`,
+    },
+    running: "Running subagents",
   },
   generic: {
     malformed: (displayName) => `Could not safely render ${displayName}`,
@@ -575,23 +587,31 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     failed: "נכשל",
     unknown: "המצב אינו זמין",
   },
-  activityTranscript: {
-    title: "תמליל",
-    loading: "התמליל נטען…",
-    unavailable: "התמליל אינו זמין.",
-  },
   subagent: {
     model: (model) => `מודל ${model}`,
-    depth: (depth) => `עומק ${depth}`,
     tokens: (tokens) => `${tokens} אסימונים`,
-    duration: (duration) => `נמשך ${duration}`,
     filesRead: (count) => (count === 1 ? "קרא קובץ אחד" : `קרא ${count} קבצים`),
     filesWritten: (count) =>
       count === 1 ? "כתב קובץ אחד" : `כתב ${count} קבצים`,
-    openSession: "פתיחת שיחה",
+    viewTranscript: "הצגת התמליל",
+    closeTranscript: "סגירת התמליל",
+    transcriptUnavailable: "התמליל כבר אינו זמין.",
+    brief: "תדריך",
+    showMore: "הצגת עוד",
+    showLess: "הצגת פחות",
     stop: "עצירת סוכן המשנה",
-    readOnly: "השיחה של סוכן המשנה, לקריאה בלבד.",
-    closeSession: "סגירת השיחה",
+  },
+  subagentGroup: {
+    title: (count) => (count === 1 ? "סוכן משנה אחד" : `${count} סוכני משנה`),
+    counts: {
+      running: (count) => `${count} בביצוע`,
+      waiting: (count) => `${count} בהמתנה`,
+      completed: (count) => (count === 1 ? "1 הושלם" : `${count} הושלמו`),
+      failed: (count) => (count === 1 ? "1 נכשל" : `${count} נכשלו`),
+      unknown: (count) =>
+        count === 1 ? "1 שמצבו אינו זמין" : `${count} שמצבם אינו זמין`,
+    },
+    running: "סוכני משנה בעבודה",
   },
   generic: {
     malformed: (displayName) => `לא ניתן להציג בבטחה: ${displayName}`,

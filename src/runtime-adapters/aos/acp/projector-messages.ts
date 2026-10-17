@@ -56,8 +56,10 @@ export type ProjectedToolCall = {
   readonly startedAt?: number
   readonly completedAt?: number
   readonly durationMs?: number
-  /** The child Session this call spawned, as its parent last projected it. */
+  /** The child Session this entry shows, as its parent last projected it. */
   readonly child?: ProjectedChild
+  /** How many child Sessions this call spawned, each with an entry after it. */
+  readonly delegated?: number
   /** The terminals the call's content names, as the projector last saw them. */
   readonly terminals?: readonly ProjectedTerminal[]
   /** The tool declares an MCP App view; once seen, the call keeps it. */
@@ -357,6 +359,32 @@ export function patchToolCall(
   return { ...message, parts: [...message.parts, { source: "tool", call }] }
 }
 
+/**
+ * Creates the call right after the last of the calls `after` names, so it
+ * reads beside the call it follows; one already there is patched in place.
+ */
+export function insertToolCallAfter(
+  message: ProjectedMessage,
+  after: ReadonlySet<string>,
+  patch: ToolCallPatch
+): ProjectedMessage {
+  if (findCall([message], byId(patch.toolCallId)))
+    return patchToolCall(message, patch, {})
+  const at = message.parts.findLastIndex(
+    (part) => part.source === "tool" && after.has(part.call.toolCallId)
+  )
+  const call = mergeCall({ toolCallId: patch.toolCallId }, patch, {})
+  const { parts } = message
+  return {
+    ...message,
+    parts: [
+      ...parts.slice(0, at + 1),
+      { source: "tool", call },
+      ...parts.slice(at + 1),
+    ],
+  }
+}
+
 export function appendToolContent(
   message: ProjectedMessage,
   toolCallId: string,
@@ -507,6 +535,7 @@ function toolArtifact(
     ...(diffs.length === 0 ? {} : { diffs }),
     ...(terminals.length === 0 ? {} : { terminals }),
     ...(call.child === undefined ? {} : { subagent: call.child.subagent }),
+    ...(call.delegated === undefined ? {} : { delegated: call.delegated }),
     ...(call.app ? { app: appState(call, result, turn) } : {}),
   }
   return Object.keys(artifact).length === 0 ? undefined : artifact

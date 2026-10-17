@@ -2,7 +2,6 @@ import {
   type AttachmentAdapter,
   type AssistantRuntime,
   type ChatModelAdapter,
-  type ThreadMessage,
   type ThreadMessageLike,
 } from "@assistant-ui/react"
 import {
@@ -16,7 +15,6 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { type ThreadComponents, type ThreadLabels } from "./thread.aui"
-import { RichToolRenderer } from "@/components/tool-ui"
 import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
 import type {
   RuntimeInteractionAdapter,
@@ -239,68 +237,6 @@ describe("Thread accessibility", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "שיחת הסוכן" })
     ).toBeInTheDocument()
-  })
-
-  it("renders provider subagent messages as a nested read-only transcript", async () => {
-    const nestedMessages: readonly ThreadMessage[] = [
-      {
-        id: "message-user",
-        role: "user",
-        content: [{ type: "text", text: "Review the figures" }],
-        createdAt: new Date("2026-09-04T08:00:00.000Z"),
-        status: { type: "complete", reason: "stop" },
-        attachments: [],
-        metadata: { custom: {} },
-      },
-      {
-        id: "message-assistant",
-        role: "assistant",
-        content: [{ type: "text", text: "Validated the three segments." }],
-        createdAt: new Date("2026-09-04T08:00:00.000Z"),
-        status: { type: "complete", reason: "stop" },
-        metadata: {
-          unstable_state: null,
-          unstable_annotations: [],
-          unstable_data: [],
-          steps: [],
-          custom: {},
-        },
-      },
-    ]
-    const messages: readonly ThreadMessageLike[] = [
-      {
-        id: "parent-assistant",
-        role: "assistant",
-        content: [
-          {
-            type: "tool-call",
-            toolCallId: "subagent-1",
-            toolName: "delegate_subagent",
-            args: { task: "Validate market segments" },
-            result: {
-              name: "Data analyst",
-              status: "completed",
-              summary: "Analysis complete.",
-            },
-            messages: nestedMessages,
-          },
-        ],
-      },
-    ]
-
-    render(
-      <LocalThread initialMessages={messages} toolFallback={RichToolRenderer} />
-    )
-
-    await screen.findByText("Data analyst")
-    expect(screen.getByText("Review the figures")).toBeVisible()
-    expect(screen.getByText("Validated the three segments.")).toBeVisible()
-    // Read-only: the nested user turn offers no edit, and the only textbox is
-    // the Session's own composer.
-    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
-    expect(screen.getAllByRole("textbox")).toEqual([
-      screen.getByRole("textbox", { name: "Message input" }),
-    ])
   })
 
   it("announces the localized working state while a response streams", async () => {

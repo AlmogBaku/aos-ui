@@ -1372,13 +1372,15 @@ describe("useAcpRuntime child Sessions", () => {
       fake.emit(spawn, SPAWN_META)
       fake.emit(report(), REPORT_META)
     })
-  const spawnPart = (runtime: ReturnType<typeof useAcpRuntime>) =>
+  /** The entry a child reads on, after the call that spawned it. */
+  const entryId = (childId = CHILD_ID) => `aos-subagent-${childId}`
+  const entryPart = (runtime: ReturnType<typeof useAcpRuntime>) =>
     runtime.thread
       .getMessageByIndex(0)
-      .getMessagePartByToolCallId("t1")
+      .getMessagePartByToolCallId(entryId())
       .getState()
   const childText = (runtime: ReturnType<typeof useAcpRuntime>) => {
-    const part = spawnPart(runtime)
+    const part = entryPart(runtime)
     return part.type === "tool-call"
       ? (part.messages ?? []).map((message) =>
           message.content.map(messageText).join("")
@@ -1394,7 +1396,7 @@ describe("useAcpRuntime child Sessions", () => {
     spawned(fake)
     act(() => fake.emitChild(CHILD_ID, chunkUpdate("c1", "Reading the logs")))
 
-    const part = spawnPart(result.current)
+    const part = entryPart(result.current)
     expect(
       part.type === "tool-call" && readAosToolArtifact(part.artifact)?.subagent
     ).toMatchObject({ goal: "Check the logs", status: "running" })
@@ -1441,8 +1443,8 @@ describe("useAcpRuntime child Sessions", () => {
       const call = nested?.content.find((item) => item.type === "tool-call")
       return call?.type === "tool-call" ? call.approval : undefined
     }
-    expect(approvalOf("t1")).toMatchObject({ id: "interrupt-1" })
-    expect(approvalOf("t3")).toMatchObject({ id: "interrupt-1" })
+    expect(approvalOf(entryId())).toMatchObject({ id: "interrupt-1" })
+    expect(approvalOf(entryId("child-2"))).toMatchObject({ id: "interrupt-1" })
 
     await act(() =>
       controlsOf(result.current)!.respondToApproval(
@@ -1456,8 +1458,11 @@ describe("useAcpRuntime child Sessions", () => {
       outcome: { outcome: "selected", optionId: "once" },
     })
     expect(first).not.toHaveBeenCalled()
-    expect(approvalOf("t3")).toMatchObject({ optionId: "once", approved: true })
-    expect(approvalOf("t1")).not.toHaveProperty("optionId")
+    expect(approvalOf(entryId("child-2"))).toMatchObject({
+      optionId: "once",
+      approved: true,
+    })
+    expect(approvalOf(entryId())).not.toHaveProperty("optionId")
   })
 
   it("keeps a child's permission request on its card before the child writes anything", async () => {
@@ -1469,7 +1474,7 @@ describe("useAcpRuntime child Sessions", () => {
     act(() => {
       respond = fake.requestPermission("child-bash", CHILD_ID)
     })
-    const part = spawnPart(result.current)
+    const part = entryPart(result.current)
     expect(
       part.type === "tool-call" &&
         readAosToolArtifact(part.artifact)?.subagent?.approvals
@@ -1540,7 +1545,7 @@ describe("useAcpRuntime child Sessions", () => {
     )
     await act(() => fake.resync())
 
-    const part = spawnPart(result.current)
+    const part = entryPart(result.current)
     expect(
       part.type === "tool-call" && readAosToolArtifact(part.artifact)?.subagent
     ).toMatchObject({ status: "completed" })

@@ -35,6 +35,7 @@ export type McpAppPipData = {
  * `target` itself.
  */
 export type McpAppPip = McpAppPipData & {
+  kind?: "app"
   target: McpAppTarget
   /** The view its message already opened, and when it arrived. */
   opened?: { view: McpAppView; openedAt: number }
@@ -50,14 +51,32 @@ export type McpAppPip = McpAppPipData & {
   opener?: HTMLElement
 }
 
+/**
+ * A subagent's transcript in the side panel, read from its entry in the
+ * Session's own thread, so nothing loads the child as a Session of its own.
+ */
+export type SubagentTranscriptPip = {
+  kind: "transcript"
+  target: { agentId: string; sessionId: string; toolCallId: string }
+  /** As an App view's: the control that takes the focus back. */
+  opener?: HTMLElement
+}
+
+/** What the side panel shows: an App view, or a subagent's transcript. */
+export type SidePanelPip = McpAppPip | SubagentTranscriptPip
+
+const samePip = (a: SidePanelPip, b: SidePanelPip) =>
+  (a.kind === "transcript") === (b.kind === "transcript") &&
+  sameMcpAppTarget(a.target, b.target)
+
 export type McpAppHost = {
   adapter: McpAppAdapter
   agentId: string
   sessionId: string
   /** The runtime connection's state, which the views' files follow. */
   connectionStatus?: AppConnectionStatus
-  /** The view in the side panel, while its Session is the one shown. */
-  pip?: McpAppPip
+  /** What the side panel shows, while its Session is the one shown. */
+  pip?: SidePanelPip
   /**
    * The call that last showed each identified file, by the file's id. A frame
    * hands its view the one for its file as the file's revision, so a view of
@@ -65,7 +84,7 @@ export type McpAppHost = {
    */
   latestCalls: ReadonlyMap<string, string>
   /** Shows a view in the side panel, returning any other to its message. */
-  showInPip: (pip: McpAppPip) => void
+  showInPip: (pip: SidePanelPip) => void
   /** Returns the side panel's view to its message. */
   leavePip: () => void
   /** Hands the side panel's view what its call reported since it moved. */
@@ -137,7 +156,7 @@ export function McpAppHostProvider({
   children: ReactNode
 }) {
   const latestCalls = useMemo(() => latestCallsByFile(messages), [messages])
-  const [pip, setPip] = useState<McpAppPip>()
+  const [pip, setPip] = useState<SidePanelPip>()
   const opener = useRef<HTMLElement>(undefined)
   const shown =
     pip && pip.target.agentId === agentId && pip.target.sessionId === sessionId
@@ -157,10 +176,10 @@ export function McpAppHostProvider({
   // Showing the target already there keeps its view: two publications of one
   // file share an Artifact, and a new target object would rebuild the view's
   // connection on a frame whose sandbox never reports ready again.
-  const showInPip = useCallback((next: McpAppPip) => {
+  const showInPip = useCallback((next: SidePanelPip) => {
     opener.current = next.opener
     setPip((current) =>
-      current && sameMcpAppTarget(current.target, next.target)
+      current && samePip(current, next)
         ? { ...current, opener: next.opener }
         : next
     )
@@ -178,7 +197,11 @@ export function McpAppHostProvider({
   const updatePip = useCallback(
     (target: McpAppTarget, data: McpAppPipData) =>
       setPip((current) => {
-        if (!current || !sameMcpAppTarget(current.target, target))
+        if (
+          !current ||
+          current.kind === "transcript" ||
+          !sameMcpAppTarget(current.target, target)
+        )
           return current
         const input = current.input ?? data.input
         const result = current.result ?? data.result

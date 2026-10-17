@@ -5,36 +5,15 @@ import {
   Clock3,
   LoaderCircle,
   PanelRightOpen,
-  Square,
 } from "lucide-react"
-import {
-  MessagePartPrimitive,
-  MessagePrimitive,
-  useAuiState,
-  type ReasoningMessagePartComponent,
-  type TextMessagePartComponent,
-  type ThreadMessage,
-} from "@assistant-ui/react"
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useState,
-  useSyncExternalStore,
-} from "react"
+import type { ThreadMessage } from "@assistant-ui/react"
+import { lazy, Suspense, useCallback, useSyncExternalStore } from "react"
 import { z } from "zod"
 
-import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
+import { useMcpAppHost } from "@/components/mcp-apps/mcp-app-host"
 import { useRuntimeInteractions } from "@/components/runtime-interactions/pending-interaction-context"
-import { RuntimeQuestionComposer } from "@/components/runtime-interactions/question-composer"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { RuntimeQuestionComposer } from "@/components/runtime-interactions/question-composer"
 import type { ChildSessionControls } from "@/runtime-adapters/child-sessions"
 import type { RuntimeInteractionAdapter } from "@/runtime-adapters/contracts"
 import {
@@ -43,9 +22,9 @@ import {
   type AosSubagent,
   type AosSubagentApproval,
 } from "@/lib/tool-artifact"
+import { ShimmerLabel } from "@/lib/surfaces"
 import { cn } from "@/lib/utils"
 
-import { AosToolFallback } from "./aos-tool-fallback"
 import { useChildSessionControls } from "./child-session-controls"
 import { LazyVisualBoundary } from "./lazy-boundary"
 import { normalizeRichToolState } from "./lifecycle"
@@ -54,7 +33,14 @@ import {
   type ToolUiActivityKind,
   type ToolUiActivityStatus,
 } from "./locale"
+import {
+  isActiveStatus,
+  subagentLiveLine,
+  subagentSpan,
+  subagentStatus,
+} from "./subagent-status"
 import { formatToolDuration } from "./tool-call-presentation"
+import { useToolElapsedMs } from "./tool-row-meta"
 import type { RichToolPart } from "./types"
 
 // The permission card is an optional display, loaded as the registry loads it.
@@ -99,201 +85,207 @@ export const activityPayloadSchema = z
 export type ActivityPayload = z.infer<typeof activityPayloadSchema>
 export type ActivityChildStatus = z.infer<typeof activityStatusSchema>
 
+type PayloadPart = Pick<RichToolPart, "args" | "result" | "toolName">
+
+/** The call's args and result as an activity payload, when they fit one. */
+export function readActivityPayload(
+  part: PayloadPart
+): ActivityPayload | undefined {
+  const parsed = activityPayloadSchema.safeParse({
+    args: part.args,
+    result: part.result,
+  })
+  return parsed.success ? parsed.data : undefined
+}
+
 /**
  * The activity payload of a call known only by its subagent metadata: its
  * validated args and result when they fit, and the subagent's goal otherwise.
  */
 export function subagentActivityPayload(
-  part: RichToolPart,
+  part: PayloadPart,
   subagent: AosSubagent
 ): ActivityPayload {
-  const parsed = activityPayloadSchema.safeParse({
-    args: part.args,
-    result: part.result,
-  })
-  return parsed.success
-    ? parsed.data
-    : { args: { task: subagent.goal ?? part.toolName } }
+  return (
+    readActivityPayload(part) ?? {
+      args: { task: subagent.goal ?? part.toolName },
+    }
+  )
 }
 
+/** What the subagent was set to do, by the most specific name it has. */
+export const activityTitle = (
+  payload: ActivityPayload | undefined,
+  subagent: AosSubagent | undefined
+) =>
+  subagent?.goal ??
+  payload?.result?.name ??
+  payload?.args.name ??
+  payload?.args.skill ??
+  payload?.args.task ??
+  payload?.args.description
+
+/**
+ * How far a subagent row's child has got: what its child Session reports,
+ * else what its call's result says, else the call's own progress.
+ */
+export function activityStatusOf(part: RichToolPart): ToolUiActivityStatus {
+  const subagent = readAosToolArtifact(part.artifact)?.subagent
+  return (
+    subagentStatus(subagent?.status) ??
+    getChildStatus(
+      readActivityPayload(part),
+      normalizeRichToolState(part).phase
+    )
+  )
+}
+
+/** Why the child's turn failed, as its own transcript reports it. */
+function failureOf(messages: readonly ThreadMessage[] | undefined) {
+  const status = messages?.findLast(
+    (message) => message.role === "assistant"
+  )?.status
+  const error = status?.type === "incomplete" ? status.error : undefined
+  return typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+    ? error.message
+    : undefined
+}
+
+/**
+ * One subagent as a row: its status, its goal on one line, how long it has
+ * worked, and a second line saying what it does now, what it found, or why it
+ * failed. What its child Session asks the operator opens under the row.
+ */
 export function ActivityTool({
   part,
   payload,
   kind,
   subagent,
+  requests = true,
 }: {
   part: RichToolPart
   payload: ActivityPayload
   kind: ToolUiActivityKind
-  /** ACP subagent metadata; its goal, status, and counts lead when present. */
+  /** ACP subagent metadata; its goal, status, and summary lead when present. */
   subagent?: AosSubagent
+  /** Whether the child's requests open under the row to be answered. */
+  requests?: boolean
 }) {
   const state = normalizeRichToolState(part)
   const { direction, labels, locale } = useToolUiLocale()
   const controls = useChildSessionControls()
-  const [viewOpen, setViewOpen] = useState(false)
-  const kindLabel = labels.activities[kind]
-  const title =
-    subagent?.goal ??
-    payload.result?.name ??
-    payload.args.name ??
-    payload.args.skill ??
-    payload.args.task ??
-    payload.args.description ??
-    kindLabel
+  const title = activityTitle(payload, subagent) ?? labels.activities[kind]
   const summary = subagent?.summary ?? payload.result?.summary
-  const childStatus =
+  const status =
     subagentStatus(subagent?.status) ?? getChildStatus(payload, state.phase)
+  const active = isActiveStatus(status)
+  const elapsedMs = useToolElapsedMs(
+    subagentSpan(part, subagent, active),
+    active
+  )
+  const failed = status === "failed"
+  const line = active
+    ? subagentLiveLine(part.messages, labels)
+    : failed
+      ? (summary ?? failureOf(part.messages))
+      : summary
   const childSessionId = subagent?.childSessionId
-  // A child stops alone only where it says so; the card cannot stop it twice.
-  const stop =
-    controls &&
-    childSessionId &&
-    subagent?.cancellable &&
-    (childStatus === "running" || childStatus === "waiting")
-      ? () => controls.cancel(childSessionId)
-      : undefined
-  const headerFacts = subagent
-    ? [
-        subagent.model ? labels.subagent.model(subagent.model) : undefined,
-        subagent.depth === undefined
-          ? undefined
-          : labels.subagent.depth(subagent.depth),
-      ].filter((fact): fact is string => fact !== undefined)
-    : []
-  const footerFacts = subagent
-    ? [
-        subagent.tokens === undefined
-          ? undefined
-          : labels.subagent.tokens(
-              new Intl.NumberFormat(locale, { notation: "compact" }).format(
-                subagent.tokens
-              )
-            ),
-        subagent.durationMs === undefined
-          ? undefined
-          : labels.subagent.duration(
-              formatToolDuration(subagent.durationMs, labels.assistant.duration)
-            ),
-        subagent.filesRead?.length
-          ? labels.subagent.filesRead(subagent.filesRead.length)
-          : undefined,
-        subagent.filesWritten?.length
-          ? labels.subagent.filesWritten(subagent.filesWritten.length)
-          : undefined,
-      ].filter((fact): fact is string => fact !== undefined)
-    : []
-  const transcript = payload.result?.transcript
-  const hasNestedMessages = Boolean(part.messages?.length)
-  const transcriptIsLoading =
-    !hasNestedMessages &&
-    !transcript &&
-    (childStatus === "running" || childStatus === "waiting")
-  const showTranscript =
-    hasNestedMessages || Boolean(transcript) || transcriptIsLoading
+  const readable = Boolean(
+    childSessionId || part.messages?.length || payload.result?.transcript
+  )
 
   return (
-    <section
-      className="mt-3 w-full max-w-2xl rounded-xl border border-border bg-card/35 px-3"
+    <div
       data-slot="tool-activity"
-      data-state={childStatus}
+      data-state={status}
       dir={direction}
       lang={locale}
     >
-      <header className="flex items-center gap-2 py-2 text-sm">
-        <span className="text-xs font-medium text-muted-foreground">
-          {kindLabel}
-        </span>
-        <bdi
-          className="min-w-0 flex-1 truncate font-medium"
-          dir="auto"
-          title={title}
-        >
-          {title}
-        </bdi>
-        {headerFacts.map((fact) => (
+      <div className="flex flex-col gap-0.5 px-3.5 py-2.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <ActivityStatusIcon status={status} />
           <bdi
-            key={fact}
+            className="min-w-0 flex-1 truncate text-sm font-medium"
             dir="auto"
-            className="shrink-0 text-xs text-muted-foreground"
+            title={title}
           >
-            {fact}
+            {title}
           </bdi>
-        ))}
-        {stop ? (
-          <Button type="button" size="xs" variant="ghost" onClick={stop}>
-            <Square data-icon="inline-start" aria-hidden="true" />
-            {labels.subagent.stop}
-          </Button>
+          {elapsedMs === undefined ? null : (
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+              {formatToolDuration(elapsedMs, labels.assistant.duration)}
+            </span>
+          )}
+          {readable ? <TranscriptMark toolCallId={part.toolCallId} /> : null}
+        </div>
+        {line ? (
+          <p
+            className={cn(
+              "line-clamp-2 ps-6.5 text-xs text-muted-foreground",
+              failed && "text-destructive"
+            )}
+          >
+            {failed ? (
+              <span aria-hidden="true">
+                {labels.activityStatuses.failed} ·{" "}
+              </span>
+            ) : null}
+            {/* The child's own words keep their direction in either locale. */}
+            {active ? (
+              <ShimmerLabel aria-live="off">
+                <bdi>{line}</bdi>
+              </ShimmerLabel>
+            ) : (
+              <bdi>{line}</bdi>
+            )}
+          </p>
         ) : null}
-        <ActivityStatusLabel status={childStatus} />
-      </header>
-      {childSessionId ? (
-        <ChildRequests
-          part={part}
-          childSessionId={childSessionId}
-          unhosted={subagent?.approvals}
-          controls={controls}
-        />
-      ) : null}
-      {summary || showTranscript ? (
-        <div className="flex flex-col gap-2 ps-6 pb-3">
-          {summary ? (
-            <p className="text-sm text-pretty" dir="auto">
-              {summary}
-            </p>
-          ) : null}
-          {showTranscript ? (
-            <div className="flex flex-col gap-1">
-              <p className="text-xs font-medium text-muted-foreground">
-                {labels.activityTranscript.title}
-              </p>
-              {hasNestedMessages ? (
-                <NestedActivityMessages />
-              ) : transcript ? (
-                <p className="text-sm text-pretty" dir="auto">
-                  {transcript}
-                </p>
-              ) : (
-                <p
-                  className="text-sm text-muted-foreground"
-                  role="status"
-                  aria-live="polite"
-                >
-                  {labels.activityTranscript.loading}
-                </p>
-              )}
-            </div>
-          ) : null}
+      </div>
+      {requests && childSessionId ? (
+        <div className="ps-10 pe-3.5">
+          <ChildRequests
+            part={part}
+            childSessionId={childSessionId}
+            unhosted={subagent?.approvals}
+            controls={controls}
+          />
         </div>
       ) : null}
-      {footerFacts.length > 0 || childSessionId ? (
-        <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 py-2 text-xs text-muted-foreground">
-          {footerFacts.map((fact) => (
-            <span key={fact} className="tabular-nums">
-              {fact}
-            </span>
-          ))}
-          {childSessionId ? (
-            <button
-              type="button"
-              onClick={() => setViewOpen(true)}
-              className="ms-auto inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline focus-visible:underline"
-            >
-              {labels.subagent.openSession}
-              <PanelRightOpen aria-hidden="true" className="size-3.5" />
-            </button>
-          ) : null}
-        </footer>
-      ) : null}
-      {childSessionId ? (
-        <ChildSessionView
-          title={title}
-          open={viewOpen}
-          onOpenChange={setViewOpen}
-        />
-      ) : null}
-    </section>
+    </div>
+  )
+}
+
+/**
+ * Opens the row's transcript in the side panel, where the runtime has one;
+ * the panel hands the focus back to it once it closes.
+ */
+function TranscriptMark({ toolCallId }: { toolCallId: string }) {
+  const host = useMcpAppHost()
+  const { labels } = useToolUiLocale()
+  if (!host) return null
+  const { agentId, sessionId, showInPip } = host
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-xs"
+      className="-my-1 shrink-0 text-muted-foreground [@media(pointer:coarse)]:size-11"
+      aria-label={labels.subagent.viewTranscript}
+      title={labels.subagent.viewTranscript}
+      data-artifact-open-id={`transcript:${toolCallId}`}
+      onClick={(event) =>
+        showInPip({
+          kind: "transcript",
+          target: { agentId, sessionId, toolCallId },
+          opener: event.currentTarget,
+        })
+      }
+    >
+      <PanelRightOpen aria-hidden="true" className="rtl:-scale-x-100" />
+    </Button>
   )
 }
 
@@ -526,147 +518,6 @@ function ChildQuestion({
   )
 }
 
-/**
- * The child Session's own transcript, opened to read: its turns as its parent
- * projected them, with no composer, no Edit or Retry, and nothing that would
- * load the child as a Session of its own.
- */
-function ChildSessionView({
-  title,
-  open,
-  onOpenChange,
-}: {
-  title: string
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const { direction, labels, locale } = useToolUiLocale()
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"
-        closeLabel={labels.subagent.closeSession}
-        dir={direction}
-        lang={locale}
-      >
-        <DialogHeader>
-          <DialogTitle dir="auto">{title}</DialogTitle>
-          <DialogDescription>{labels.subagent.readOnly}</DialogDescription>
-        </DialogHeader>
-        <ChildSessionTranscript />
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/** The child's text as it stands, with no reveal to wait out while reading. */
-const ChildText: TextMessagePartComponent = () => (
-  <MarkdownText smooth={false} />
-)
-
-const ChildReasoning: ReasoningMessagePartComponent = () => (
-  <div className="text-muted-foreground">
-    <MarkdownText smooth={false} />
-  </div>
-)
-
-const CHILD_SESSION_PARTS = {
-  Text: ChildText,
-  Reasoning: ChildReasoning,
-  tools: { Fallback: AosToolFallback },
-}
-
-function ChildSessionTranscript() {
-  const { labels } = useToolUiLocale()
-  const empty = useAuiState(
-    (state) => state.part.type !== "tool-call" || !state.part.messages?.length
-  )
-  if (empty)
-    return (
-      <p className="text-sm text-muted-foreground">
-        {labels.activityTranscript.unavailable}
-      </p>
-    )
-  return (
-    <div className="flex flex-col gap-4">
-      <MessagePartPrimitive.Messages>
-        {({ message }) => (
-          <MessagePrimitive.Root
-            className={cn(
-              "flex flex-col gap-2 wrap-break-word",
-              message.role === "user" &&
-                "ms-auto max-w-[85%] rounded-xl bg-muted px-4 py-2"
-            )}
-            data-role={message.role}
-          >
-            <div dir="auto">
-              <MessagePrimitive.Parts components={CHILD_SESSION_PARTS} />
-            </div>
-          </MessagePrimitive.Root>
-        )}
-      </MessagePartPrimitive.Messages>
-    </div>
-  )
-}
-
-/** A provider's free-form subagent status, when it names one AOS shows. */
-function subagentStatus(
-  status: string | undefined
-): ToolUiActivityStatus | undefined {
-  switch (status?.toLowerCase()) {
-    case "running":
-    case "in_progress":
-    case "active":
-      return "running"
-    case "waiting":
-    case "pending":
-    case "queued":
-      return "waiting"
-    case "completed":
-    case "complete":
-    case "done":
-    case "succeeded":
-      return "completed"
-    case "failed":
-    case "error":
-    case "cancelled":
-    case "canceled":
-      return "failed"
-    // A child nothing follows any longer may still run, or be done.
-    case "unknown":
-      return "unknown"
-    default:
-      return undefined
-  }
-}
-
-function NestedActivityMessages() {
-  return (
-    <div
-      className="flex flex-col gap-2 rounded-lg border border-border/70 bg-background/60 p-2"
-      data-slot="nested-activity-transcript"
-    >
-      <MessagePartPrimitive.Messages>
-        {({ message }) => (
-          <MessagePrimitive.Root
-            className={cn(
-              "max-w-[90%] rounded-lg px-2.5 py-1.5 text-sm wrap-break-word",
-              message.role === "user"
-                ? "ms-auto bg-muted"
-                : "me-auto border border-border/60 bg-card"
-            )}
-            data-role={message.role}
-          >
-            <div dir="auto">
-              <MessagePrimitive.Parts />
-            </div>
-          </MessagePrimitive.Root>
-        )}
-      </MessagePartPrimitive.Messages>
-    </div>
-  )
-}
-
 const activityStatusIcons: Record<ToolUiActivityStatus, typeof LoaderCircle> = {
   running: LoaderCircle,
   waiting: Clock3,
@@ -675,37 +526,34 @@ const activityStatusIcons: Record<ToolUiActivityStatus, typeof LoaderCircle> = {
   unknown: CircleHelp,
 }
 
-function ActivityStatusLabel({ status }: { status: ToolUiActivityStatus }) {
+/** The row's status as an icon, read aloud by its label. */
+function ActivityStatusIcon({ status }: { status: ToolUiActivityStatus }) {
   const { labels } = useToolUiLocale()
   const Icon = activityStatusIcons[status]
-
   return (
-    <span
-      className={cn(
-        "flex shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground",
-        status === "failed" && "text-destructive",
-        status === "completed" && "text-primary"
-      )}
-      role="status"
-      aria-live="polite"
-    >
+    <span className="flex shrink-0" role="status">
       <Icon
         aria-hidden="true"
         className={cn(
-          "size-3.5",
-          status === "running" && "motion-safe:animate-spin"
+          "size-4",
+          status === "running" &&
+            "text-muted-foreground motion-safe:animate-spin",
+          status === "waiting" && "text-warning",
+          status === "completed" && "text-success",
+          status === "failed" && "text-destructive",
+          status === "unknown" && "text-muted-foreground"
         )}
       />
-      {labels.activityStatuses[status]}
+      <span className="sr-only">{labels.activityStatuses[status]}</span>
     </span>
   )
 }
 
 function getChildStatus(
-  payload: ActivityPayload,
+  payload: ActivityPayload | undefined,
   parentPhase: ReturnType<typeof normalizeRichToolState>["phase"]
 ): ActivityChildStatus {
-  if (payload.result?.status) return payload.result.status
+  if (payload?.result?.status) return payload.result.status
   if (parentPhase === "running" || parentPhase === "submitting")
     return "running"
   if (parentPhase === "pending") return "waiting"

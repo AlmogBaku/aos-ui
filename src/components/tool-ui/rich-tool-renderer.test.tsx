@@ -1352,11 +1352,11 @@ describe("provider permission renderer", () => {
 
 describe("informational renderers", () => {
   it.each([
-    ["running", "Running", "Transcript is loading…"],
-    ["waiting", "Waiting", "Transcript is loading…"],
+    ["running", "Running"],
+    ["waiting", "Waiting"],
   ] as const)(
-    "shows validated child status %s and its transcript state",
-    async (status, statusLabel, transcriptLabel) => {
+    "shows validated child status %s",
+    async (status, statusLabel) => {
       await renderTool(
         <RichToolRenderer
           {...toolPart({
@@ -1367,8 +1367,7 @@ describe("informational renderers", () => {
         />
       )
 
-      expect(screen.getByText(statusLabel)).toBeInTheDocument()
-      expect(screen.getByText(transcriptLabel)).toBeInTheDocument()
+      expect(screen.getByRole("status")).toHaveTextContent(statusLabel)
       expect(screen.queryByRole("button")).toBeNull()
     }
   )
@@ -1377,7 +1376,7 @@ describe("informational renderers", () => {
     ["completed", "Completed"],
     ["failed", "Failed"],
   ] as const)(
-    "omits a fake transcript section when child status is %s and none was supplied",
+    "shows the summary a %s child reports",
     async (status, statusLabel) => {
       await renderTool(
         <RichToolRenderer
@@ -1393,35 +1392,13 @@ describe("informational renderers", () => {
         />
       )
 
-      expect(screen.getByText(statusLabel)).toBeInTheDocument()
+      expect(screen.getByRole("status")).toHaveTextContent(statusLabel)
       expect(screen.getByText("Validated three segments.")).toBeVisible()
-      expect(screen.queryByText("Transcript")).toBeNull()
-      expect(screen.queryByText("Transcript unavailable.")).toBeNull()
     }
   )
 
-  it("renders a supplied transcript verbatim and rejects unknown child status", async () => {
-    const { rerender } = await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "delegate_subagent",
-          args: { task: "Inspect transcript" },
-          result: {
-            name: "Child agent",
-            status: "completed",
-            transcript: "Provider transcript",
-          },
-        })}
-      />
-    )
-
-    expect(screen.getByText("Provider transcript")).toHaveAttribute(
-      "dir",
-      "auto"
-    )
-    expect(screen.queryByText("Transcript unavailable.")).toBeNull()
-
-    await rerender(
+  it("rejects an unknown child status", async () => {
+    await renderTool(
       <RichToolRenderer
         {...toolPart({
           toolName: "delegate_subagent",
