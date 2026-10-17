@@ -26,6 +26,8 @@ describe("packaged OpenCode Agent and harness configuration", () => {
 
     expect(CREATOR_AGENT_ID).toBe("agent-builder")
     expect(builder.metadata.model).toBeUndefined()
+    // OpenCode sends unknown keys to the model provider.
+    expect(builder.metadata).not.toHaveProperty("aos_ui_role")
     expect(builder.metadata).toMatchObject({
       mode: "primary",
       hidden: true,

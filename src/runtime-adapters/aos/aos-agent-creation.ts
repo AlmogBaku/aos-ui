@@ -104,13 +104,8 @@ export function withAgentCreation<Client extends CreationClient>(
   async function reportCreatedAgents(sessionId: string) {
     const baseline = baselines.get(sessionId)
     if (!baseline) return
-    let entries
-    try {
-      entries = await listAgentCatalog()
-    } catch {
-      return
-    }
-    for (const { summary, visibility } of entries) {
+    // A catalog that cannot be read reports nothing; the caller logs why.
+    for (const { summary, visibility } of await listAgentCatalog()) {
       if (baseline.has(summary.id)) continue
       baseline.add(summary.id)
       emit({
