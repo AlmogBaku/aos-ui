@@ -135,7 +135,8 @@ and `present_artifact({path, title?, mimeType?})`, where `path` is an absolute
 path. The first three are [MCP Apps](../mcp-apps.md) whose views draw the
 chart, map, or stats in the message; `present_artifact` has an App view that
 shows the file, which the gateway reads through Hermes. Each tool's description
-carries its usage guidance; there is no AOS system prompt to install.
+carries its usage guidance; there is no AOS system prompt to install, only the
+one-line [file delivery note](#file-delivery-note) below.
 
 Run it on the Hermes host, bound to loopback:
 
@@ -176,6 +177,25 @@ A running `hermes serve` connects a newly added server within about a minute
 and refreshes a Session's tool list between turns, so no restart is needed.
 When `aos-ui` is the profile's first MCP server, run `/reload-mcp` in the
 Session, or start a new Session, to pick the tools up.
+
+### File delivery note
+
+Hermes adds the note of the platform a Session runs as to its prompt, and the
+gateway runs every Session it creates as the platform `aos-ui`, which has no
+built-in note. Set one in every profile that registers `aos-ui`, so the model
+shows files with `present_artifact`:
+
+```bash
+hermes -p PROFILE config set platform_hints.aos-ui.append \
+  "When the mcp__aos_ui__present_artifact tool is available, directly or through tool_call, show every file you deliver with it instead of a MEDIA: line or a bare path."
+```
+
+The note reaches AOS Sessions only; Hermes's desktop app, terminal, and
+messaging channels keep their own notes. Hermes also hides MCP tools behind
+tool search and lists each by its first sentence, clipped to 60 characters,
+which is why `present_artifact`'s description opens with "use it instead of a
+MEDIA: line". Hermes keeps an open Session's prompt and tool list, so the note
+and a changed tool description reach new Sessions.
 
 ### Skills
 

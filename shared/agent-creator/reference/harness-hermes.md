@@ -35,6 +35,13 @@ as `'\''`.
    hermes -p <id> mcp test aos-ui    # must list present_artifact
    ```
 
+   Copy your own file delivery note too, which points the Agent at
+   `present_artifact` in AOS Sessions:
+
+   ```bash
+   hermes -p <id> config set platform_hints.aos-ui.append "$(hermes config get platform_hints.aos-ui.append)"
+   ```
+
    If your own profile has no `aos-ui`, skip this and tell the operator the new
    Agent will have no charts, maps, stats, or Artifacts.
 
