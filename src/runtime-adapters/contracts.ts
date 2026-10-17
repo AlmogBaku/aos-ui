@@ -361,6 +361,30 @@ export type ComposerModelFeed = {
   readonly subscribe: (listener: () => void) => () => void
 }
 
+/** Where a side question stands, as its tray row shows it. */
+export type SideQuestionSnapshot = {
+  /** `needs-input` waits on a request only its fork can answer. */
+  readonly state: "asking" | "answered" | "needs-input" | "failed"
+  /** The reply so far, streaming while the state is `asking`. */
+  readonly answer?: string
+  readonly error?: string
+  /** The fork answering it, once the runtime has made one. */
+  readonly sessionId?: string
+}
+
+/**
+ * One question asked in a fork of a Session, answered without touching that
+ * Session. Snapshots are immutable and stable until `subscribe` signals.
+ */
+export type SideQuestion = {
+  subscribe(listener: () => void): () => void
+  snapshot(): SideQuestionSnapshot
+  /** Stops the fork's turn if it still runs, then deletes the fork. */
+  dismiss(): Promise<void>
+  /** Keeps the fork as an ordinary Session; a later `dismiss` deletes nothing. */
+  keep(): Promise<{ sessionId: string }>
+}
+
 /** The complete provider-neutral browser interface consumed by the workspace. */
 export type HarnessRuntime = {
   assistantRuntime: AssistantRuntime
@@ -373,6 +397,11 @@ export type HarnessRuntime = {
    * source Session keeps as it is.
    */
   forkSession?: (sessionId: string) => Promise<{ sessionId: string }>
+  /**
+   * Present only where the runtime forks Sessions for this operator: asks
+   * `question` in a hidden fork of the Session and follows its answer.
+   */
+  sideQuestion?: (sessionId: string, question: string) => SideQuestion
   /**
    * Sends a turn into a Session whether or not a thread shows it, leaving every
    * thread and composer as they are. Resolves once the runtime admits the

@@ -97,6 +97,10 @@ export type WorkspaceCommandInput = {
   readonly startTurn?:
     | ((sessionId: string, text: string) => Promise<void>)
     | undefined
+  /** Asks in a hidden fork of the Session; the tray above the composer answers. */
+  readonly askSideQuestion?:
+    | ((sessionId: string, question: string) => void)
+    | undefined
   /** The workspace's alert for an action that failed. */
   readonly reportActionError: (error: unknown) => void
   readonly cancelRun: () => void
@@ -451,7 +455,7 @@ export function buildWorkspaceCommands(
     entry(
       {
         id: "command.fork",
-        names: ["fork", "btw"],
+        names: ["fork"],
         title: copy.fork.title,
         description: copy.fork.description,
         argument: { required: false, hint: copy.fork.hint },
@@ -470,6 +474,24 @@ export function buildWorkspaceCommands(
       },
       blockedBy(
         [forkSessionInBackground, notices.cannotFork],
+        [conversation, notices.emptySession]
+      )
+    ),
+    entry(
+      {
+        id: "command.btw",
+        names: ["btw"],
+        title: copy.btw.title,
+        description: copy.btw.description,
+        argument: { required: true, hint: copy.btw.hint },
+        run: async (question) => {
+          if (!input.askSideQuestion || !visibleThreadId) return
+          if (isCommand(question)) return unmoved(notices.sidePromptIsCommand)
+          input.askSideQuestion(visibleThreadId, question)
+        },
+      },
+      blockedBy(
+        [input.askSideQuestion, notices.cannotFork],
         [conversation, notices.emptySession]
       )
     ),

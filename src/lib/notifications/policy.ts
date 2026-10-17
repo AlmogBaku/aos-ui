@@ -24,6 +24,8 @@ export type ActivityContext = {
   pushActive?: boolean
   /** Agents the operator muted: their events are listed, never alerted. */
   quietAgentIds?: ReadonlySet<string>
+  /** This tab's side-question forks: never alerted, and never listed here. */
+  quietSessionIds?: ReadonlySet<string>
 }
 
 export type BrowserPermission = "default" | "granted" | "denied" | "unsupported"
@@ -69,11 +71,13 @@ export function getActivityPolicy(
     context.selection?.sessionId === event.sessionId
   // Activity the gateway re-sends on connect already happened, and a muted
   // Agent's is the operator's to look for: both are listed, never alerted.
+  // A side question's fork answers in its tray.
   const eligible =
     !event.read &&
     !event.resolved &&
     !event.replayed &&
-    !context.quietAgentIds?.has(event.agentId)
+    !context.quietAgentIds?.has(event.agentId) &&
+    !context.quietSessionIds?.has(event.sessionId)
   const category = categoryOf(event.type)
   return {
     markRead,

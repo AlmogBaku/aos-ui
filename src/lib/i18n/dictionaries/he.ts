@@ -159,6 +159,11 @@ export const he = {
       description: "שליחת הנחיה בשיחה חדשה, בלי לעזוב את השיחה הזו",
       hint: "<הנחיה>",
     },
+    btw: {
+      title: "שאלת צד",
+      description: "שאלה על השיחה הזו בלי להוסיף אותה לשיחה",
+      hint: "<שאלה>",
+    },
     title: { description: "שינוי השם של השיחה הזו", hint: "<שם>" },
     stop: {
       title: "עצירה",
@@ -242,6 +247,25 @@ export const he = {
       backgroundTurnRefused: "לא ניתן היה להתחיל את השיחה החדשה: {reason}",
       voiceUnavailable: "קלט קולי לא זמין כאן.",
     },
+  },
+  sideQuestions: {
+    one: "שאלת צד",
+    several: "{count} שאלות צד",
+    notSaved: "לא נשמרת בשיחה הזו",
+    asking: "עונה מתוך השיחה עד כה…",
+    needsInput: "נדרשת תשובה שלכם. המשיכו בפיצול כדי לענות.",
+    failed: "לא ניתן היה לענות על השאלה הזו.",
+    status: {
+      asking: "עונה",
+      answered: "נענתה",
+      "needs-input": "נדרשת תשובה שלכם",
+      failed: "נכשלה",
+    },
+    copy: "העתקה",
+    copied: "הועתק",
+    continue: "המשך בפיצול",
+    dismiss: "סגירה",
+    dismissAll: "סגירת הכול",
   },
   appearance: {
     label: "מראה",

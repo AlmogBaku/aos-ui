@@ -69,6 +69,9 @@ describe("activity visibility and delivery", () => {
     // A muted Agent's events are listed, never alerted.
     ["quiet", true, true, "agent-2", "thread-1", false, false, false],
     ["quiet", false, false, "agent-1", "thread-1", false, false, false],
+    // A side question's fork answers in its tray, so it raises nothing.
+    ["side", true, true, "agent-2", "thread-1", false, false, false],
+    ["side", false, false, "agent-1", "thread-1", false, false, false],
   ])(
     "scopes read state and delivery: held=%s visible=%s focused=%s selected=%s/%s",
     (
@@ -83,13 +86,20 @@ describe("activity visibility and delivery", () => {
     ) => {
       expect(
         getActivityPolicy(
-          held === "replayed" ? { ...event, replayed: true as const } : event,
+          held === "replayed"
+            ? { ...event, replayed: true as const }
+            : held === "side"
+              ? { ...event, type: "turn-finished", turnId: "turn-1" }
+              : event,
           {
             pageVisible,
             pageFocused,
             selection: { agentId, sessionId },
             ...(held === "quiet"
               ? { quietAgentIds: new Set([event.agentId]) }
+              : {}),
+            ...(held === "side"
+              ? { quietSessionIds: new Set([event.sessionId]) }
               : {}),
           },
           { ...defaultBrowserPreferences, enabled: true },

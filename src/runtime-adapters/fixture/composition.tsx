@@ -77,6 +77,7 @@ function FixtureRuntimeProvider({
     assistantRuntime: bundle.assistantRuntime,
     workspace: bundle.workspace,
     startTurn: bundle.startTurn,
+    sideQuestion: bundle.sideQuestion,
     composer: composerFeatureViewModel,
     activityCoverage: "workspace",
     environmentLabel: locale === "he" ? "סביבת הדגמה" : "Demo workspace",

@@ -161,6 +161,7 @@ export type Dictionary = {
     branch: CommandCopy & { hint: string }
     fork: CommandCopy & { hint: string }
     bg: CommandCopy & { hint: string }
+    btw: CommandCopy & { hint: string }
     title: { description: string; hint: string }
     stop: CommandCopy
     steer: CommandCopy & { hint: string }
@@ -201,6 +202,23 @@ export type Dictionary = {
       backgroundTurnRefused: string
       voiceUnavailable: string
     }
+  }
+  /** The tray above the composer that answers `/btw` from a hidden fork. */
+  sideQuestions: {
+    /** The tray's name for one question, and for several (`{count}`). */
+    one: string
+    several: string
+    notSaved: string
+    asking: string
+    needsInput: string
+    failed: string
+    /** What the status icon of a row says. */
+    status: Record<"asking" | "answered" | "needs-input" | "failed", string>
+    copy: string
+    copied: string
+    continue: string
+    dismiss: string
+    dismissAll: string
   }
   appearance: {
     label: string

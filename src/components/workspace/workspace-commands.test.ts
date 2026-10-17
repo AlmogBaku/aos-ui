@@ -56,6 +56,7 @@ function setup(overrides: Partial<WorkspaceCommandInput> = {}) {
     forkSession: vi.fn(async () => "fork-1"),
     forkSessionInBackground: vi.fn(async () => ({ sessionId: "side-1" })),
     startTurn: vi.fn(async () => undefined),
+    askSideQuestion: vi.fn(),
     reportActionError: vi.fn(),
     cancelRun: vi.fn(),
     childrenRunning: false,
@@ -134,6 +135,8 @@ describe("workspace commands", () => {
       { forkSession: undefined, forkSessionInBackground: undefined },
       notices.cannotFork,
     ],
+    ["/btw why now?", { askSideQuestion: undefined }, notices.cannotFork],
+    ["/btw why now?", { isThreadEmpty: true }, notices.emptySession],
     ["/bg draft it", { startTurn: undefined }, notices.cannotStartTurn],
     ["/title Q3", { canRename: false }, notices.cannotRename],
     ["/retry", { isRunning: true }, notices.waitForRun],
@@ -191,8 +194,8 @@ describe("workspace commands", () => {
       { forkSession: [["session-1"]] },
       undefined,
     ],
-    // The staying makers: `/fork` (and its alias `/btw`) and `/bg` keep the
-    // Session in view.
+    // The staying makers: `/fork` and `/bg` keep the Session in view, and
+    // `/btw` asks in a fork the tray answers, never the fork's own turn.
     [
       "/fork",
       { isRunning: true },
@@ -200,13 +203,12 @@ describe("workspace commands", () => {
       { notice: notices.forked },
     ],
     [
-      "/btw why now?",
+      "/btw which competitor did it start with?",
       {},
       {
-        forkSessionInBackground: [["session-1"]],
-        startTurn: [["side-1", "why now?"]],
+        askSideQuestion: [["session-1", "which competitor did it start with?"]],
       },
-      { notice: notices.startedInBackground },
+      undefined,
     ],
     [
       "/bg draft the brief",

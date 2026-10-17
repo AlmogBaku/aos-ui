@@ -64,6 +64,7 @@ import {
   sessionMessageRewind,
 } from "./conversation-controls"
 import { createGatewayClient } from "./gateway-client"
+import { createSideQuestions } from "./side-question"
 import { useConnectionOutage, useSessionNotice } from "./use-connection-outage"
 
 /**
@@ -454,6 +455,16 @@ function ReadyAosRuntimeProvider({
         : undefined,
     [connection, forks]
   )
+  const sideQuestion = useMemo(
+    () =>
+      forks
+        ? createSideQuestions({
+            connection,
+            markSessionRead: client.markSessionRead,
+          })
+        : undefined,
+    [client, connection, forks]
+  )
   // No thread holds the Session: the gateway joins this connection to it for
   // the prompt and answers at admission, and no projector shows the echo.
   const startTurn = useCallback(
@@ -502,6 +513,7 @@ function ReadyAosRuntimeProvider({
     workspace: client,
     createSessionDraft,
     ...(forkSession ? { forkSession } : {}),
+    ...(sideQuestion ? { sideQuestion } : {}),
     startTurn,
     interactions,
     artifacts: { resolver: artifacts },

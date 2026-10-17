@@ -110,6 +110,7 @@ type Options = {
   titles: ReadonlyMap<string, string>
   selection: ActivityContext["selection"]
   conversationExposed?: boolean
+  quietSessionIds?: ReadonlySet<string>
   /** Push notifications are authored on the gateway, in the device's language. */
   locale: Locale
   readNow: () => Date
@@ -210,6 +211,7 @@ export function useActivityCoordinator(
     quietAgentIds: new Set(
       current.current.agents.filter(({ muted }) => muted).map(({ id }) => id)
     ),
+    quietSessionIds: current.current.quietSessionIds,
   })
   /**
    * The gateway owns read state, so the browser only reports what is exposed, and
@@ -717,6 +719,7 @@ export function useActivityCoordinator(
       // Only an Agent the rail lists can be opened, so only it gets a row.
       agents: options.agents.filter(isRosterAgent),
       titles: options.titles,
+      quietSessionIds: options.quietSessionIds,
     }),
     readNow: options.readNow,
     notice: notice ? { count: attention.count, urgent: notice.urgent } : null,

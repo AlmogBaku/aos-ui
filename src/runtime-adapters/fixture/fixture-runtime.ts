@@ -19,7 +19,11 @@ import {
 } from "@assistant-ui/react"
 import { useCallback, useMemo, useState } from "react"
 
-import type { RuntimeQuestionRequest } from "@/runtime-adapters/contracts"
+import type {
+  RuntimeQuestionRequest,
+  SideQuestion,
+  SideQuestionSnapshot,
+} from "@/runtime-adapters/contracts"
 import { buildFixtureScenario } from "./fixture-scenarios"
 import { createFixtureInteractions } from "./fixture-interactions"
 import { createFixtureMcpAppAdapter } from "./fixture-mcp-apps"
@@ -467,10 +471,12 @@ function waitForChunk(delayMs: number, signal: AbortSignal) {
 /** Stream ticks between two frames of a streamed tool snapshot. */
 const FRAME_TICKS = 20
 
+const STREAM_DELAY_MS = 22
+
 export function createFixtureChatModel(
   workspace: FixtureWorkspace,
   {
-    streamDelayMs = 22,
+    streamDelayMs = STREAM_DELAY_MS,
     onQuestion,
   }: {
     streamDelayMs?: number
@@ -636,6 +642,89 @@ export function createFixtureChatModel(
   }
 }
 
+const asMessage = (like: ThreadMessageLike) =>
+  ExportedMessageRepository.fromArray([like]).messages[0]!.message
+
+/** What every fixture side question answers, a word per stream tick. */
+const SIDE_ANSWER =
+  "Contoso: its pricing page changed last week, and it's the one the board asked about."
+
+/**
+ * A side question the preview answers itself. Continue keeps it as a new
+ * Session of the same Agent holding the conversation so far, the question,
+ * and its answer.
+ */
+function createFixtureSideQuestion(
+  threadList: FixtureThreadListAdapter,
+  delayMs: number,
+  sessionId: string,
+  question: string
+): SideQuestion {
+  const listeners = new Set<() => void>()
+  const stop = new AbortController()
+  let snapshot: SideQuestionSnapshot = { state: "asking" }
+  const publish = (next: SideQuestionSnapshot) => {
+    snapshot = next
+    for (const listener of listeners) listener()
+  }
+  void (async () => {
+    let answer = ""
+    for (const word of SIDE_ANSWER.split(/(?<=\s)/u)) {
+      await waitForChunk(delayMs, stop.signal)
+      if (stop.signal.aborted) return
+      answer += word
+      publish({ state: "asking", answer })
+    }
+    publish({ state: "answered", answer })
+  })().catch((reason: unknown) =>
+    publish({ state: "failed", error: String(reason) })
+  )
+  return {
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    snapshot: () => snapshot,
+    async dismiss() {
+      stop.abort()
+    },
+    async keep() {
+      stop.abort()
+      const { workspace } = threadList
+      const [parent] = await workspace.getSessionMetadata([sessionId])
+      if (!parent) throw new Error(`Fixture Session not found: ${sessionId}`)
+      const kept = await workspace.createSession(parent.agentId, {
+        title: question,
+      })
+      const history = threadList.historyFor(kept.sessionId)
+      const { headId, messages } = await threadList.historyFor(sessionId).load()
+      for (const item of messages) await history.append(item)
+      const asked = asMessage({
+        id: `${kept.sessionId}-question`,
+        role: "user",
+        content: question,
+        createdAt: FIXTURE_NOW,
+      })
+      await history.append({
+        parentId: headId ?? messages.at(-1)?.message.id ?? null,
+        message: asked,
+      })
+      await history.append({
+        parentId: asked.id,
+        message: asMessage({
+          id: `${kept.sessionId}-answer`,
+          role: "assistant",
+          content: snapshot.answer ?? "",
+          createdAt: FIXTURE_NOW,
+        }),
+      })
+      return kept
+    },
+  }
+}
+
 /**
  * Runs the scenario's ordinary turn in a Session whether or not a thread shows
  * it, as a provider runs a prompt it admitted: the call resolves once the
@@ -653,8 +742,6 @@ async function startFixtureTurn(
   const history = threadList.historyFor(sessionId)
   const { headId, messages } = await history.load()
   const turnId = crypto.randomUUID()
-  const asMessage = (like: ThreadMessageLike) =>
-    ExportedMessageRepository.fromArray([like]).messages[0]!.message
   const user = asMessage({
     id: `${turnId}-user`,
     role: "user",
@@ -758,6 +845,16 @@ export function useFixtureRuntimeBundle({
       startFixtureTurn(threadListAdapter, chatModel, sessionId, text),
     [chatModel, threadListAdapter]
   )
+  const sideQuestion = useCallback(
+    (sessionId: string, question: string) =>
+      createFixtureSideQuestion(
+        threadListAdapter,
+        streamDelayMs ?? STREAM_DELAY_MS,
+        sessionId,
+        question
+      ),
+    [streamDelayMs, threadListAdapter]
+  )
 
   return useMemo(
     () => ({
@@ -767,7 +864,16 @@ export function useFixtureRuntimeBundle({
       interactions,
       mcpApps,
       startTurn,
+      sideQuestion,
     }),
-    [artifacts, assistantRuntime, workspace, interactions, mcpApps, startTurn]
+    [
+      artifacts,
+      assistantRuntime,
+      workspace,
+      interactions,
+      mcpApps,
+      startTurn,
+      sideQuestion,
+    ]
   )
 }
