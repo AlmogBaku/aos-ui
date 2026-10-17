@@ -574,7 +574,8 @@ function placeChild(
       const spawn = message.parts.find(
         (part) => part.source === "tool" && part.call.toolCallId === spawnId
       )
-      const startedAt = spawn?.source === "tool" ? spawn.call.startedAt : undefined
+      const startedAt =
+        spawn?.source === "tool" ? spawn.call.startedAt : undefined
       return mapCalls(
         insertToolCallAfter(
           message,
