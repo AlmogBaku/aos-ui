@@ -40,9 +40,9 @@ import {
 } from "./locale"
 import {
   findEntry,
+  findEntryStatus,
   isActiveStatus,
   subagentSpan,
-  subagentStatus,
   type ToolCallContent,
 } from "./subagent-status"
 import { formatToolDuration } from "./tool-call-presentation"
@@ -52,12 +52,8 @@ import { useToolElapsedMs } from "./tool-row-meta"
 function entryFacts(entry: ToolCallContent, labels: ToolUiLocaleLabels) {
   const subagent = readAosToolArtifact(entry.artifact)?.subagent
   const payload = readActivityPayload(entry)
-  const status =
-    subagentStatus(subagent?.status) ??
-    subagentStatus(payload?.result?.status) ??
-    (entry.result === undefined ? "running" : "completed")
   const title = activityTitle(payload, subagent) ?? labels.activities.subagent
-  return { subagent, payload, status, title }
+  return { subagent, payload, title }
 }
 
 /** The side panel's subagent transcript, named in `locale`, while one is there. */
@@ -146,6 +142,9 @@ function TranscriptPanel({
   const entry = useAuiState((state) =>
     findEntry(state.thread.messages, toolCallId)
   )
+  const status = useAuiState((state) =>
+    findEntryStatus(state.thread.messages, toolCallId)
+  )
   const closeButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     closeButton.current?.focus()
@@ -174,18 +173,18 @@ function TranscriptPanel({
     >
       <ViewHeader
         title={title}
-        detail={facts ? labels.activityStatuses[facts.status] : undefined}
+        detail={status ? labels.activityStatuses[status] : undefined}
         closeLabel={labels.subagent.closeTranscript}
         closeRef={closeButton}
         onClose={onClose}
       />
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-        {entry && facts ? (
+        {entry && facts && status ? (
           <>
             <TranscriptFacts
               entry={entry}
               subagent={facts.subagent}
-              active={isActiveStatus(facts.status)}
+              active={isActiveStatus(status)}
             />
             {brief ? <Brief text={brief} /> : null}
             {transcript.length > 0 ? (

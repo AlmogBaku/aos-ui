@@ -19,13 +19,17 @@ import { readAosToolArtifact } from "@/lib/tool-artifact"
 import { collapsePanel } from "@/lib/surfaces"
 import { cn } from "@/lib/utils"
 
-import { activityStatusOf } from "./activity"
 import {
   useToolUiLocale,
   type ToolUiActivityStatus,
   type ToolUiLocaleLabels,
 } from "./locale"
-import { isActiveStatus, longestSpan, subagentSpan } from "./subagent-status"
+import {
+  childStatusOf,
+  isActiveStatus,
+  longestSpan,
+  subagentSpan,
+} from "./subagent-status"
 import { formatToolDuration } from "./tool-call-presentation"
 import { useToolElapsedMs } from "./tool-row-meta"
 
@@ -110,21 +114,24 @@ export function SubagentGroup({
     selectParts(partsAt(state.message.parts, indices))
   )
   const { direction, labels, locale } = useToolUiLocale()
-  const statuses = parts.map(activityStatusOf)
+  const statuses = parts.map(childStatusOf)
   const counts = subagentCounts(statuses, labels)
   const active = statuses.some(isActiveStatus)
   const [chosenOpen, setOpen] = useRememberedDisclosure(
     `subagents:${parts[0]?.toolCallId ?? indices[0] ?? 0}`
   )
+  const spans = parts.map((part, index) =>
+    subagentSpan(
+      part,
+      readAosToolArtifact(part.artifact)?.subagent,
+      isActiveStatus(statuses[index]!)
+    )
+  )
+  // A settled batch reads by the durations it has: a child that reported
+  // none still holds only its call's start, which no longer ticks.
   const elapsedMs = useToolElapsedMs(
     longestSpan(
-      parts.map((part, index) =>
-        subagentSpan(
-          part,
-          readAosToolArtifact(part.artifact)?.subagent,
-          isActiveStatus(statuses[index]!)
-        )
-      )
+      active ? spans : spans.filter((span) => span?.completedAt !== undefined)
     ),
     active
   )

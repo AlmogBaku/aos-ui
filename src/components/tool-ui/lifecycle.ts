@@ -18,7 +18,7 @@ type NormalizeRichToolStateOptions = {
 }
 
 export function normalizeRichToolState(
-  part: RichToolPart,
+  part: Pick<RichToolPart, "approval" | "isError" | "result" | "status">,
   { interactive = false, overridePhase }: NormalizeRichToolStateOptions = {}
 ): RichToolState {
   const providerResolution = part.approval?.resolution

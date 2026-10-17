@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest"
 import { withAosToolArtifact } from "@/lib/tool-artifact"
 
 import { enToolUiLabels, heToolUiLabels } from "./locale"
-import { subagentLiveLine } from "./subagent-status"
+import {
+  callStatusIn,
+  childStatusOf,
+  subagentLiveLine,
+} from "./subagent-status"
 
 type Part = { type: string; text?: string; toolName?: string }
 
@@ -58,5 +62,52 @@ describe("subagentLiveLine", () => {
     ["nothing before the child writes", [brief], enToolUiLabels, undefined],
   ])("reads %s", (_case, messages, labels, line) => {
     expect(subagentLiveLine(messages, labels)).toBe(line)
+  })
+})
+
+describe("childStatusOf", () => {
+  const reporting = (status: string) =>
+    withAosToolArtifact(undefined, { subagent: { id: "child-1", status } })
+  const settled = { type: "complete" } as const
+
+  it.each([
+    [
+      "what the child Session reports, over its call",
+      { artifact: reporting("waiting"), status: settled },
+      "waiting",
+    ],
+    [
+      "a child nothing follows as unconfirmed",
+      { artifact: reporting("unknown"), status: settled },
+      "unknown",
+    ],
+    [
+      "what the call's result says when the child reports nothing",
+      { result: { status: "failed" }, status: settled },
+      "failed",
+    ],
+    [
+      "a call still at work as running",
+      { status: { type: "running" } },
+      "running",
+    ],
+    [
+      "a call awaiting the operator as waiting",
+      { status: { type: "requires-action", reason: "tool-calls" } },
+      "waiting",
+    ],
+    ["a settled call as done", { status: settled }, "completed"],
+    ["a failed call as failed", { isError: true, status: settled }, "failed"],
+  ] as const)("reads %s", (_case, part, status) => {
+    expect(childStatusOf(part)).toBe(status)
+  })
+
+  // The panel and the strip read a call straight from its turn.
+  it("gives a call read from its turn the turn's status until it has a result", () => {
+    const running = { status: { type: "running" } } as const
+    expect(childStatusOf({ status: callStatusIn(running, {}) })).toBe("running")
+    expect(
+      childStatusOf({ status: callStatusIn(running, { result: "Done" }) })
+    ).toBe("completed")
   })
 })
