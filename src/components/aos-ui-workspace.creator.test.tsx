@@ -165,26 +165,38 @@ describe("AosUiApp fixture composition", () => {
     expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
   })
 
-  it("the pending interview's Session is renamed New Agent once", async () => {
+  it("renames the pending interview's Session New Agent once, after its first turn ends", async () => {
     const firstTurn = deferred<void>()
     const view = renderNavigation(
       () => usePendingInterviewRuntime(firstTurn.promise),
       fixtureClock
     )
     await waitFor(() => expect(view.nav.selectedAgentId).toBe("agent-aster"))
-    const rename = vi.spyOn(view.runtime.workspace, "setSessionTitle")
-
+    const workspace = view.runtime.workspace
+    const rename = vi.spyOn(workspace, "setSessionTitle")
+    // The kickoff's turn reports nothing, so the test ends each turn itself.
+    vi.spyOn(workspace, "beginRunActivity").mockReturnValueOnce(undefined)
     await act(() => view.nav.openAgentBuilder())
+    await act(async () => firstTurn.resolve())
+    const interview = await waitFor(() => interviewSession(workspace)!)
+    await waitFor(() =>
+      expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
+    )
+    // The provider may not have stored the Session a rename writes to yet.
     expect(rename).not.toHaveBeenCalled()
 
-    await act(async () => firstTurn.resolve())
-    const interview = await waitFor(() =>
-      interviewSession(view.runtime.workspace)!
-    )
+    const endTurn = () =>
+      act(async () =>
+        workspace.finishRunActivity(
+          workspace.beginRunActivity(interview.sessionId),
+          "finished"
+        )
+      )
+    await endTurn()
     await waitFor(() =>
       expect(rename).toHaveBeenCalledWith(interview.sessionId, "New Agent")
     )
-    await act(() => view.nav.selectAgent(draftAgentId(interview.sessionId)))
+    await endTurn()
     expect(rename).toHaveBeenCalledOnce()
   })
 

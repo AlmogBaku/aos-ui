@@ -273,6 +273,11 @@ export function useWorkspaceNavigation({
   const localDraftId = useRef<string | null>(null)
   const localDraftRemoteId = useRef<string | null>(null)
   const localDraftOperation = useRef<symbol | null>(null)
+  /** The started interview whose Session is named once its first turn ends. */
+  const unnamedInterview = useRef<{
+    sessionId: string
+    itemId: string
+  } | null>(null)
   const [conversationDraft, setConversationDraft] =
     useState<ConversationDraftSelection | null>(null)
   const pendingSelection = useRef<symbol | null>(null)
@@ -653,13 +658,11 @@ export function useWorkspaceNavigation({
     // the creator itself is never a place the operator can be.
     const isInterview = agentId === agentCreator?.id
     const rowAgentId = isInterview ? draftAgentId(activeThreadId) : agentId
-    // An interview started without a title would take its kickoff as one, so
-    // its Session is named New Agent once, as soon as it exists.
     if (isInterview && mainItemId)
-      void runtime.threads
-        .getItemById(mainItemId)
-        .rename(dictionary.actions.newAgent)
-        .catch(() => undefined)
+      unnamedInterview.current = {
+        sessionId: activeThreadId,
+        itemId: mainItemId,
+      }
     setPreferredAgentId(rowAgentId)
     setManuallyOpened((current) => ({
       ...current,
@@ -669,14 +672,7 @@ export function useWorkspaceNavigation({
     }))
     lastSelected.current.set(rowAgentId, activeThreadId)
     updateRoute({ agentId: rowAgentId, sessionId: activeThreadId }, "replace")
-  }, [
-    activeThreadId,
-    agentCreator?.id,
-    dictionary.actions.newAgent,
-    mainItemId,
-    runtime,
-    updateRoute,
-  ])
+  }, [activeThreadId, agentCreator?.id, mainItemId, updateRoute])
 
   useEffect(() => {
     if (
@@ -1252,9 +1248,26 @@ export function useWorkspaceNavigation({
     }
   )
 
+  /**
+   * An interview started without a title would take its kickoff as one, so
+   * its Session is named New Agent once its first turn ends, when the
+   * provider has stored the Session a rename writes to.
+   */
+  const nameInterview = useEffectEvent((sessionId: string) => {
+    const interview = unnamedInterview.current
+    if (interview?.sessionId !== sessionId) return
+    unnamedInterview.current = null
+    void runtime.threads
+      .getItemById(interview.itemId)
+      .rename(dictionary.actions.newAgent)
+      .catch(() => undefined)
+  })
+
   useEffect(() => {
     if (!workspace.subscribeActivity) return
     return workspace.subscribeActivity((event) => {
+      if (event.type === "turn-finished" || event.type === "turn-failed")
+        nameInterview(event.sessionId)
       if (
         event.type === "agent-ready" ||
         event.type === "agent-activation-failed"
