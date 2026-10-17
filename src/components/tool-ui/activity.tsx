@@ -27,17 +27,16 @@ import { cn } from "@/lib/utils"
 
 import { useChildSessionControls } from "./child-session-controls"
 import { LazyVisualBoundary } from "./lazy-boundary"
-import { normalizeRichToolState } from "./lifecycle"
 import {
   useToolUiLocale,
   type ToolUiActivityKind,
   type ToolUiActivityStatus,
 } from "./locale"
 import {
+  childStatusOf,
   isActiveStatus,
   subagentLiveLine,
   subagentSpan,
-  subagentStatus,
 } from "./subagent-status"
 import { formatToolDuration } from "./tool-call-presentation"
 import { useToolElapsedMs } from "./tool-row-meta"
@@ -125,21 +124,6 @@ export const activityTitle = (
   payload?.args.task ??
   payload?.args.description
 
-/**
- * How far a subagent row's child has got: what its child Session reports,
- * else what its call's result says, else the call's own progress.
- */
-export function activityStatusOf(part: RichToolPart): ToolUiActivityStatus {
-  const subagent = readAosToolArtifact(part.artifact)?.subagent
-  return (
-    subagentStatus(subagent?.status) ??
-    getChildStatus(
-      readActivityPayload(part),
-      normalizeRichToolState(part).phase
-    )
-  )
-}
-
 /** Why the child's turn failed, as its own transcript reports it. */
 function failureOf(messages: readonly ThreadMessage[] | undefined) {
   const status = messages?.findLast(
@@ -174,13 +158,11 @@ export function ActivityTool({
   /** Whether the child's requests open under the row to be answered. */
   requests?: boolean
 }) {
-  const state = normalizeRichToolState(part)
   const { direction, labels, locale } = useToolUiLocale()
   const controls = useChildSessionControls()
   const title = activityTitle(payload, subagent) ?? labels.activities[kind]
   const summary = subagent?.summary ?? payload.result?.summary
-  const status =
-    subagentStatus(subagent?.status) ?? getChildStatus(payload, state.phase)
+  const status = childStatusOf(part)
   const active = isActiveStatus(status)
   const elapsedMs = useToolElapsedMs(
     subagentSpan(part, subagent, active),
@@ -607,23 +589,4 @@ function ActivityStatusIcon({ status }: { status: ToolUiActivityStatus }) {
       <span className="sr-only">{labels.activityStatuses[status]}</span>
     </span>
   )
-}
-
-function getChildStatus(
-  payload: ActivityPayload | undefined,
-  parentPhase: ReturnType<typeof normalizeRichToolState>["phase"]
-): ActivityChildStatus {
-  if (payload?.result?.status) return payload.result.status
-  if (parentPhase === "running" || parentPhase === "submitting")
-    return "running"
-  if (parentPhase === "pending") return "waiting"
-  if (
-    parentPhase === "failed" ||
-    parentPhase === "cancelled" ||
-    parentPhase === "expired" ||
-    parentPhase === "unavailable"
-  ) {
-    return "failed"
-  }
-  return "completed"
 }

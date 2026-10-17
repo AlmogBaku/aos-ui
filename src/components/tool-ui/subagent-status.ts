@@ -1,8 +1,11 @@
 import type { ThreadMessage, ToolCallMessagePart } from "@assistant-ui/react"
 
-import type { AosSubagent } from "@/lib/tool-artifact"
+import { readAosToolArtifact, type AosSubagent } from "@/lib/tool-artifact"
+
+import { normalizeRichToolState } from "./lifecycle"
 
 import type { ToolUiActivityStatus, ToolUiLocaleLabels } from "./locale"
+import type { RichToolPart, RichToolPhase } from "./types"
 import { toolActionKind } from "./tool-call-presentation"
 
 /** A provider's free-form subagent status, when it names one AOS shows. */
@@ -35,6 +38,70 @@ export function subagentStatus(
       return undefined
   }
 }
+
+/** What the call's own result says of the child, when it says one of these. */
+const RESULT_STATUSES = new Set<string>([
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+])
+
+/** The child's progress as its call's own progress reads. */
+function phaseStatus(phase: RichToolPhase): ToolUiActivityStatus {
+  switch (phase) {
+    case "running":
+    case "submitting":
+      return "running"
+    case "pending":
+      return "waiting"
+    case "failed":
+    case "cancelled":
+    case "expired":
+    case "unavailable":
+      return "failed"
+    default:
+      return "completed"
+  }
+}
+
+/** The call fields the child's status reads. */
+export type ChildCall = Pick<
+  RichToolPart,
+  "artifact" | "approval" | "isError" | "result" | "status"
+>
+
+/**
+ * How far a subagent's child has got, the one way every view reads it: what
+ * its child Session reports, else what its call's result says, else the
+ * call's own progress.
+ */
+export function childStatusOf(part: ChildCall): ToolUiActivityStatus {
+  const reported = subagentStatus(
+    readAosToolArtifact(part.artifact)?.subagent?.status
+  )
+  if (reported) return reported
+  const { result } = part
+  const said =
+    typeof result === "object" && result !== null && "status" in result
+      ? result.status
+      : undefined
+  if (typeof said === "string" && RESULT_STATUSES.has(said))
+    return said as ToolUiActivityStatus
+  return phaseStatus(normalizeRichToolState(part).phase)
+}
+
+/**
+ * The status Assistant UI gives a call read straight from its turn: the
+ * turn's own until the call has a result.
+ */
+export const callStatusIn = (
+  message: Pick<ThreadMessage, "status">,
+  part: Pick<ToolCallContent, "result">
+): ChildCall["status"] =>
+  part.result === undefined && message.status
+    ? (message.status as ChildCall["status"])
+    : { type: "complete" }
 
 /** Whether the child is still at work, or waiting on the operator. */
 export const isActiveStatus = (status: ToolUiActivityStatus) =>
@@ -132,17 +199,38 @@ export type ToolCallContent = Extract<
   { type: "tool-call" }
 >
 
-/** The call `toolCallId` names, wherever the thread's transcripts nest it. */
-export function findEntry(
+/** The call `toolCallId` names and its turn, wherever transcripts nest it. */
+function locateEntry(
   messages: readonly ThreadMessage[],
   toolCallId: string
-): ToolCallContent | undefined {
+): { part: ToolCallContent; message: ThreadMessage } | undefined {
   for (const message of messages)
     for (const part of message.content) {
       if (part.type !== "tool-call") continue
-      if (part.toolCallId === toolCallId) return part
-      const nested = part.messages && findEntry(part.messages, toolCallId)
+      if (part.toolCallId === toolCallId) return { part, message }
+      const nested = part.messages && locateEntry(part.messages, toolCallId)
       if (nested) return nested
     }
   return undefined
+}
+
+/** The call `toolCallId` names, wherever the thread's transcripts nest it. */
+export const findEntry = (
+  messages: readonly ThreadMessage[],
+  toolCallId: string
+) => locateEntry(messages, toolCallId)?.part
+
+/** How far the child of the entry `toolCallId` names has got. */
+export function findEntryStatus(
+  messages: readonly ThreadMessage[],
+  toolCallId: string
+): ToolUiActivityStatus | undefined {
+  const found = locateEntry(messages, toolCallId)
+  return (
+    found &&
+    childStatusOf({
+      ...found.part,
+      status: callStatusIn(found.message, found.part),
+    })
+  )
 }

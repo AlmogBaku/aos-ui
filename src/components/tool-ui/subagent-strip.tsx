@@ -16,7 +16,12 @@ import { collapsePanel } from "@/lib/surfaces"
 import { ActivityTool, subagentActivityPayload } from "./activity"
 import { useToolUiLocale, type ToolUiActivityStatus } from "./locale"
 import { SubagentCounts, SubagentList, subagentCounts } from "./subagent-group"
-import { findEntry, isActiveStatus, subagentStatus } from "./subagent-status"
+import {
+  callStatusIn,
+  childStatusOf,
+  findEntry,
+  isActiveStatus,
+} from "./subagent-status"
 import type { RichToolPart } from "./types"
 
 type StripEntry = { readonly id: string; readonly status: ToolUiActivityStatus }
@@ -34,7 +39,10 @@ function createStripSelector() {
         if (part.type !== "tool-call") return []
         const subagent = readAosToolArtifact(part.artifact)?.subagent
         if (!subagent) return []
-        const status = subagentStatus(subagent.status) ?? "unknown"
+        const status = childStatusOf({
+          ...part,
+          status: callStatusIn(message, part),
+        })
         return [{ id: part.toolCallId, status }]
       })
       return entries.some(({ status }) => isActiveStatus(status)) ? entries : []

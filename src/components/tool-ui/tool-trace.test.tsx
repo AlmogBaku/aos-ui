@@ -407,6 +407,10 @@ describe("subagents", () => {
       "Reconcile September's supplier invoices",
       "Draft follow-ups to the trade-show leads",
     ]
+    /**
+     * The first child reports how long it took; every one holds its spawning
+     * call's start, as the projector places it.
+     */
     const batch = (statuses: readonly string[]): ThreadMessageLike[] => [
       {
         id: "u1",
@@ -422,12 +426,14 @@ describe("subagents", () => {
           toolName: "subagent",
           args: {},
           argsText: "{}",
+          timing: { startedAt: Date.UTC(2026, 0, 1) },
           artifact: withAosToolArtifact(undefined, {
             subagent: {
               id: `child-${index}`,
               childSessionId: `child-${index}`,
               goal: GOALS[index],
               status,
+              ...(index === 0 ? { durationMs: 72_000 } : {}),
             },
           }),
         })),
@@ -441,6 +447,7 @@ describe("subagents", () => {
         false,
         true,
         ["1 running", "1 done", "1 failed"],
+        false,
       ],
       [
         "collapses once every child is done",
@@ -448,6 +455,7 @@ describe("subagents", () => {
         false,
         false,
         ["2 done", "1 status unavailable"],
+        true,
       ],
       [
         "keeps the reader's own close over a running child",
@@ -455,6 +463,7 @@ describe("subagents", () => {
         true,
         false,
         ["1 running", "1 waiting"],
+        false,
       ],
       [
         "keeps the reader's own open once every child is done",
@@ -462,10 +471,11 @@ describe("subagents", () => {
         true,
         true,
         ["1 done", "1 failed"],
+        true,
       ],
     ] as const)(
       "counts each child by its own state and %s",
-      async (_case, statuses, toggles, open, counts) => {
+      async (_case, statuses, toggles, open, counts, settled) => {
         const user = userEvent.setup()
         render(
           <LocalThread
@@ -482,6 +492,9 @@ describe("subagents", () => {
         for (const count of counts)
           expect(within(header).getByText(count)).toBeInTheDocument()
         expect(screen.queryByText(GOALS[0]!) !== null).toBe(open)
+        // A settled batch reads by its longest reported duration, even with a
+        // child that reported none; a working one reads from its start.
+        expect(within(header).queryByText("1m 12s") !== null).toBe(settled)
       }
     )
   })
