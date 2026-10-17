@@ -45,7 +45,10 @@ function withheldFiles(args: FixturePresentationCall["args"]) {
  * A deterministic App view that speaks the MCP Apps postMessage protocol by
  * hand: it initializes, shows the tool input and result the host sends, calls
  * one app-only tool, sends one `ui/message`, asks for full screen and back,
- * shows the display mode the host reports, and reports its height.
+ * shows the display mode the host reports, and reports its height. It keeps a
+ * value in its own storage, and tries what its sandbox must refuse: a
+ * connection through its sandbox page, which shares its origin, and taking
+ * that page's frame to an address the view never declared.
  */
 const FIXTURE_APP_HTML = `<!doctype html>
 <html>
@@ -65,7 +68,10 @@ const FIXTURE_APP_HTML = `<!doctype html>
 <button id="ask" type="button">Ask for a summary</button>
 <button id="fullscreen" type="button">Fullscreen</button>
 <button id="inline" type="button">Inline view</button>
+<button id="leave" type="button">Leave the sandbox</button>
 <p id="mode">…</p>
+<p id="storage">…</p>
+<p id="network">…</p>
 <p id="status" role="status"></p>
 <script>
   let nextId = 1
@@ -120,6 +126,21 @@ const FIXTURE_APP_HTML = `<!doctype html>
     requestMode("fullscreen"))
   document.getElementById("inline").addEventListener("click",
     requestMode("inline"))
+  try {
+    localStorage.setItem("launch-board", "kept")
+    show("storage", "Storage: " + localStorage.getItem("launch-board"))
+  } catch {
+    show("storage", "Storage: refused")
+  }
+  window.parent.fetch("https://files.invalid/board").then(
+    () => show("network", "Network: reached"),
+    () => show("network", "Network: refused"))
+  // The sandbox page runs the script, so the navigation is its own.
+  document.getElementById("leave").addEventListener("click", () => {
+    const script = window.parent.document.createElement("script")
+    script.textContent = 'location.href = "https://files.invalid/"'
+    window.parent.document.body.append(script)
+  })
   document.getElementById("ask").addEventListener("click", async () => {
     const result = await request("ui/message", { role: "user",
       content: [{ type: "text", text: "Summarize the launch board" }] })
