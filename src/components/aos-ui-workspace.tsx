@@ -31,18 +31,11 @@ import {
 } from "@/components/assistant-ui/elements/thread.aui"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
-import {
-  McpAppPipPanel,
-  useMcpAppPip,
-} from "@/components/mcp-apps/mcp-app-card"
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { LazyVisualBoundary } from "@/components/tool-ui/lazy-boundary"
 import { SubagentStrip } from "@/components/tool-ui/subagent-strip"
-import {
-  SubagentTranscript,
-  useSubagentTranscriptPip,
-} from "@/components/tool-ui/subagent-transcript"
+import { useSidePanelView } from "@/components/side-panel-view"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import {
@@ -55,7 +48,6 @@ import {
   ArtifactDataUI,
   ArtifactOutputs,
   ArtifactWorkspaceProvider,
-  artifactPanelFailure,
   createArtifactMessageStabilizer,
   useHasSessionOutputs,
 } from "@/components/artifacts"
@@ -253,10 +245,8 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
   ...shell
 }: WorkspaceShellProps) {
   // The side panel holds the pip view, or a subagent's transcript, when one
-  // is active. The transcript is dispatched here, beside the thread it reads.
-  const app = useMcpAppPip(shell.locale)
-  const transcript = useSubagentTranscriptPip(shell.locale)
-  const pip = transcript ?? app
+  // is active.
+  const panel = useSidePanelView(shell.locale)
   // The shell frames the list in its own bordered block, which goes with it.
   const hasOutputs = useHasSessionOutputs()
 
@@ -264,19 +254,10 @@ const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
     <WorkspaceShell
       {...shell}
       artifactOutputs={hasOutputs ? <ArtifactOutputs /> : undefined}
-      sidePanel={
-        transcript ? (
-          <SubagentTranscript locale={shell.locale} />
-        ) : app ? (
-          <McpAppPipPanel
-            locale={shell.locale}
-            failureNotice={artifactPanelFailure}
-          />
-        ) : null
-      }
-      sidePanelOpen={pip !== undefined}
-      sidePanelLabel={pip?.title}
-      onCloseSidePanel={pip?.leave}
+      sidePanel={panel?.content ?? null}
+      sidePanelOpen={panel !== undefined}
+      sidePanelLabel={panel?.title}
+      onCloseSidePanel={panel?.leave}
     >
       <ArtifactDataUI />
       {children}

@@ -24,7 +24,6 @@ import type { ArtifactMessage } from "@/artifacts/artifacts"
 import {
   ArtifactDataUI,
   ArtifactWorkspaceProvider,
-  artifactPanelFailure,
   createArtifactMessageStabilizer,
 } from "@/components/artifacts"
 import {
@@ -40,10 +39,7 @@ import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
 import { DocumentLocale } from "@/components/document-locale"
 import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
 import { ThemeProvider } from "@/components/theme-provider"
-import {
-  McpAppPipPanel,
-  useMcpAppPip,
-} from "@/components/mcp-apps/mcp-app-card"
+import { useSidePanelView } from "@/components/side-panel-view"
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import {
@@ -263,8 +259,9 @@ function GuestConversationShell({
   connectionStatus?: ConnectionNotice
   sessionStatus?: SessionNotice
 }) {
-  // The side panel holds the pip view when one is active.
-  const pip = useMcpAppPip(locale)
+  // The side panel holds the pip view, or a subagent's transcript, when one
+  // is active.
+  const panel = useSidePanelView(locale)
   return (
     <WorkspaceConversationShell
       locale={locale}
@@ -288,17 +285,10 @@ function GuestConversationShell({
           </div>
         </header>
       }
-      sidePanel={
-        pip ? (
-          <McpAppPipPanel
-            locale={locale}
-            failureNotice={artifactPanelFailure}
-          />
-        ) : null
-      }
-      sidePanelOpen={pip !== undefined}
-      sidePanelLabel={pip?.title}
-      onCloseSidePanel={pip?.leave}
+      sidePanel={panel?.content ?? null}
+      sidePanelOpen={panel !== undefined}
+      sidePanelLabel={panel?.title}
+      onCloseSidePanel={panel?.leave}
     >
       <ArtifactDataUI />
       <WorkspaceStatusNotice

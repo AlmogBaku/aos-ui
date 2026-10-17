@@ -603,33 +603,31 @@ describe("subagents", () => {
     it("answers a permission request the child asked before writing anything", async () => {
       const user = userEvent.setup()
       const child = controls()
-      render(
+      const request = {
+        id: "early-permission",
+        action: "Send email",
+        prompt: "Send the follow-up to dana.levi@example.com?",
+        options: [
+          { id: "once", kind: "allow-once" },
+          { id: "deny", kind: "reject-once" },
+        ],
+      }
+      const waiting = { ...running, status: "waiting" }
+      const { rerender } = render(
         <ChildSessionControlsProvider controls={child}>
           <LocalThread
             toolFallback={AosToolPresentation}
             initialMessages={threadWith(
-              {
-                ...running,
-                approvals: [
-                  {
-                    id: "early-permission",
-                    action: "Run bash",
-                    prompt: "Delete the build directory?",
-                    options: [
-                      { id: "once", kind: "allow-once" },
-                      { id: "deny", kind: "reject-once" },
-                    ],
-                  },
-                ],
-              },
+              { ...waiting, approvals: [request] },
               []
             )}
           />
         </ChildSessionControlsProvider>
       )
 
+      expect(await screen.findByText("Needs your answer")).toBeVisible()
       const choices = await screen.findByRole("group", {
-        name: "Delete the build directory?",
+        name: request.prompt,
       })
       await user.click(
         within(choices).getByRole("button", { name: "Allow once" })
@@ -640,6 +638,22 @@ describe("subagents", () => {
         "once",
         true
       )
+
+      // Once answered, the waiting row reads what the child does instead.
+      rerender(
+        <ChildSessionControlsProvider controls={child}>
+          <LocalThread
+            key="answered"
+            toolFallback={AosToolPresentation}
+            initialMessages={threadWith(
+              { ...waiting, approvals: [{ ...request, optionId: "once" }] },
+              [childTurn([{ type: "text", text: "Sending the follow-up." }])]
+            )}
+          />
+        </ChildSessionControlsProvider>
+      )
+      expect(await screen.findByText("Sending the follow-up.")).toBeVisible()
+      expect(screen.queryByText("Needs your answer")).toBeNull()
     })
 
     it("answers the child's question on the card", async () => {
