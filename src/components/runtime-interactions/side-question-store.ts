@@ -71,6 +71,7 @@ export class SideQuestionStore {
   dismiss(id: string) {
     const entry = this.#entries.find((candidate) => candidate.id === id)
     if (!entry) return Promise.resolve()
+    this.#unfollowEntry(id)
     this.#replace(id, undefined)
     return entry.handle.dismiss()
   }
@@ -80,11 +81,15 @@ export class SideQuestionStore {
     const entry = this.#entries.find((candidate) => candidate.id === id)
     if (!entry) throw new Error("This side question is closed.")
     const { sessionId } = await entry.handle.keep()
-    this.#unfollow.get(id)?.()
-    this.#unfollow.delete(id)
+    this.#unfollowEntry(id)
     this.#quiet = new Set([...this.#quiet].filter((fork) => fork !== sessionId))
     this.#replace(id, undefined)
     return { agentId: entry.agentId, sessionId }
+  }
+
+  #unfollowEntry(id: string) {
+    this.#unfollow.get(id)?.()
+    this.#unfollow.delete(id)
   }
 
   #follow(id: string, handle: SideQuestion) {

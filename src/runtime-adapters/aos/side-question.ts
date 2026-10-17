@@ -72,6 +72,8 @@ class AcpSideQuestion implements SideQuestion {
   #failure: string | undefined
   /** Dismissed or kept: no later call touches the fork. */
   #retired = false
+  /** Continue is unarchiving the fork, which no Dismiss may delete meanwhile. */
+  #keeping = false
   #onSettle: (() => void) | undefined
 
   constructor(options: SideQuestionOptions, sessionId: string, text: string) {
@@ -175,7 +177,7 @@ class AcpSideQuestion implements SideQuestion {
   }
 
   async dismiss() {
-    if (this.#retired) return
+    if (this.#retired || this.#keeping) return
     this.#retired = true
     await this.#asked
     const fork = this.#fork
@@ -190,17 +192,24 @@ class AcpSideQuestion implements SideQuestion {
   }
 
   async keep() {
-    await this.#asked
-    const fork = this.#fork
-    if (this.#retired || fork === undefined)
-      throw new Error(this.#failure ?? "This side question has no fork.")
-    await this.#options.connection.updateSession({
-      sessionId: fork,
-      archived: false,
-    })
-    this.#retired = true
-    this.#release()
-    return { sessionId: fork }
+    if (this.#retired || this.#keeping)
+      throw new Error("This side question is closed.")
+    this.#keeping = true
+    try {
+      await this.#asked
+      const fork = this.#fork
+      if (fork === undefined)
+        throw new Error(this.#failure ?? "This side question has no fork.")
+      await this.#options.connection.updateSession({
+        sessionId: fork,
+        archived: false,
+      })
+      this.#retired = true
+      this.#release()
+      return { sessionId: fork }
+    } finally {
+      this.#keeping = false
+    }
   }
 }
 
