@@ -20,7 +20,9 @@ describe("Vite development server", () => {
       isPreview: true,
     })
 
-    expect(config.server?.allowedHosts).toEqual(["anakin.tail33f954.ts.net"])
-    expect(config.preview?.allowedHosts).toEqual(["anakin.tail33f954.ts.net"])
+    // The MCP App sandbox's name joins the hosts an operator lists.
+    const allowed = ["anakin.tail33f954.ts.net", "sandbox.localhost"]
+    expect(config.server?.allowedHosts).toEqual(allowed)
+    expect(config.preview?.allowedHosts).toEqual(allowed)
   })
 })
