@@ -215,12 +215,19 @@ export default function McpAppFrame({
   // sandbox page's policy names as the one that may frame it.
   const pageOrigin = window.location.origin
   const atLaneOrigin = showsViewsAt(origins, pageOrigin)
+  // The view's own stable origin when its domain names one, else the shared
+  // sandbox, by the rule the server serves that page's policy by.
+  const policyOrigins = useMemo(
+    () =>
+      atLaneOrigin ? sandboxPolicyOrigins(origins, view.domain) : undefined,
+    [atLaneOrigin, origins, view.domain]
+  )
   // A renewal changes only the passes, which the address leaves out, so the
   // view keeps running.
   const sandboxUrl = useMemo(
     () =>
-      atLaneOrigin
-        ? sandboxPageUrl(origins, {
+      policyOrigins
+        ? sandboxPageUrl(policyOrigins.sandboxOrigin, {
             allow,
             csp: view.csp,
             fileLocations: Object.values(view.files?.addresses ?? {}).flatMap(
@@ -228,7 +235,7 @@ export default function McpAppFrame({
             ),
           })
         : undefined,
-    [allow, atLaneOrigin, origins, view.csp, view.files]
+    [allow, policyOrigins, view.csp, view.files]
   )
   const { files, renew } = useAppFiles({
     files: view.files,
@@ -409,12 +416,9 @@ export default function McpAppFrame({
   useEffect(() => {
     const element = frame.current
     const proxy = element?.contentWindow
-    if (!element || !proxy || !origins) return
+    if (!element || !proxy || !policyOrigins) return
     const admit = createRateLimiter()
-    const appliedCsp = appliedMcpAppCsp({
-      ...sandboxPolicyOrigins(origins),
-      csp: view.csp,
-    })
+    const appliedCsp = appliedMcpAppCsp({ ...policyOrigins, csp: view.csp })
     const bridge = new AppBridge(
       null,
       HOST_INFO,
@@ -581,7 +585,7 @@ export default function McpAppFrame({
       if (viewInitialized) bridge.teardownResource({}).catch(() => {})
       void bridge.close()
     }
-  }, [adapter, origins, target, view])
+  }, [adapter, policyOrigins, target, view])
 
   useEffect(() => {
     const bridge = bridgeRef.current

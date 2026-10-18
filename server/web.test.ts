@@ -42,12 +42,17 @@ const GUEST: LaneOrigins = {
   mcpAppSandboxOrigin: SANDBOX,
   mcpAppFrameAncestors: LANE_ORIGINS,
 }
+/** The stable origins' wildcard, and a stable host's key label under it. */
+const STABLE_ORIGINS = "https://*.mcp-apps.example.test:8443"
+const KEY = "0123456789abcdef0123456789abcdef"
+const STABLE_ORIGIN = `https://${KEY}.mcp-apps.example.test:8443`
 
 /**
  * A built app with a shell, the installable files, the sandbox page and its
- * script, and a build id, whose operator file names origins of its own.
+ * script, and a build id, whose operator file names origins of its own; its
+ * lanes have the stable origins `stable` names, by default none.
  */
-async function builtApp() {
+async function builtApp(stable: Partial<LaneOrigins> = {}) {
   const root = await mkdtemp(join(tmpdir(), "aos-web-"))
   directories.push(root)
   await writeFile(join(root, "index.html"), "<html>shell</html>")
@@ -75,13 +80,13 @@ async function builtApp() {
       surface: "operator",
       root,
       runtimeConfigFile,
-      origins: OPERATOR,
+      origins: { ...OPERATOR, ...stable },
     }),
     guest: createWebApp({
       surface: "guest",
       root,
       runtimeConfigFile,
-      origins: GUEST,
+      origins: { ...GUEST, ...stable },
     }),
   }
 }
@@ -135,29 +140,37 @@ describe("web server", () => {
     }
   })
 
-  it("serves each surface's page framing the sandbox origin alone", async () => {
-    const { guest, operator } = await builtApp()
+  it.each([
+    ["the sandbox origin alone", {}, "frame-src https://sandbox.example.test"],
+    [
+      "the sandbox origin and the stable origins' wildcard",
+      { mcpAppStableOrigins: STABLE_ORIGINS },
+      `frame-src https://sandbox.example.test ${STABLE_ORIGINS}`,
+    ],
+  ] as const)(
+    "serves each surface's page framing %s",
+    async (_label, stable, frameSrc) => {
+      const { guest, operator } = await builtApp(stable)
 
-    const document = await get(guest, "/", GUEST.publicOrigins[0])
-    const policy = document.headers.get("content-security-policy")
-    expect(policy).toContain("frame-ancestors 'none'")
-    expect(policy).toContain("img-src 'self' https: data: blob:")
-    expect(directives(policy, "frame-src")).toEqual([
-      "frame-src https://sandbox.example.test",
-    ])
-    expect(document.headers.get("referrer-policy")).toBe("no-referrer")
-    expect(document.headers.get("x-frame-options")).toBe("DENY")
-    expect(
-      (await get(operator, "/")).headers.get("content-security-policy")
-    ).toBe("frame-src https://sandbox.example.test")
-  })
+      const document = await get(guest, "/", GUEST.publicOrigins[0])
+      const policy = document.headers.get("content-security-policy")
+      expect(policy).toContain("frame-ancestors 'none'")
+      expect(policy).toContain("img-src 'self' https: data: blob:")
+      expect(directives(policy, "frame-src")).toEqual([frameSrc])
+      expect(document.headers.get("referrer-policy")).toBe("no-referrer")
+      expect(document.headers.get("x-frame-options")).toBe("DENY")
+      expect(
+        (await get(operator, "/")).headers.get("content-security-policy")
+      ).toBe(frameSrc)
+    }
+  )
 
   it.each(["operator", "guest"] as const)(
     "serves the sandbox address from the %s listener: the page under the view's own policy, which every lane's pages may frame, its script, and nothing else",
     async (surface) => {
       const app = (await builtApp())[surface]
       const sandbox = SANDBOX
-      const page = sandboxPageUrl(OPERATOR, {
+      const page = sandboxPageUrl(SANDBOX, {
         allow: "camera",
         csp: { connectDomains: ["https://api.example.test"] },
         // A file on any lane's origin is the view's to read, and a location
@@ -197,6 +210,61 @@ describe("web server", () => {
         "/healthz",
       ])
         expect((await get(app, path, sandbox)).status).toBe(404)
+    }
+  )
+
+  it.each(["operator", "guest"] as const)(
+    "serves exactly a stable host from the %s listener as the sandbox address, under the policy for its own origin",
+    async (surface) => {
+      const app = (await builtApp({ mcpAppStableOrigins: STABLE_ORIGINS }))[
+        surface
+      ]
+      // A view may not reach its own sandbox origin; the shared one is just
+      // another host to it.
+      const csp = { connectDomains: [STABLE_ORIGIN, SANDBOX] }
+      const page = sandboxPageUrl(STABLE_ORIGIN, {
+        allow: "",
+        csp,
+        fileLocations: [],
+      })
+
+      const response = await app(new Request(page ?? ""))
+      expect(response.status).toBe(200)
+      const policy = response.headers.get("content-security-policy")
+      expect(directives(policy, "connect-src")).toEqual([
+        `connect-src ${SANDBOX}`,
+      ])
+      expect(directives(policy, "frame-ancestors")).toEqual([
+        `frame-ancestors ${LANE_ORIGINS.join(" ")}`,
+      ])
+      expect(
+        (await get(app, MCP_APP_SANDBOX_SCRIPT_PATH, STABLE_ORIGIN)).status
+      ).toBe(200)
+      for (const path of ["/", "/api/v1/healthz", "/runtime-config.json"])
+        expect((await get(app, path, STABLE_ORIGIN)).status).toBe(404)
+    }
+  )
+
+  it.each([
+    ["a 31-digit key", `https://${KEY.slice(1)}.mcp-apps.example.test:8443`],
+    ["a 33-digit key", `https://${KEY}0.mcp-apps.example.test:8443`],
+    [
+      "a label that is not hex",
+      `https://${"g".repeat(32)}.mcp-apps.example.test:8443`,
+    ],
+    ["an extra label", `https://${KEY}.extra.mcp-apps.example.test:8443`],
+    ["another port", `https://${KEY}.mcp-apps.example.test:9443`],
+    ["no port", `https://${KEY}.mcp-apps.example.test`],
+    ["the domain itself", "https://mcp-apps.example.test:8443"],
+  ])(
+    "refuses every path on %s below the stable origins",
+    async (_label, origin) => {
+      const { operator } = await builtApp({
+        mcpAppStableOrigins: STABLE_ORIGINS,
+      })
+
+      for (const path of [MCP_APP_SANDBOX_PATH, "/", "/runtime-config.json"])
+        expect((await get(operator, path, origin)).status).toBe(404)
     }
   )
 
@@ -484,6 +552,68 @@ describe("web server settings", () => {
       },
       /^http:\/\/localhost:3000 is in both AOS_UI_PUBLIC_ORIGIN and AOS_UI_GUEST_PUBLIC_ORIGIN$/u,
     ],
+    // The stable origins name one wildcard origin whose stable hosts a view's
+    // domain can name.
+    ...[
+      "http://mcp-apps.localhost:3000",
+      "http://*.mcp-apps.localhost:3000/",
+      "http://*.*.mcp-apps.localhost:3000",
+      "http://*.mcp-apps.localhost:3000,http://*.other.localhost:3000",
+      "ws://*.mcp-apps.localhost:3000",
+      "http://*.mcp-apps.localhost:80",
+      "http://*.mcp-apps.localhost:65536",
+      "http://*.mcp-apps.local_host:3000",
+      // Too long for a key label below it: 286 characters to a domain's 253.
+      `http://*.${Array(4).fill("a".repeat(60)).join(".")}.localhost:3000`,
+    ].map((value): [Record<string, string>, RegExp] => [
+      { AOS_UI_MCP_APP_STABLE_ORIGINS: value },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS: .* is not a wildcard origin/u,
+    ]),
+    // No lane's host nor the sandbox's is at or below their domain.
+    [
+      { AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.localhost:3000" },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain no lane or sandbox host is at or below, but AOS_UI_PUBLIC_ORIGIN names http:\/\/localhost:3000$/u,
+    ],
+    [
+      {
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.example.test",
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "https://*.example.test:8443",
+      },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain no lane or sandbox host is at or below, but AOS_UI_PUBLIC_ORIGIN names https:\/\/aos\.example\.test$/u,
+    ],
+    [
+      {
+        AOS_UI_GUEST_WEB_PORT: "3001",
+        AOS_UI_GUEST_PUBLIC_ORIGIN: "http://guest.mcp-apps.localhost:3001",
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.localhost:3000",
+      },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain no lane or sandbox host is at or below, but AOS_UI_GUEST_PUBLIC_ORIGIN names http:\/\/guest\.mcp-apps\.localhost:3001$/u,
+    ],
+    [
+      { AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.sandbox.localhost:3005" },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain no lane or sandbox host is at or below, but AOS_UI_MCP_APP_SANDBOX_ORIGIN names http:\/\/sandbox\.localhost:3000$/u,
+    ],
+    [
+      {
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.example.test",
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.example.test",
+      },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must be https:, since AOS_UI_PUBLIC_ORIGIN lists https:\/\/aos\.example\.test/u,
+    ],
+    [
+      { AOS_UI_MCP_APP_STABLE_ORIGINS: "https://*.mcp-apps.example.test" },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS is not a loopback origin, but AOS_UI_PUBLIC_ORIGIN lists http:\/\/localhost:3000, which is$/u,
+    ],
+    [
+      {
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.example.test",
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "https://*.mcp-apps.localhost",
+      },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS is a loopback origin, but AOS_UI_PUBLIC_ORIGIN lists https:\/\/aos\.example\.test, which is not$/u,
+    ],
   ])("refuses %o", (values, message) => {
     expect(() =>
       readWebServerConfig(env({ ...OPERATOR_LANE, ...GUEST_LANE, ...values }))
@@ -504,6 +634,103 @@ describe("web server settings", () => {
       mcpAppFrameAncestors: ["https://aos.example.test"],
     })
   })
+
+  it.each([
+    [
+      "lowercased, on its own port",
+      {
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.example.test",
+        AOS_UI_MCP_APP_STABLE_ORIGINS: " HTTPS://*.MCP-Apps.Example.test:8443 ",
+      },
+      "https://*.mcp-apps.example.test:8443",
+    ],
+    [
+      "on the default port",
+      {
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.example.test",
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "https://*.mcp-apps.example.test",
+      },
+      "https://*.mcp-apps.example.test",
+    ],
+    [
+      "below localhost beside loopback lanes",
+      {
+        ...OPERATOR_LANE,
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.localhost:3000",
+      },
+      "http://*.mcp-apps.localhost:3000",
+    ],
+    [
+      "unset as empty, as Compose leaves it",
+      { ...OPERATOR_LANE, AOS_UI_MCP_APP_STABLE_ORIGINS: "" },
+      undefined,
+    ],
+  ])("reads the stable origins %s", (_label, values, stable) => {
+    expect(
+      readWebServerConfig(env(values)).listeners[0]?.origins.mcpAppStableOrigins
+    ).toBe(stable)
+  })
+
+  it.each([
+    [
+      "set",
+      "http://*.mcp-apps.localhost:3000",
+      expect.objectContaining({
+        mcpAppStableOrigins: "http://*.mcp-apps.localhost:3000",
+      }),
+      200,
+      404,
+    ],
+    [
+      "unset",
+      undefined,
+      expect.not.objectContaining({ mcpAppStableOrigins: expect.anything() }),
+      404,
+      200,
+    ],
+  ] as const)(
+    "with the stable origins %s, every listener reports them over any its file names, and serves a stable host as one or as a lane's",
+    async (_label, stable, reported, sandboxPage, shell) => {
+      const { root, runtimeConfigFile } = await builtApp()
+      await writeFile(
+        runtimeConfigFile,
+        JSON.stringify({
+          mode: "aos",
+          mcpAppStableOrigins: "https://*.configured.example.test",
+        })
+      )
+      const apps: WebApp[] = []
+      startWebServer(
+        readWebServerConfig(
+          env({
+            ...OPERATOR_LANE,
+            ...GUEST_LANE,
+            AOS_UI_GUEST_WEB_PORT: "3001",
+            AOS_UI_MCP_APP_STABLE_ORIGINS: stable,
+            AOS_UI_STATIC_ROOT: root,
+            AOS_UI_RUNTIME_CONFIG_FILE: runtimeConfigFile,
+          })
+        ),
+        ({ fetch }) => {
+          apps.push(fetch)
+          return { stop() {} }
+        }
+      )
+
+      const host = `http://${KEY}.mcp-apps.localhost:3000`
+      for (const app of apps) {
+        expect(await (await get(app, "/runtime-config.json")).json()).toEqual(
+          reported
+        )
+        expect((await get(app, MCP_APP_SANDBOX_PATH, host)).status).toBe(
+          sandboxPage
+        )
+        expect((await get(app, "/", host)).status).toBe(shell)
+      }
+    }
+  )
 
   it("binds a wildcard host once the private container exposure is acknowledged", () => {
     expect(

@@ -45,6 +45,8 @@ describe("browser runtime configuration", () => {
         publicOrigins: ["https://aos.example.test/"],
         mcpAppSandboxOrigin: "https://sandbox.example.test",
       },
+      // And the stable origins are one wildcard origin.
+      { mode: "aos", mcpAppStableOrigins: "https://mcp-apps.example.test" },
     ]) {
       expect(parsePublicRuntimeConfiguration(input)).toEqual({
         status: "unavailable",
@@ -57,6 +59,7 @@ describe("browser runtime configuration", () => {
     const origins = {
       publicOrigins: ["https://guest.example.test"],
       mcpAppSandboxOrigin: "https://sandbox.example.test",
+      mcpAppStableOrigins: "https://*.mcp-apps.example.test",
       mcpAppFrameAncestors: [
         "https://aos.example.test",
         "https://guest.example.test",

@@ -1,6 +1,8 @@
 import {
+  isMcpAppPolicyOrigin,
   MCP_APP_SANDBOX_PATH,
   mcpAppSandboxPolicy,
+  McpUiDomainSchema,
   type McpUiCsp,
 } from "@harness-gw/sdk/protocol"
 
@@ -38,25 +40,96 @@ export type SandboxPolicyOrigins = {
 }
 
 /**
- * The origins every sandbox policy is built for, by the server that sends it
- * and the host that reports what it applies: every lane's pages, framing the
- * one sandbox.
+ * A stable host's first label: `mcpAppStableOriginKey` (`@harness-gw/sdk/node`)
+ * of the URL the gateway dials the view's server at.
  */
-export const sandboxPolicyOrigins = (
-  origins: LaneOrigins
-): SandboxPolicyOrigins => ({
-  frameAncestors: origins.mcpAppFrameAncestors,
-  sandboxOrigin: origins.mcpAppSandboxOrigin,
-})
+const STABLE_KEY = /^[0-9a-f]{32}$/u
+
+/** `<scheme>://*.<domain>[:port]`, as `AOS_UI_MCP_APP_STABLE_ORIGINS` names it. */
+const WILDCARD = /^(https?:)\/\/\*\.([^/?#@:]+)(:\d+)?$/u
+
+/** The stable origins' wildcard in parts; `port` is empty when it names none. */
+export type StableOrigins = { scheme: string; domain: string; port: string }
 
 /**
- * The sandbox page address for one view, at the sandbox origin with the
+ * The parts of `wildcard`, a lowercase `<scheme>://*.<domain>[:port]` whose
+ * stable hosts, `<key>.<domain>`, a view's `domain` can name and a sandbox
+ * policy can serve: `undefined` for any other value, or none.
+ */
+export function stableOriginsOf(
+  wildcard: string | undefined
+): StableOrigins | undefined {
+  const [, scheme, domain, port = ""] = WILDCARD.exec(wildcard ?? "") ?? []
+  if (scheme === undefined || domain === undefined) return undefined
+  const host = `${"0".repeat(32)}.${domain}`
+  return McpUiDomainSchema.safeParse(host).success &&
+    isMcpAppPolicyOrigin(`${scheme}//${host}${port}`)
+    ? { scheme, domain, port }
+    : undefined
+}
+
+/** Whether a lowercase host name is one key label directly below `domain`. */
+const isStableName = (name: string, domain: string) =>
+  name.endsWith(`.${domain}`) &&
+  STABLE_KEY.test(name.slice(0, -domain.length - 1))
+
+/**
+ * The origins one view's sandbox policy is built for, by the server that
+ * sends it and the host that reports what it applies: every lane's pages,
+ * framing the view's own stable origin when its `domain` names a stable host
+ * (the wildcard's scheme, that host, and the wildcard's port), else the one
+ * shared sandbox.
+ */
+export function sandboxPolicyOrigins(
+  origins: LaneOrigins,
+  domain?: string
+): SandboxPolicyOrigins {
+  const stable = stableOriginsOf(origins.mcpAppStableOrigins)
+  const name = domain?.toLowerCase()
+  return {
+    frameAncestors: origins.mcpAppFrameAncestors,
+    sandboxOrigin:
+      stable !== undefined &&
+      name !== undefined &&
+      isStableName(name, stable.domain)
+        ? `${stable.scheme}//${name}${stable.port}`
+        : origins.mcpAppSandboxOrigin,
+  }
+}
+
+/**
+ * The sandbox a request's `Host` names, as the origins its page's policy is
+ * built for: the shared sandbox's host and port, or exactly a stable host with
+ * the wildcard's port. Any other host at or below the stable origins' domain
+ * is `"refused"`, and any other host is a lane's, `undefined`. Hosts compare
+ * case-insensitively, as DNS names do.
+ */
+export function sandboxAt(
+  origins: LaneOrigins,
+  host: string
+): SandboxPolicyOrigins | "refused" | undefined {
+  const requested = host.toLowerCase()
+  if (requested === new URL(origins.mcpAppSandboxOrigin).host)
+    return sandboxPolicyOrigins(origins)
+  const stable = stableOriginsOf(origins.mcpAppStableOrigins)
+  if (stable === undefined) return undefined
+  const port = /:\d*$/u.exec(requested)?.[0] ?? ""
+  const name = requested.slice(0, requested.length - port.length)
+  if (name !== stable.domain && !name.endsWith(`.${stable.domain}`))
+    return undefined
+  return isStableName(name, stable.domain) && port === stable.port
+    ? sandboxPolicyOrigins(origins, name)
+    : "refused"
+}
+
+/**
+ * The sandbox page address for one view, at its sandbox origin with the
  * view's declared lists in the query, from which the server rebuilds the
  * view's policy; `undefined` when it would be longer than
  * `MAX_SANDBOX_PAGE_URL_LENGTH`.
  */
 export function sandboxPageUrl(
-  origins: LaneOrigins,
+  sandboxOrigin: string,
   { allow, csp, fileLocations }: SandboxPageView
 ): string | undefined {
   const query = new URLSearchParams()
@@ -65,7 +138,7 @@ export function sandboxPageUrl(
     for (const domain of csp?.[list] ?? []) query.append(list, domain)
   for (const location of fileLocations) query.append(FILE_PARAMETER, location)
   const search = query.toString()
-  const url = `${origins.mcpAppSandboxOrigin}${MCP_APP_SANDBOX_PATH}${search ? `?${search}` : ""}`
+  const url = `${sandboxOrigin}${MCP_APP_SANDBOX_PATH}${search ? `?${search}` : ""}`
   return url.length > MAX_SANDBOX_PAGE_URL_LENGTH ? undefined : url
 }
 
@@ -123,10 +196,12 @@ export function namesSandboxFile(pathname: string): boolean {
  */
 export const SERVICE_WORKER_HEADER = "service-worker"
 
-/** Whether a request's `Host` names the sandbox address. */
-export const isSandboxHost = (sandboxOrigin: string, host: string) =>
-  host.toLowerCase() === new URL(sandboxOrigin).host
-
-/** A lane page's policy: it frames the sandbox origin and nothing else. */
-export const lanePageFrameSrc = (sandboxOrigin: string) =>
-  `frame-src ${sandboxOrigin}`
+/**
+ * A lane page's policy: it frames the shared sandbox, the stable origins'
+ * wildcard when it is set, and nothing else.
+ */
+export const lanePageFrameSrc = ({
+  mcpAppSandboxOrigin,
+  mcpAppStableOrigins,
+}: LaneOrigins) =>
+  `frame-src ${mcpAppSandboxOrigin}${mcpAppStableOrigins ? ` ${mcpAppStableOrigins}` : ""}`

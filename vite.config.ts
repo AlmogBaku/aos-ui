@@ -28,13 +28,13 @@ import {
   type Surface,
 } from "./shared/lane-origins.ts"
 import {
-  isSandboxHost,
   lanePageFrameSrc,
   MCP_APP_SANDBOX_SCRIPT_PATH,
   namesSandboxFile,
+  sandboxAt,
   sandboxPagePolicy,
-  sandboxPolicyOrigins,
   SERVICE_WORKER_HEADER,
+  stableOriginsOf,
 } from "./shared/mcp-app-sandbox.ts"
 import { requestedFile } from "./server/static.ts"
 import {
@@ -232,12 +232,13 @@ const notFound = (response: ServerResponse) => {
 
 /**
  * The web server's MCP App sandbox rule (`server/web.ts`), ahead of every
- * other answer these servers give: on the sandbox address only the sandbox
- * page, under its view's policy, and its relay script, each by the file the
- * request names and never as a service worker's script; on the lane's own
- * addresses neither, by that file or by any path whose last segment names one,
- * as these servers rewrite paths to files, and pages that frame the sandbox
- * origin alone.
+ * other answer these servers give: on the sandbox address, and exactly on each
+ * stable host, only the sandbox page, under its view's policy for that
+ * origin, and its relay script, each by the file the request names and never
+ * as a service worker's script; on any other host at or below the stable
+ * origins' domain nothing; on the lane's own addresses neither file, by that
+ * file or by any path whose last segment names one, as these servers rewrite
+ * paths to files, and pages that frame the sandbox origins alone.
  */
 function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
   const secure = (server: ViteDevServer | PreviewServer, root: string) => {
@@ -253,15 +254,12 @@ function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
       const url = new URL(`http://request.invalid${request.url ?? "/"}`)
       const requested = requestedFile(root, url.pathname)
       const file = requested === undefined ? undefined : files.get(requested)
-      if (
-        !isSandboxHost(origins.mcpAppSandboxOrigin, request.headers.host ?? "")
-      ) {
+      const sandbox = sandboxAt(origins, request.headers.host ?? "")
+      if (sandbox === "refused") return notFound(response)
+      if (sandbox === undefined) {
         if (file !== undefined || namesSandboxFile(url.pathname))
           return notFound(response)
-        response.setHeader(
-          "content-security-policy",
-          lanePageFrameSrc(origins.mcpAppSandboxOrigin)
-        )
+        response.setHeader("content-security-policy", lanePageFrameSrc(origins))
         return next()
       }
       if (
@@ -274,7 +272,7 @@ function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
       if (file === MCP_APP_SANDBOX_PATH) {
         response.setHeader(
           "content-security-policy",
-          sandboxPagePolicy(sandboxPolicyOrigins(origins), url.searchParams)
+          sandboxPagePolicy(sandbox, url.searchParams)
         )
         response.setHeader("cache-control", "no-store")
       }
@@ -461,9 +459,10 @@ export default defineConfig(({ mode }) => {
   const originsOf: LaneOriginsOf = (request) =>
     originsAt(request.socket.localPort)
   // Read once now, so a malformed setting stops the server and names itself;
-  // the sandbox's name, which no port changes, joins the allowed hosts.
-  const sandboxName = new URL(originsAt(DEV_SERVER_PORT).mcpAppSandboxOrigin)
-    .hostname
+  // the sandbox's name and the stable origins' domain, which no port changes,
+  // join the allowed hosts.
+  const origins = originsAt(DEV_SERVER_PORT)
+  const stableDomain = stableOriginsOf(origins.mcpAppStableOrigins)?.domain
   const allowedHosts = (
     environment.AOS_UI_ALLOWED_HOSTS ??
     environment.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
@@ -471,20 +470,21 @@ export default defineConfig(({ mode }) => {
     ?.split(",")
     .map((host) => host.trim())
     .filter(Boolean)
-    .concat(sandboxName)
+    .concat(
+      new URL(origins.mcpAppSandboxOrigin).hostname,
+      stableDomain === undefined ? [] : `.${stableDomain}`
+    )
   const gatewayProxy = {
     "/api/v1": {
       target: environment.AOS_UI_GATEWAY_TARGET ?? "http://127.0.0.1:4100",
       changeOrigin: false,
       ws: true,
-      // The sandbox address never reaches the gateway, WebSockets included.
+      // No sandbox address, nor any host at or below the stable origins'
+      // domain, reaches the gateway, WebSockets included.
       bypass: (request: IncomingMessage) =>
-        isSandboxHost(
-          originsOf(request).mcpAppSandboxOrigin,
-          request.headers.host ?? ""
-        )
-          ? false
-          : undefined,
+        sandboxAt(originsOf(request), request.headers.host ?? "") === undefined
+          ? undefined
+          : false,
     },
   }
 

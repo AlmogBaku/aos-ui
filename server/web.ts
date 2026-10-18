@@ -5,12 +5,11 @@ import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
 
 import type { LaneOrigins, Surface } from "../shared/lane-origins"
 import {
-  isSandboxHost,
   lanePageFrameSrc,
   MCP_APP_SANDBOX_SCRIPT_PATH,
   namesSandboxFile,
+  sandboxAt,
   sandboxPagePolicy,
-  sandboxPolicyOrigins,
   SERVICE_WORKER_HEADER,
   type SandboxPolicyOrigins,
 } from "../shared/mcp-app-sandbox"
@@ -23,8 +22,9 @@ export type WebAppOptions = {
   /** The operator's public runtime configuration; the guest's is generated. */
   runtimeConfigFile: string
   /**
-   * The surface's lane: its pages' origins, the MCP App sandbox origin, and
-   * every lane's origins, which may frame the sandbox page.
+   * The surface's lane: its pages' origins, the MCP App sandbox origin, the
+   * stable origins' wildcard when it is set, and every lane's origins, which
+   * may frame the sandbox page.
    */
   origins: LaneOrigins
 }
@@ -36,12 +36,15 @@ export type WebAppOptions = {
  */
 const GUEST_RESERVED_PATHS = ["/auth", "/sw.js", "/manifest.webmanifest"]
 
-/** Each surface's page policy: both frame the sandbox origin alone. */
+/**
+ * Each surface's page policy: both frame the sandbox origin, and the stable
+ * origins when they are set, alone.
+ */
 function pageHeaders(
   surface: Surface,
-  sandboxOrigin: string
+  origins: LaneOrigins
 ): Record<string, string> {
-  const frameSrc = lanePageFrameSrc(sandboxOrigin)
+  const frameSrc = lanePageFrameSrc(origins)
   return surface === "guest"
     ? {
         "content-security-policy": `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; media-src 'self' blob:; font-src 'self' data:; ${frameSrc}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
@@ -141,18 +144,18 @@ async function readOperatorConfig(path: string) {
  * The gateway answers `/api/v1` beside it, so every other `/api` path is
  * absent here.
  *
- * The sandbox address serves the MCP App sandbox page, which every lane's
- * pages may frame, and its script alone, never as a service worker's script;
- * the lane's own addresses serve neither, by the file a request resolves to
+ * The sandbox address, and exactly each stable host, serves the MCP App
+ * sandbox page, which every lane's pages may frame, under the policy for its
+ * own origin, and its script alone, never as a service worker's script; any
+ * other host at or below the stable origins' domain serves nothing. The
+ * lane's own addresses serve neither file, by the file a request resolves to
  * and by any path whose last segment names one.
  */
 export function createWebApp(options: WebAppOptions) {
   const { origins, root } = options
-  const sandboxOrigin = origins.mcpAppSandboxOrigin
-  const policyOrigins = sandboxPolicyOrigins(origins)
   const guest = options.surface === "guest"
   const serveStatic = createStaticHandler({ root })
-  const headers = pageHeaders(options.surface, sandboxOrigin)
+  const headers = pageHeaders(options.surface, origins)
   const page = (response: Response) => withHeaders(response, headers)
   const sandboxPage = requestedFile(root, MCP_APP_SANDBOX_PATH)
   const sandboxFiles = new Set([
@@ -177,7 +180,11 @@ export function createWebApp(options: WebAppOptions) {
     })
   }
 
-  async function sandbox(request: Request, file: string | undefined) {
+  async function sandbox(
+    request: Request,
+    file: string | undefined,
+    policyOrigins: SandboxPolicyOrigins
+  ) {
     if (!sandboxFiles.has(file) || request.headers.has(SERVICE_WORKER_HEADER))
       return notFound()
     if (request.method !== "GET" && request.method !== "HEAD")
@@ -194,7 +201,9 @@ export function createWebApp(options: WebAppOptions) {
   return async (request: Request): Promise<Response> => {
     const { host, pathname } = new URL(request.url)
     const file = requestedFile(root, pathname)
-    if (isSandboxHost(sandboxOrigin, host)) return sandbox(request, file)
+    const sandboxed = sandboxAt(origins, host)
+    if (sandboxed === "refused") return notFound()
+    if (sandboxed !== undefined) return sandbox(request, file, sandboxed)
     if (sandboxFiles.has(file) || namesSandboxFile(pathname))
       return page(notFound())
     if (guest && guestReserved(pathname)) return page(notFound())

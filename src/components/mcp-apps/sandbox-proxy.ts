@@ -3,12 +3,13 @@ import type { LaneOrigins } from "@shared/lane-origins"
 /**
  * MCP Apps render behind a double iframe, as the spec's sandbox proxy does.
  * The outer frame is a static page (`public/mcp-app-sandbox.html`) on the
- * deployment's one sandbox origin, apart from every lane's origins, under the
- * view's own policy as its header; it holds only a relay, which creates the
+ * deployment's one sandbox origin, or on the view's own stable origin when its
+ * `domain` names one, apart from every lane's origins, under the view's own
+ * policy as its header; it holds only a relay, which creates the
  * inner App frame once the host hands it the view's HTML
  * (`ui/notifications/sandbox-resource-ready`) and then forwards messages
- * between the host and that frame alone. The view runs on the sandbox origin,
- * with storage of its own, and neither frame may navigate the top window, open
+ * between the host and that frame alone. The view runs on that origin, with
+ * storage of its own, and neither frame may navigate the top window, open
  * popups, or submit forms.
  */
 export const SANDBOX_PROXY_SANDBOX = "allow-scripts allow-same-origin"

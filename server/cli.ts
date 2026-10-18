@@ -108,8 +108,8 @@ type Serve = (options: {
 }) => { stop(force?: boolean): void }
 
 /**
- * Starts one listener per surface. Whichever receives the sandbox address
- * serves the sandbox page, which every lane's pages may frame.
+ * Starts one listener per surface. Whichever receives the sandbox address, or
+ * a stable host, serves the sandbox page, which every lane's pages may frame.
  */
 export function startWebServer(config: WebServerConfig, serve: Serve) {
   return config.listeners.map(({ surface, host, port, origins }) =>

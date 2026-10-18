@@ -18,6 +18,7 @@ import {
 } from "@/runtime-adapters/contracts"
 
 import {
+  sandboxAt,
   sandboxPagePolicy,
   sandboxPageUrl,
   sandboxPolicyOrigins,
@@ -563,10 +564,92 @@ describe("MCP App sandbox", () => {
     expect(reported).toEqual({ connectDomains: ["https://api.example.test"] })
     // The server's header for the same view connects to exactly those.
     const query = new URL(
-      sandboxPageUrl(origins, { allow: "", csp, fileLocations: [] }) ?? ""
+      sandboxPageUrl(SANDBOX, { allow: "", csp, fileLocations: [] }) ?? ""
     ).searchParams
     const policy = sandboxPagePolicy(sandboxPolicyOrigins(origins), query)
     expect(policy).toContain(
+      `connect-src ${reported?.connectDomains?.join(" ")};`
+    )
+  })
+
+  /** A stable host's key label, and the wildcard the lane frames them by. */
+  const KEY = "0123456789abcdef0123456789abcdef"
+  const STABLE_ORIGINS = "http://*.mcp-apps.localhost:3000"
+  const stableLane = (mcpAppStableOrigins?: string) => ({
+    ...LANE.origins,
+    ...(mcpAppStableOrigins ? { mcpAppStableOrigins } : {}),
+  })
+
+  it.each([
+    [
+      "from its stable origin, by the wildcard's scheme and port, when its domain names one",
+      STABLE_ORIGINS,
+      `${KEY}.mcp-apps.localhost`,
+      `http://${KEY}.mcp-apps.localhost:3000`,
+    ],
+    [
+      "from the shared sandbox while the stable origins are unset",
+      undefined,
+      `${KEY}.mcp-apps.localhost`,
+      SANDBOX,
+    ],
+    [
+      "from the shared sandbox when its domain is below another",
+      STABLE_ORIGINS,
+      `${KEY}.other.localhost`,
+      SANDBOX,
+    ],
+    [
+      "from the shared sandbox when its domain's key is not 32 hex digits",
+      STABLE_ORIGINS,
+      `${KEY.slice(1)}.mcp-apps.localhost`,
+      SANDBOX,
+    ],
+  ] as const)(
+    "loads a view %s",
+    async (_label, stableOrigins, domain, origin) => {
+      render(
+        frame({
+          origins: stableLane(stableOrigins),
+          view: { html: "<p>app</p>", domain },
+        })
+      )
+      const sandbox = screen.getByLabelText("show_board app", {
+        selector: "iframe",
+      })
+      await waitFor(() =>
+        expect(sandbox).toHaveAttribute("src", `${origin}/mcp-app-sandbox.html`)
+      )
+    }
+  )
+
+  it("reports the domains its stable page's policy applies, as the server serves that page by its host", async () => {
+    const origins = stableLane(STABLE_ORIGINS)
+    const stable = `http://${KEY}.mcp-apps.localhost:3000`
+    const csp = {
+      connectDomains: [stable, SANDBOX, "https://api.example.test"],
+    }
+    render(
+      frame({
+        origins,
+        view: { html: "<p>app</p>", csp, domain: `${KEY}.mcp-apps.localhost` },
+      })
+    )
+    const sandbox = screen.getByLabelText("show_board app", {
+      selector: "iframe",
+    })
+    await waitFor(() => expect(sandbox).toHaveAttribute("src"))
+
+    // The view may not reach its own origin; the shared sandbox is another.
+    const reported = bridges.at(-1)?.capabilities.sandbox?.csp
+    expect(reported).toEqual({
+      connectDomains: [SANDBOX, "https://api.example.test"],
+    })
+    const page = new URL(sandbox.getAttribute("src") ?? "")
+    const served = sandboxAt(origins, page.host)
+    if (served === undefined || served === "refused")
+      throw new Error(`${page.host} is no sandbox`)
+    expect(sandboxPagePolicy(served, page.searchParams)).toContain(
       `connect-src ${reported?.connectDomains?.join(" ")};`
     )
   })
