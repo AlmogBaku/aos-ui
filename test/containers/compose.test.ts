@@ -191,7 +191,7 @@ describe("container orchestration", () => {
     )
   })
 
-  it("defaults each lane's origins to loopback on its published port, Caddy's sandbox address the web server's", () => {
+  it("defaults each lane's origins to loopback on its published port, and the one sandbox, Caddy's and the web server's, to the operator's", () => {
     const { caddy, web } = composeConfig(
       ["compose.yaml", "compose.hermes.yaml"],
       harnessEnvironment("hermes", {
@@ -204,31 +204,22 @@ describe("container orchestration", () => {
       AOS_UI_PUBLIC_ORIGIN: "http://localhost:3400,http://127.0.0.1:3400",
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3400",
       AOS_UI_GUEST_PUBLIC_ORIGIN: "http://localhost:3401,http://127.0.0.1:3401",
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3401",
     })
-    expect(caddy.environment).toMatchObject({
-      AOS_UI_MCP_APP_SANDBOX_ORIGIN:
-        web.environment?.AOS_UI_MCP_APP_SANDBOX_ORIGIN,
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN:
-        web.environment?.AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN,
-    })
+    expect(caddy.environment?.AOS_UI_MCP_APP_SANDBOX_ORIGIN).toBe(
+      "http://sandbox.localhost:3400"
+    )
   })
 
   it.each(["openclaw", "opencode"] as const)(
-    "gives the %s overlay's guest lane one sandbox address in Caddy and the web server",
+    "gives the %s overlay's guest lane its origins on the guest port",
     (runtime) => {
-      const { caddy, web } = composeConfig(
+      const { web } = composeConfig(
         ["compose.yaml", `compose.${runtime}.yaml`],
         harnessEnvironment(runtime)
       ).services
 
-      expect(web.environment).toMatchObject({
-        AOS_UI_GUEST_PUBLIC_ORIGIN:
-          "http://localhost:3001,http://127.0.0.1:3001",
-        AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3001",
-      })
-      expect(caddy.environment?.AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN).toBe(
-        "http://sandbox.localhost:3001"
+      expect(web.environment?.AOS_UI_GUEST_PUBLIC_ORIGIN).toBe(
+        "http://localhost:3001,http://127.0.0.1:3001"
       )
     }
   )
@@ -245,7 +236,7 @@ describe("container orchestration", () => {
     )
   })
 
-  it("wires each Caddy site to its own lane, on loopback, without a log", () => {
+  it("wires each Caddy site to its own lane and the one sandbox, on loopback, without a log", () => {
     const operator = readFileSync(resolve(root, "deploy/Caddyfile"), "utf8")
     const guest = readFileSync(
       resolve(root, "deploy/caddy/guest.caddy"),
@@ -254,27 +245,26 @@ describe("container orchestration", () => {
     const directives = (source: string) =>
       source.replace(/#.*$/gmu, "").split(/\s+/u)
 
-    for (const [site, host, sandbox, gateway, web] of [
+    for (const [site, host, gateway, web] of [
       [
         caddySite(operator, "http://:18080"),
         "AOS_UI_PUBLIC_HOST",
-        "AOS_UI_MCP_APP_SANDBOX_ORIGIN",
         "AOS_UI_GATEWAY_UPSTREAM:gateway:4100",
         "AOS_UI_WEB_UPSTREAM:web:4200",
       ],
       [
         caddySite(guest, "http://:18081"),
         "AOS_UI_GUEST_PUBLIC_HOST",
-        "AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN",
         "AOS_UI_GATEWAY_GUEST_UPSTREAM:gateway:4101",
         "AOS_UI_WEB_GUEST_UPSTREAM:web:4201",
       ],
     ] as const) {
       expect(site).toContain("bind {$AOS_UI_CADDY_BIND:127.0.0.1}")
-      // The sandbox address, by its exact host and port, reaches the web
-      // server whole: ahead of the foreign-host refusal and the gateway.
+      // The one sandbox address, by its exact host and port, reaches the web
+      // server whole from either site: ahead of the foreign-host refusal and
+      // the gateway.
       const sandboxRoute = site.indexOf(
-        `@sandbox expression \`"{$${sandbox}}".endsWith("//" + {http.request.hostport})\`\n\t\treverse_proxy @sandbox {$${web}}`
+        `@sandbox expression \`"{$AOS_UI_MCP_APP_SANDBOX_ORIGIN}".endsWith("//" + {http.request.hostport})\`\n\t\treverse_proxy @sandbox {$${web}}`
       )
       const foreign = site.indexOf(
         `@foreign {\n\t\t\tnot host 127.0.0.1 localhost\n\t\t\tnot host {$${host}:localhost}\n\t\t}\n\t\trespond @foreign 421`
@@ -428,7 +418,6 @@ describe("container orchestration", () => {
       AOS_UI_WEB_UPSTREAM: "127.0.0.1:4200",
       AOS_UI_WEB_GUEST_UPSTREAM: "127.0.0.1:4201",
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18080",
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18081",
     })
     expect(web!.environment).toMatchObject({
       AOS_UI_WEB_HOST: "127.0.0.1",
@@ -437,7 +426,6 @@ describe("container orchestration", () => {
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18080",
       AOS_UI_GUEST_PUBLIC_ORIGIN:
         "http://127.0.0.1:18081,http://localhost:18081",
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18081",
     })
     expect(toolsMcp!.command?.join(" ")).toContain("--host 127.0.0.1")
   })
@@ -445,9 +433,8 @@ describe("container orchestration", () => {
   it("keeps each lane's origins overridable under host networking", () => {
     const lanes = {
       AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
-      AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.aos.example.test",
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos-sandbox.example",
       AOS_UI_GUEST_PUBLIC_ORIGIN: "https://guest.example.test",
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.guest.example.test",
     }
     const { caddy, web } = composeConfig(
       ["compose.yaml", "compose.hermes.yaml", "deploy/compose.host.yaml"],
@@ -455,11 +442,9 @@ describe("container orchestration", () => {
     ).services
 
     expect(web.environment).toMatchObject(lanes)
-    expect(caddy.environment).toMatchObject({
-      AOS_UI_MCP_APP_SANDBOX_ORIGIN: lanes.AOS_UI_MCP_APP_SANDBOX_ORIGIN,
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN:
-        lanes.AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN,
-    })
+    expect(caddy.environment?.AOS_UI_MCP_APP_SANDBOX_ORIGIN).toBe(
+      lanes.AOS_UI_MCP_APP_SANDBOX_ORIGIN
+    )
   })
 
   it("moves bundled OpenCode onto host loopback with the host-network overlay", () => {
@@ -539,8 +524,8 @@ describe("container orchestration", () => {
     expect(guest.build?.target).toBe("web")
     expect(guest.environment).toMatchObject({
       AOS_UI_GUEST_WEB_PORT: "4201",
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN:
-        services.caddy.environment?.AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN,
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN:
+        services.caddy.environment?.AOS_UI_MCP_APP_SANDBOX_ORIGIN,
     })
     expect(guest.ports).toBeUndefined()
   })

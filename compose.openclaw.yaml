@@ -50,14 +50,12 @@ services:
       AOS_UI_GUEST_WEB_HOST: 0.0.0.0
       AOS_UI_GUEST_WEB_PORT: "4201"
       AOS_UI_GUEST_PUBLIC_ORIGIN: ${AOS_UI_GUEST_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001},http://127.0.0.1:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}}
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: &guest-sandbox-origin ${AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}}
     expose:
       - "4201"
 
   caddy:
     environment:
       AOS_UI_GUEST_PUBLIC_HOST: ${AOS_UI_GUEST_PUBLIC_HOST:-localhost}
-      AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN: *guest-sandbox-origin
     ports:
       - ${AOS_UI_GUEST_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}:18081
     configs:

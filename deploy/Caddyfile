@@ -4,9 +4,10 @@
 # authentication, so this wiring is its guard; test/containers/compose.test.ts
 # checks it.
 #
-# Each lane's MCP App sandbox address, a name or a port of its own, reaches the
-# aos-ui server whole, /api/v1 included: the server answers it with the sandbox
-# page and its script alone, and the gateway never serves it.
+# The MCP App sandbox address, a name or a port of its own and one for both
+# lanes, reaches the aos-ui server whole from whichever site receives it,
+# /api/v1 included: the server answers it with the sandbox page and its script
+# alone, and the gateway never serves it.
 #
 # Each site binds loopback unless AOS_UI_CADDY_BIND says otherwise: a
 # host-network deployment ignores Compose `ports:`, so the default lives here.
