@@ -62,12 +62,22 @@ request origin sees the sandbox address, not the calling Agent or tool.
 default. In one browser profile their stored data persists across Agents,
 Sessions, App servers, and lanes: one view can read another's storage, and,
 on the same workspace page, read its page and act as it — call its server's
-tools and use its delegated permissions such as clipboard write. With a second view on the page, a hostile App can reload a
-neighbouring sandbox page with a query it chose and run code there under the
-policy it picked; the per-view policy binds a view acting alone. Per-App
-origins (a non-goal) would close these paths. Across lanes, sharing is storage
-in one browser profile only: an operator and a guest each use their own
-browser, and views on different pages cannot script each other.
+tools and use its delegated permissions such as clipboard write. With a second
+view on the page, a hostile App can reload a neighbouring sandbox page with a
+query it chose and run code there under the policy it picked; the per-view
+policy binds a view acting alone. Per-App origins (a non-goal) would close
+these paths. Across lanes, sharing is the storage within one browser profile —
+an operator and a guest each use their own browser, and views on different
+pages cannot script each other — plus the lanes' origins the sandbox page
+publishes.
+
+**Published origins.** The sandbox page's header lists every lane's origins in
+its `frame-ancestors` to whoever requests the page, so keep the operator
+lane's origins to names you are fine publishing. Each surface's
+`/runtime-config.json` carries the same list as `mcpAppFrameAncestors`, from
+which the workspace reports the domains a view's policy applies. With the
+sandbox reachable only through a public route, the operator's own views load
+it over that route too, and stop showing while it is down.
 
 **Lane restriction.** The workspace loads views only when its own origin is in
 the lane's `publicOrigins` list and differs from the sandbox origin. A workspace

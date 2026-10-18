@@ -134,8 +134,11 @@ MCP App views load from a sandbox origin, an address whose origin differs from
 every lane's, as the MCP Apps spec requires; one serves both lanes. Compose
 defaults the lanes' origins and the sandbox origin to loopback, so local
 development and fixture mode need no configuration. For a named deployment, set
-`AOS_UI_PUBLIC_ORIGIN` and `AOS_UI_MCP_APP_SANDBOX_ORIGIN` in `.env`, and
-`AOS_UI_GUEST_PUBLIC_ORIGIN` for the guest lane; see
+`AOS_UI_PUBLIC_ORIGIN` and `AOS_UI_MCP_APP_SANDBOX_ORIGIN` in `.env`. A harness
+overlay turns the guest lane on, so `AOS_UI_GUEST_PUBLIC_ORIGIN` is required
+there, on the same side of loopback as the operator's: a loopback operator lane
+beside a public guest lane is unsupported with one shared sandbox. Without a
+guest lane, add `deploy/compose.operator-only.yaml`. See
 [MCP App sandbox origins](docs/deployment.md#mcp-app-sandbox-origins).
 
 For a containerized fixture preview:

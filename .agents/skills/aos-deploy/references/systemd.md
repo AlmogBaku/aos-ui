@@ -111,10 +111,10 @@ answers only the lane's own `Host` names (421 otherwise). Configure a separate
 guest virtual host so an unmatched route cannot fall through to a private AOS
 or native runtime host.
 
-If the operator explicitly selected Cloudflare Tunnel, its single ingress
-hostname may point to the loopback guest lane. Do not add `/hermes`,
-`/auth`, the operator lane, or the native runtime as tunnel ingress
-services. DNS/tunnel credentials are operator-managed external state and require
+If the operator explicitly selected Cloudflare Tunnel, its ingress hostnames,
+the guest name and the MCP App sandbox name, may point only to the loopback
+guest lane. Do not add `/hermes`, `/auth`, the operator lane, or the native
+runtime as tunnel ingress services. DNS/tunnel credentials are operator-managed external state and require
 confirmation before changing.
 
 Verify unauthenticated `GET /api/v1/runtime` returns `401` through the guest

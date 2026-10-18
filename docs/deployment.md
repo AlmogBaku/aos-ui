@@ -176,14 +176,19 @@ its own web listener, and every listener answers with the sandbox page whose
 when the guest listener is on. Both surfaces' `/runtime-config.json` carry the
 same `mcpAppSandboxOrigin`, and both pages' `frame-src` name it.
 
-Sharing one origin across lanes shares what an origin holds, its web storage
-and cookies, and a browser keeps those per profile: an operator and a guest on
-their own devices never meet there. Views on different pages cannot script
-each other.
+Sharing one origin across lanes shares two things. One is what the origin
+stores, its web storage and cookies, which a browser keeps per profile: an
+operator and a guest on their own devices never meet there, and views on
+different pages cannot script each other. The other is the sandbox page's
+header, whose `frame-ancestors` lists every lane's origins to whoever requests
+the page: keep the operator lane's origins to names you are fine publishing.
 
 With a public guest lane, the sandbox address must be publicly reachable too,
-since guests' browsers load it. It serves only the sandbox page and its relay
-script; every other path on it, `/api/v1` included, is 404.
+since guests' browsers load it. Route that public address to the guest Caddy
+site alone, so the operator site stays as private as its lane. The operator's
+own views then load the sandbox over that public route as well, and stop
+showing while it is down. The sandbox address serves only the sandbox page and
+its relay script; every other path on it, `/api/v1` included, is 404.
 
 ### DNS and certificate
 
@@ -217,17 +222,22 @@ gateway from the sandbox address.
 If you terminate TLS in front of Caddy or run a different reverse proxy:
 
 - **Keep the `Host` header.** Caddy's sandbox matcher compares the request's host and port against `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A proxy that rewrites `Host` defeats both that matcher and the gateway's host check.
-- **Route everything for the sandbox address to the web server**, through either Caddy site. No path on the sandbox address goes to the gateway; the web server handles it all.
+- **Route everything for the sandbox address to the web server** through one Caddy site: the guest site when the address is public, the operator site only when the address is as private as the operator lane. No path on the sandbox address goes to the gateway; the web server handles it all.
+- **Keep the operator site as private as its lane.** A public route for the sandbox reaches the guest site alone, never the operator site.
+- **Pass only the sandbox's own `Host`.** A listener in front for the sandbox address forwards only requests whose `Host` equals the sandbox's host and port, so no other name reaches the Caddy site behind it.
 - **Never add the sandbox origin to the gateway's `allowedOrigins`.** The sandbox address has nothing to do with the gateway's origin policy.
-- **Expose the sandbox address wherever a lane is reached.** It is as reachable as the most widely reachable lane, whose browsers load it, and no further.
 
 For a **port-form sandbox** (`https://agents.example:8443` beside
-`https://agents.example`), add a TLS listener on port 8443 that forwards to the
-operator lane's Caddy port, keeping the `Host` header: `127.0.0.1:18080` under
-[host networking](#host-networking), or the published
-`AOS_UI_WEB_PUBLISHED_PORT` (default `3000`) under bridged Compose. Caddy's `@sandbox`
-matcher routes requests for that host and port to the web server, as with a
-separate name; the gateway on port 4100 never sees port-8443 requests.
+`https://agents.example`), add a TLS listener on port 8443 that passes only
+requests whose `Host` is `agents.example:8443`, keeping that header, and
+forwards them to one Caddy site. A public sandbox goes to the guest site's
+port: `127.0.0.1:18081` under [host networking](#host-networking), or the
+published `AOS_UI_GUEST_PUBLISHED_PORT` (default `3001`) under bridged
+Compose. A sandbox as private as the operator lane may go to the operator
+site's port instead: `127.0.0.1:18080`, or `AOS_UI_WEB_PUBLISHED_PORT`
+(default `3000`). Caddy's `@sandbox` matcher routes requests for that host and
+port to the web server, as with a separate name; the gateway never sees
+port-8443 requests.
 
 The gateway answers 421 to any request whose `Host` header names a host and
 port it does not serve and that is not exactly `localhost`, `127.0.0.1`, or
@@ -262,13 +272,20 @@ check stands for it.
 
 ### Guest lane
 
-With the guest lane active, set `AOS_UI_GUEST_PUBLIC_ORIGIN` to the origins
-guests open it at; harness overlays default it to loopback on
-`AOS_UI_GUEST_PUBLISHED_PORT`. The guest lane's views load from the same
-sandbox, so its origins fall under the sandbox's rules too. Apply the same DNS,
-certificate, and reverse-proxy rules to the guest lane's name, and give guests'
-browsers a route to the sandbox address: a guest lane behind a tunnel needs the
-sandbox name in that tunnel too, sent to either Caddy site.
+A harness overlay turns the guest lane on, so `AOS_UI_GUEST_PUBLIC_ORIGIN` is
+required there: set it to the origins guests open the lane at. The overlays
+default it to loopback on `AOS_UI_GUEST_PUBLISHED_PORT`. The guest lane's views
+load from the same sandbox, so its origins fall under the sandbox's rules too,
+and they must sit on the same side of loopback as the operator lane's. A
+loopback operator lane beside a public guest lane is therefore unsupported with
+one shared sandbox, and so is a named operator lane beside the overlays'
+loopback guest default; without a guest lane, add
+[`deploy/compose.operator-only.yaml`](#run-without-the-guest-lane).
+
+Apply the same DNS, certificate, and reverse-proxy rules to the guest lane's
+name, and give guests' browsers a route to the sandbox address: a guest lane
+behind a tunnel needs the sandbox name in that tunnel too, sent to the guest
+lane like the tunnel's other name.
 
 ### Development with compose.dev.yaml
 
@@ -386,7 +403,8 @@ answers 502. For an operator-only deployment:
 1. Remove the `guest` block from the gateway configuration.
 2. Add `-f deploy/compose.operator-only.yaml` after the harness overlay. It
    mounts the Caddyfile without the guest site, so Caddy does not listen on
-   the guest lane at all.
+   the guest lane at all, and turns off the web server's guest listener, so
+   the overlay's loopback guest origins never meet a named operator lane.
 3. Keep `AOS_UI_GUEST_BIND_ADDRESS` at its loopback default and route no
    ingress to the guest port.
 
@@ -692,9 +710,9 @@ systemctl daemon-reload
 ```
 
 Use Cloudflare Tunnel only when the operator selects it. Tunnel ingress must
-target the loopback guest lane exclusively; it must not expose the private
-operator lane, a native runtime's own endpoints, `/auth`, or a host Docker
-socket. Then verify the guest root, that an unauthenticated
+target the loopback guest lane exclusively, for the guest name and the sandbox
+name alike; it must not expose the private operator lane, a native runtime's
+own endpoints, `/auth`, or a host Docker socket. Then verify the guest root, that an unauthenticated
 `GET /api/v1/runtime` on the guest host returns `401`, that operator-only
 routes such as `POST /api/v1/guest-invitations` return `404` there, and that
 `/auth/` cannot reach the native runtime. The guest origin remains a separate

@@ -27,22 +27,27 @@ file.
 Unknown fields are rejected. Published HTML Artifacts load no external assets
 in preview.
 
-The aos-ui web server serves the operator's file with three fields always
+The aos-ui web server serves the operator's file with four fields always
 added, overriding any with those names the file contains:
 
 - `buildId` — the served build, read from `dist/build-id`; the browser reloads once when it differs from the build it is running.
 - `publicOrigins` — the comma-separated value of `AOS_UI_PUBLIC_ORIGIN`, parsed into an array.
 - `mcpAppSandboxOrigin` — the value of `AOS_UI_MCP_APP_SANDBOX_ORIGIN`.
+- `mcpAppFrameAncestors` — every lane's origins, the pages the sandbox page's
+  header lets frame it: `AOS_UI_PUBLIC_ORIGIN`'s, and
+  `AOS_UI_GUEST_PUBLIC_ORIGIN`'s with the guest surface on.
 
 The browser uses `publicOrigins` and `mcpAppSandboxOrigin` to decide whether
 to show MCP App views: it shows views only when its own origin is in
 `publicOrigins` and the sandbox origin differs from that. A workspace opened at
 an address not in `publicOrigins`, or opened at the sandbox origin itself, shows
-views as unavailable and names the setting.
+views as unavailable and names the setting. It reports the domains a view's
+policy applies against `mcpAppFrameAncestors`, as the server builds that
+policy.
 
 The guest surface needs no file: it answers a generated `{ "surface": "guest"
 }` with `buildId`, `publicOrigins` from the guest lane's setting, and the same
-`mcpAppSandboxOrigin` the operator surface carries. The browser refetches the
+`mcpAppSandboxOrigin` and `mcpAppFrameAncestors` the operator surface carries. The browser refetches the
 configuration on reconnect and when the tab regains focus, and reloads once
 when the served `buildId` differs from the build it is running.
 

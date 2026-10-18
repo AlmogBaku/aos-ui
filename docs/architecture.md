@@ -108,10 +108,11 @@ The view runs in a double iframe: the outer frame loads a relay page,
 `AOS_UI_MCP_APP_SANDBOX_ORIGIN`) with `allow-scripts allow-same-origin`, so the
 view has real storage on that origin; the inner frame holds the App itself. The
 sandbox page carries a per-view CSP whose `frame-ancestors` names only the
-lanes' public origins, so no other page may frame it; both lanes share it. The inner App frame
-inherits that policy header from the sandbox page; the document carries none of
-its own. Neither frame may
-navigate the top window, open popups, or submit forms. See [MCP Apps](mcp-apps.md) for the rules a view runs under.
+lanes' public origins, so no other page may frame it; both lanes share it. The
+inner App frame inherits that policy header from the sandbox page; the document
+carries none of its own. Neither frame may navigate the top window, open
+popups, or submit forms. See [MCP Apps](mcp-apps.md) for the rules a view runs
+under.
 
 MCP tool names are normalized in the gateway: the four `aos-ui` tools read bare,
 every other MCP tool reads `mcp__<server>__<tool>` resolved against the

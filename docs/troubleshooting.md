@@ -249,7 +249,9 @@ proxy is misrouting it. Verify:
    where Cloudflare's free certificate covers it.
 4. Guests can reach it. One sandbox serves both lanes, so when views fail for
    guests alone, the sandbox address is missing from their route: a guest lane
-   behind a tunnel needs the sandbox name in that tunnel too.
+   behind a tunnel needs the sandbox name in that tunnel too, sent to the guest
+   lane. When the sandbox is reachable only through that public route, the
+   operator's views stop showing while the route is down too.
 
 **421 from the gateway for a non-browser caller.** The gateway answers 421 for
 any `Host` that is not in its allowed origins and is not exactly `localhost`,

@@ -144,13 +144,14 @@ the guest lane. An external TLS reverse proxy is optional.
   arbitrary HTML in the browser. The one exception is an MCP App: HTML its own
   MCP server authored as a `ui://` resource, rendered only inside the
   double iframe on the deployment's one sandbox origin, under each view's own
-  CSP built from its declared domains. The browser never talks to an MCP server; every
-  App request goes through the gateway, scoped to the tool call's own Session,
-  and the card keeps its textual details. Inside it, Agent HTML a file-showing
-  view previews runs its scripts in a nested `sandbox="allow-scripts"` frame:
-  an opaque origin with no same-origin access, popups, forms, or top navigation,
-  under a policy whose `connect-src`, `frame-src`, `base-uri`, and
-  `form-action` are `'none'`, so it reaches no file and no network directly. It
+  CSP built from its declared domains. The browser never talks to an MCP
+  server; every App request goes through the gateway, scoped to the tool
+  call's own Session, and the card keeps its textual details. Inside it,
+  Agent HTML a file-showing view previews runs its scripts in a nested
+  `sandbox="allow-scripts"` frame: an opaque origin with no same-origin
+  access, popups, forms, or top navigation, under a policy whose
+  `connect-src`, `frame-src`, `base-uri`, and `form-action` are `'none'`, so
+  it reaches no file and no network directly. It
   gets in-memory `localStorage` and `sessionStorage` for the life of the
   preview, and its `https:` link clicks and `window.open` calls are relayed by
   the view to the workspace as `ui/open-link`. It may load scripts, styles, and
