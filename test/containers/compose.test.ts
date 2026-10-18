@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
+import { readWebServerConfig } from "../../server/cli"
+
 type Port = { host_ip?: string; published?: string; target: number }
 
 type Service = {
@@ -482,6 +484,33 @@ describe("container orchestration", () => {
     expect(caddyFiles(false)).toContain("/etc/caddy/lanes/guest.caddy")
     expect(caddyFiles(true)).toEqual(["/etc/caddy/Caddyfile"])
   })
+
+  it.each([
+    ["starts", true],
+    ["is refused", false],
+  ] as const)(
+    "a named operator lane %s beside the overlay's loopback guest origins, as the operator-only overlay turns the guest listener off or not",
+    (_label, operatorOnly) => {
+      const { web } = composeConfig(
+        [
+          "compose.yaml",
+          "compose.hermes.yaml",
+          ...(operatorOnly ? ["deploy/compose.operator-only.yaml"] : []),
+        ],
+        harnessEnvironment("hermes", {
+          AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+          AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos-sandbox.example",
+        })
+      ).services
+      const read = () => readWebServerConfig((name) => web.environment?.[name])
+
+      if (operatorOnly)
+        expect(read().listeners.map(({ surface }) => surface)).toEqual([
+          "operator",
+        ])
+      else expect(read).toThrow(/AOS_UI_GUEST_PUBLIC_ORIGIN lists http:/u)
+    }
+  )
 
   it("uses the Vite development target and source mount behind Caddy", () => {
     const web = composeConfig(["compose.yaml", "compose.dev.yaml"]).services.web

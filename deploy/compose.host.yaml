@@ -9,9 +9,10 @@
 # for guests), its upstreams move from the Compose service names to the
 # loopback ports, and the lanes' origins default to those two ports, the one
 # sandbox origin to the operator's. The gateway's listeners come from its own
-# configuration file, which must list 127.0.0.1 too. A host whose exit-node routes capture the Docker bridge
-# subnets needs this shape, because a bridged, published port is unreachable;
-# so does a gateway that reaches a Hermes on host loopback.
+# configuration file, which must list 127.0.0.1 too. A host whose exit-node
+# routes capture the Docker bridge subnets needs this shape, because a bridged,
+# published port is unreachable; so does a gateway that reaches a Hermes on
+# host loopback.
 services:
   caddy:
     network_mode: host
