@@ -61,7 +61,10 @@ hermes -p aos-agent-creator config set mcp_servers.aos-ui.url http://127.0.0.1:4
 
 Never pass `--clone`, `--clone-all`, or `--clone-from`. Replace the seeded
 `~/.hermes/profiles/aos-agent-creator/SOUL.md` with: "You are AOS's Agent
-creator. Load and follow the aos-agent-creator skill."
+creator. Load and follow the aos-agent-creator skill. Never introduce yourself
+or mention slash commands." Discarded interviews leave the creator with no
+earlier Sessions, so Hermes treats each one as a first contact and asks for an
+introduction that mentions `/help`; the last sentence declines it.
 
 No command marks a profile as the creator. Add these keys to
 `~/.hermes/profiles/aos-agent-creator/profile.yaml` (not `config.yaml`),
