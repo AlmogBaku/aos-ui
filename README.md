@@ -130,12 +130,13 @@ another build. Runtime selection comes from `/runtime-config.json`, so operators
 can switch between the gateway and explicit fixture mode without rebuilding the
 frontend.
 
-Each lane also needs a sandbox origin — a separate address from which MCP App
-views load. Compose defaults all four origin settings to loopback, so local
+MCP App views load from a sandbox origin, an address whose origin differs from
+every lane's, as the MCP Apps spec requires; one serves both lanes. Compose
+defaults the lanes' origins and the sandbox origin to loopback, so local
 development and fixture mode need no configuration. For a named deployment, set
 `AOS_UI_PUBLIC_ORIGIN` and `AOS_UI_MCP_APP_SANDBOX_ORIGIN` in `.env`, and
-`AOS_UI_GUEST_PUBLIC_ORIGIN` and `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN` for the
-guest lane; see [MCP App sandbox origins](docs/deployment.md#mcp-app-sandbox-origins).
+`AOS_UI_GUEST_PUBLIC_ORIGIN` for the guest lane; see
+[MCP App sandbox origins](docs/deployment.md#mcp-app-sandbox-origins).
 
 For a containerized fixture preview:
 

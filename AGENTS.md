@@ -143,8 +143,8 @@ the guest lane. An external TLS reverse proxy is optional.
   charts, maps, tools, and Mermaid; never execute generated code or
   arbitrary HTML in the browser. The one exception is an MCP App: HTML its own
   MCP server authored as a `ui://` resource, rendered only inside the
-  double iframe on the lane's sandbox origin, under each view's own CSP built
-  from its declared domains. The browser never talks to an MCP server; every
+  double iframe on the deployment's one sandbox origin, under each view's own
+  CSP built from its declared domains. The browser never talks to an MCP server; every
   App request goes through the gateway, scoped to the tool call's own Session,
   and the card keeps its textual details. Inside it, Agent HTML a file-showing
   view previews runs its scripts in a nested `sandbox="allow-scripts"` frame:

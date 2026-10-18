@@ -33,18 +33,20 @@ guides document the fallback.
 
 The view runs inside a double iframe. The outer frame (`sandbox="allow-scripts
 allow-same-origin"`) loads a static relay page, `/mcp-app-sandbox.html`, from
-the lane's sandbox origin — the address set in `AOS_UI_MCP_APP_SANDBOX_ORIGIN`
-for the operator lane, and `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN` for the guest
-lane; see [MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins). The
-inner frame holds the view itself. Because the outer frame has `allow-same-origin`,
+the deployment's one sandbox origin, `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, which
+both lanes' views load from and which differs from every lane's origin, as the
+spec requires; see
+[MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins). The inner
+frame holds the view itself. Because the outer frame has `allow-same-origin`,
 the view runs on the sandbox origin and can use cookies and web storage.
 
 **Per-view policy.** The aos-ui web server serves `/mcp-app-sandbox.html` with
 a Content Security Policy built for the particular view the query names:
 
-- `frame-ancestors` lists exactly the lane's public origins (from
-  `AOS_UI_PUBLIC_ORIGIN`), so only the lane's own pages may frame the sandbox
-  page. Any other page that tries to embed it is refused by the browser.
+- `frame-ancestors` lists every lane's public origins (`AOS_UI_PUBLIC_ORIGIN`,
+  and `AOS_UI_GUEST_PUBLIC_ORIGIN` with the guest lane on), so only the lanes'
+  own pages may frame the sandbox page. Any other page that tries to embed it
+  is refused by the browser.
 - The view's declared domains (`_meta.ui.csp`) and file addresses travel in the
   sandbox page's query; the server rebuilds the policy from them and sends it
   with `no-store`. Every value is validated before it is written.
@@ -52,18 +54,20 @@ a Content Security Policy built for the particular view the query names:
 Caddy, and any reverse proxy in front of it, must pass the page's headers
 through unchanged and must not add a CSP or `X-Frame-Options` of its own.
 
-**Requests** the view makes carry the sandbox origin; that identifies the lane,
-not the App or its server. An App server that checks the request origin sees
-the lane's sandbox address, not the calling Agent or tool.
+**Requests** the view makes carry the sandbox origin; that identifies the
+deployment, not the lane, the App, or its server. An App server that checks the
+request origin sees the sandbox address, not the calling Agent or tool.
 
-**Shared storage.** All views on one lane share the sandbox origin — the spec's
-default. Their stored data persists across Agents, Sessions, and App servers:
-one view can read another view's page and storage, and act as it — call its
-server's tools and use its delegated permissions such as clipboard write. With
-a second view on the page, a hostile App can reload a neighbouring sandbox page
-with a query it chose and run code there under the policy it picked; the per-view
-policy binds a view acting alone. Per-App origins (a non-goal) would close these
-paths.
+**Shared storage.** All views share the one sandbox origin — the spec's
+default. In one browser profile their stored data persists across Agents,
+Sessions, App servers, and lanes: one view can read another's storage, and,
+on the same workspace page, read its page and act as it — call its server's
+tools and use its delegated permissions such as clipboard write. With a second view on the page, a hostile App can reload a
+neighbouring sandbox page with a query it chose and run code there under the
+policy it picked; the per-view policy binds a view acting alone. Per-App
+origins (a non-goal) would close these paths. Across lanes, sharing is storage
+in one browser profile only: an operator and a guest each use their own
+browser, and views on different pages cannot script each other.
 
 **Lane restriction.** The workspace loads views only when its own origin is in
 the lane's `publicOrigins` list and differs from the sandbox origin. A workspace
@@ -82,7 +86,7 @@ AOS builds the view's CSP from its declared `_meta.ui.csp`:
 | `baseUriDomains`  | `https://host` or `https://*.host`                                                    |
 
 Anything else is dropped, and an empty list means none. Declared domains whose
-host and port match a lane's own origin or the sandbox origin are also dropped
+host and port match any lane's origin or the sandbox origin are also dropped
 from the built policy (a wildcard that covers them is kept). Inline scripts and
 styles are allowed, and scripts may compile WebAssembly (`'wasm-unsafe-eval'`),
 as a document renderer's decoders do; `object-src` and `form-action` are

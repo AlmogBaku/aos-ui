@@ -50,17 +50,17 @@ the OpenClaw and OpenCode equivalents). Set `AOS_UI_PUBLIC_HOST` and
 **Before configuring addresses, ask for:**
 
 1. The exact origin(s) the browser will open the operator lane at (comma-separated if more than one), for `AOS_UI_PUBLIC_ORIGIN`.
-2. The sandbox address for the operator lane: a separate registrable domain (`https://agents-sandbox.example` beside `https://agents.example`) or the lane's name on another port (`https://agents.example:8443`), for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A sibling subdomain (`https://sandbox.agents.example`) or the lane's name on another port is the same site and receives the lane's `SameSite=Strict` cookies; the port form also shares the lane's whole cookie jar, since cookies ignore ports, so its views can read the lane's cookies that are not `HttpOnly` and set host-only cookies the lane receives. Prefer a separate registrable domain.
-3. The same pair for the guest lane when it is active (`AOS_UI_GUEST_PUBLIC_ORIGIN`, `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN`).
+2. The same for the guest lane when it is active, for `AOS_UI_GUEST_PUBLIC_ORIGIN`.
+3. One MCP App sandbox address for the whole deployment, for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. The MCP Apps spec only requires its origin to differ from every lane's, so any separate name (`https://sandbox.agents.example`, `https://agents-sandbox.example`) or a lane's name on another port (`https://agents.example:8443`) works. State the trade-off without steering: a registrable domain of its own is a different site, optional extra isolation; a sibling name or a port is the same site as the lane and its views' requests to the lane carry the lane's `SameSite=Strict` cookies; the port form also shares the lane's whole cookie jar, since cookies ignore ports, so its views can read the lane's cookies that are not `HttpOnly` and set host-only cookies the lane receives. With a public guest lane, the sandbox address must be publicly reachable too; it serves only the sandbox page and its script. A name proxied by Cloudflare must be one level below its zone for the free certificate.
 
-Set all four in `/etc/aos-ui/aos-ui.env` (or `.env` for a Compose-only deployment). The web server refuses to start if any is missing, not an exact origin, or overlapping another in host and port.
+Set all three in `/etc/aos-ui/aos-ui.env` (or `.env` for a Compose-only deployment). Both lanes share the one sandbox. The web server refuses to start if any is missing or not an exact origin, if the sandbox shares a host and port with a lane origin, is loopback while a lane is not or the reverse, is `http:` under an `https:` lane, or is loopback but not a `*.localhost` name, or if one origin is in both lanes' lists.
 
 **Reverse proxy rules for the sandbox address:**
 
-- Route every request for the sandbox address to the web server (Caddy and then `web:4200` for the operator lane, `web:4201` for the guest lane), never to the gateway.
+- Route every request for the sandbox address to the web server through either Caddy site (Caddy then sends it to `web:4200` from the operator site, `web:4201` from the guest site), never to the gateway. A guest lane behind a tunnel needs the sandbox name in that tunnel too.
 - Keep the original `Host` header.
 - Never add the sandbox origin to the gateway's `allowedOrigins`.
-- Give the sandbox address no wider network exposure than its lane.
+- Expose the sandbox address wherever a lane is reached, and no further.
 
 `AOS_GATEWAY_URL` must name a host the gateway's listener allows, or exactly `localhost`, `127.0.0.1`, or `[::1]`; any other host gets 421. Never set it to a sandbox origin.
 
@@ -76,7 +76,7 @@ curl -I "https://<lane-address>//mcp-app-sandbox.html" # expect 404
 
 # Sandbox address must serve the page with correct frame-ancestors:
 curl -I https://<sandbox-address>/mcp-app-sandbox.html
-# Content-Security-Policy header must include: frame-ancestors https://<lane-address>
+# Content-Security-Policy header must include: frame-ancestors with every lane address (operator, and guest when active)
 
 # Host networking only (bridged Compose publishes no gateway port, and Caddy
 # never sends the sandbox address to the gateway): the gateway answers 421 for

@@ -80,7 +80,7 @@ read.
 
 Charts, maps, stats, and files are MCP App views; every tool call keeps an inspectable textual fallback in its compact row. AOS does not execute arbitrary generated code in the main page.
 
-An Agent shows a file with `present_artifact`. The `artifact` view renders PDFs (with pdf.js, fitted to the view, with selectable text, keyboard paging, zoom, and an outline and page sidebar), zoomable images, plain text, and Agent-written HTML (its own scripts in a sandboxed frame with an opaque origin, no network; with in-memory storage and https links relayed to the workspace). A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) offers download and open instead of a preview. pip moves the view to the side panel. The gateway serves the file through the runtime's own file interface; the `aos-ui` MCP server never opens it. A signed address, valid about ten minutes and renewed while the view is open, lets the view fetch from the lane's sandbox origin. Folder rules in `mcpApps.files` govern which paths are served.
+An Agent shows a file with `present_artifact`. The `artifact` view renders PDFs (with pdf.js, fitted to the view, with selectable text, keyboard paging, zoom, and an outline and page sidebar), zoomable images, plain text, and Agent-written HTML (its own scripts in a sandboxed frame with an opaque origin, no network; with in-memory storage and https links relayed to the workspace). A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) offers download and open instead of a preview. pip moves the view to the side panel. The gateway serves the file through the runtime's own file interface; the `aos-ui` MCP server never opens it. A signed address, valid about ten minutes and renewed while the view is open, lets the view fetch from the deployment's one sandbox origin. Folder rules in `mcpApps.files` govern which paths are served.
 
 An Agent may also publish an Artifact through a harness's own media delivery such as a Hermes `MEDIA:` line or a trusted native delivery tool such as Hermes text-to-speech. The gateway validates the path, refuses relative, traversing, and credential-file paths, and caps reads at 25 MiB. Published image, audio, and video Artifacts render inline in the conversation. AOS does not provide file editing, storage, or version history.
 
@@ -104,11 +104,11 @@ URL the runtime reports, and reaches only Streamable HTTP servers without
 credentials or with headers the operator gave the gateway.
 
 The view runs in a double iframe: the outer frame loads a relay page,
-`/mcp-app-sandbox.html`, from the lane's sandbox origin (set in
+`/mcp-app-sandbox.html`, from the deployment's one sandbox origin (set in
 `AOS_UI_MCP_APP_SANDBOX_ORIGIN`) with `allow-scripts allow-same-origin`, so the
 view has real storage on that origin; the inner frame holds the App itself. The
 sandbox page carries a per-view CSP whose `frame-ancestors` names only the
-lane's public origins, so no other page may frame it. The inner App frame
+lanes' public origins, so no other page may frame it; both lanes share it. The inner App frame
 inherits that policy header from the sandbox page; the document carries none of
 its own. Neither frame may
 navigate the top window, open popups, or submit forms. See [MCP Apps](mcp-apps.md) for the rules a view runs under.

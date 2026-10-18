@@ -106,62 +106,93 @@ An external reverse proxy in front of Caddy must pass WebSocket upgrades on
 
 ## MCP App sandbox origins
 
-MCP App views load from a sandbox origin separate from the lane itself: a
-static page served by the aos-ui web server from a second address, under the
-view's own Content Security Policy. Each lane needs two origin settings. The
-web server refuses to start without them, naming each one it rejects.
+The MCP Apps spec requires a view's sandbox to have an origin different from
+every page that hosts it. AOS UI gives the whole deployment one sandbox origin:
+a static page the aos-ui web server serves from an address of its own, under
+each view's own Content Security Policy, which only the lanes' own pages may
+frame. Any separate name, or a lane's name on another port, differs from the
+lanes' origins. Both lanes' views load from it.
+
+Three settings hold the addresses. The web server refuses to start without
+them, naming each one it rejects:
 
 | Setting | Form | Description |
 | --- | --- | --- |
-| `AOS_UI_PUBLIC_ORIGIN` | Comma-separated exact origins | The origins the browser opens the lane at; the only addresses that may frame App views |
-| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | Single exact origin | The separate address views load from; must differ in host and port from every entry in `AOS_UI_PUBLIC_ORIGIN`, and be `https:` when any of them is |
+| `AOS_UI_PUBLIC_ORIGIN` | Comma-separated exact origins | The origins the browser opens the operator lane at |
+| `AOS_UI_GUEST_PUBLIC_ORIGIN` | Comma-separated exact origins | The origins the browser opens the guest lane at; required with the guest lane on |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | Single exact origin | The one address every lane's views load from; its host and port differ from every lane origin's, it is `https:` when any of them is, and loopback exactly when they are |
 
 Each value is an [exact origin](configuration.md#exact-origins):
-`https://agents.example` is exact; `https://agents.example/` is not.
+`https://agents.example` is exact; `https://agents.example/` is not. No origin
+may be in both lanes' lists.
 
-Compose defaults both to loopback on the published port, or on `18080` under
-[host networking](#host-networking). Local development and containerized
-fixture mode need no extra configuration:
+Compose defaults all three to loopback, so local development and containerized
+fixture mode need no extra configuration. The sandbox takes the operator lane's
+published port, and the guest lane frames that same address:
 
-| Variable | Compose default (port 3000) |
-| --- | --- |
-| `AOS_UI_PUBLIC_ORIGIN` | `http://localhost:3000,http://127.0.0.1:3000` |
-| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | `http://sandbox.localhost:3000` |
+| Variable | Compose default (ports 3000 and 3001) | Under [host networking](#host-networking) |
+| --- | --- | --- |
+| `AOS_UI_PUBLIC_ORIGIN` | `http://localhost:3000,http://127.0.0.1:3000` | `http://127.0.0.1:18080,http://localhost:18080` |
+| `AOS_UI_GUEST_PUBLIC_ORIGIN` | `http://localhost:3001,http://127.0.0.1:3001` | `http://127.0.0.1:18081,http://localhost:18081` |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | `http://sandbox.localhost:3000` | `http://sandbox.localhost:18080` |
 
 ### Choosing a sandbox address
 
-The sandbox address is a separate name or the same name on another port. A name
-on a registrable domain of its own — `https://agents-sandbox.example` beside
-`https://agents.example` — is the recommended choice: it keeps the two
-addresses in entirely separate cookie jars and distinct `SameSite` contexts.
+Any address whose origin differs from every lane's meets the spec: another
+name, such as `https://agents-sandbox.example` or
+`https://sandbox.agents.example`, or a lane's name on another port, such as
+`https://agents.example:8443`. How much of the lane's site it shares follows
+from the choice:
 
-A sibling subdomain (`https://sandbox.agents.example`) or a different port on
-the same name (`https://agents.example:8443`) is the same site as the lane.
-Views running there can set `Domain=agents.example` cookies and receive the
-lane's `SameSite` cookies on every request, `SameSite=Strict` included. The
-port form shares more still: cookies ignore ports, so it shares the lane's
-whole cookie jar, and its views can read the lane's cookies that are not
-`HttpOnly` and set host-only cookies the lane then receives.
-Chromium also shares the lane's renderer process with a same-site origin. AOS
-itself sets only a locale preference cookie, but App servers may set broader
-ones; prefer a separate registrable domain unless the deployment controls the
-full cookie space.
+- **A registrable domain of its own** (`https://agents-sandbox.example`) is a
+  different site from `https://agents.example`: its cookies and `SameSite`
+  context are its own. This isolation is optional.
+- **A sibling name** (`https://sandbox.agents.example`) is the same site as the
+  lane. Views there can set `Domain=agents.example` cookies, and their requests
+  to the lane carry its `SameSite` cookies, `SameSite=Strict` included.
+  Chromium may also run same-site pages in one renderer process.
+- **A port on the lane's name** (`https://agents.example:8443`) is the same
+  site too, and since cookies ignore ports, it shares the lane's whole cookie
+  jar: views there can read the lane's cookies that are not `HttpOnly` and set
+  host-only cookies the lane then receives.
+
+AOS itself sets only a locale preference cookie; App servers may set their
+own.
 
 For loopback development, the sandbox must be a `*.localhost` name such as
 `http://sandbox.localhost:3000`, never `localhost` or a loopback address on
 another port, which the gateway still answers. Vite accepts `*.localhost` names
 without extra configuration. The sandbox must be loopback exactly when the
-lane's origins are:
-a sandbox at `http://sandbox.localhost:3000` with a lane at
+lanes' origins are: a sandbox at `http://sandbox.localhost:3000` with a lane at
 `https://agents.example` stops the web server with an error naming the
 mismatched setting.
+
+### One sandbox for both lanes
+
+Whichever lane receives a request for the sandbox address serves it. Each Caddy
+site matches the same `AOS_UI_MCP_APP_SANDBOX_ORIGIN` and sends the request to
+its own web listener, and every listener answers with the sandbox page whose
+`frame-ancestors` names every lane's origins: the operator's, and the guest's
+when the guest listener is on. Both surfaces' `/runtime-config.json` carry the
+same `mcpAppSandboxOrigin`, and both pages' `frame-src` name it.
+
+Sharing one origin across lanes shares what an origin holds, its web storage
+and cookies, and a browser keeps those per profile: an operator and a guest on
+their own devices never meet there. Views on different pages cannot script
+each other.
+
+With a public guest lane, the sandbox address must be publicly reachable too,
+since guests' browsers load it. It serves only the sandbox page and its relay
+script; every other path on it, `/api/v1` included, is 404.
 
 ### DNS and certificate
 
 The sandbox address is a real hostname, not a path alias, and needs its own DNS
-record and TLS certificate. Add the sandbox subdomain to the SANs of the lane's
+record and TLS certificate. Add the sandbox name to the SANs of the lane's
 certificate, or obtain a separate certificate for it. An external TLS reverse
-proxy must serve the sandbox name alongside the lane name.
+proxy must serve the sandbox name alongside the lanes' names. A name proxied by
+Cloudflare must sit one level below its zone, such as `sandbox.agents.example`
+in the `agents.example` zone, for Cloudflare's free certificate to cover it.
 
 ### Three places that must agree
 
@@ -171,7 +202,10 @@ The operator lane's address must be consistent in three places:
 2. **Web server's `AOS_UI_PUBLIC_ORIGIN`** — the full origin list the web server validates and writes into `/runtime-config.json`.
 3. **Gateway's `allowedOrigins`** — the origins the gateway accepts WebSocket upgrades from.
 
-The sandbox address must match between **Caddy's `AOS_UI_MCP_APP_SANDBOX_ORIGIN`** (the host matcher that routes sandbox requests to the web server) and **the web server's `AOS_UI_MCP_APP_SANDBOX_ORIGIN`** (the origin the web server serves the sandbox page from).
+The guest lane's address agrees the same way, in `AOS_UI_GUEST_PUBLIC_HOST`,
+`AOS_UI_GUEST_PUBLIC_ORIGIN`, and the gateway's guest listener. The sandbox
+address is one value, `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, which Caddy's sites
+match and the web server serves the sandbox page for.
 
 Caddy routes every request for the sandbox address — any path, any method — to
 the web server. The web server answers the sandbox address with the sandbox page
@@ -183,13 +217,13 @@ gateway from the sandbox address.
 If you terminate TLS in front of Caddy or run a different reverse proxy:
 
 - **Keep the `Host` header.** Caddy's sandbox matcher compares the request's host and port against `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A proxy that rewrites `Host` defeats both that matcher and the gateway's host check.
-- **Route everything for the sandbox address to the web server.** No path on the sandbox address goes to the gateway; the web server handles it all.
+- **Route everything for the sandbox address to the web server**, through either Caddy site. No path on the sandbox address goes to the gateway; the web server handles it all.
 - **Never add the sandbox origin to the gateway's `allowedOrigins`.** The sandbox address has nothing to do with the gateway's origin policy.
-- **Give the sandbox address no wider network exposure than its lane.** If the operator lane is loopback-only, keep the sandbox loopback-only.
+- **Expose the sandbox address wherever a lane is reached.** It is as reachable as the most widely reachable lane, whose browsers load it, and no further.
 
 For a **port-form sandbox** (`https://agents.example:8443` beside
 `https://agents.example`), add a TLS listener on port 8443 that forwards to the
-lane's own Caddy port, keeping the `Host` header: `127.0.0.1:18080` under
+operator lane's Caddy port, keeping the `Host` header: `127.0.0.1:18080` under
 [host networking](#host-networking), or the published
 `AOS_UI_WEB_PUBLISHED_PORT` (default `3000`) under bridged Compose. Caddy's `@sandbox`
 matcher routes requests for that host and port to the web server, as with a
@@ -213,9 +247,9 @@ curl -I https://agents-sandbox.example/api/v1/healthz
 curl -I https://agents.example/mcp-app-sandbox.html
 curl -I "https://agents.example//mcp-app-sandbox.html"
 
-# Sandbox address serves the page (200) with the lane's origins in frame-ancestors:
+# Sandbox address serves the page (200) with every lane's origins in frame-ancestors:
 curl -I https://agents-sandbox.example/mcp-app-sandbox.html
-# Content-Security-Policy: … frame-ancestors https://agents.example; …
+# Content-Security-Policy: … frame-ancestors https://agents.example https://guests.agents.example; …
 
 # Gateway answers 421 for a host it does not serve (host networking only):
 curl -I -H "Host: agents-sandbox.example" http://127.0.0.1:4100/api/v1/healthz
@@ -226,27 +260,21 @@ The last check needs the gateway on the host's `127.0.0.1:4100`, as under
 and Caddy never sends the sandbox address to the gateway, so there the first
 check stands for it.
 
-### Guest lane sandbox
+### Guest lane
 
-With the guest lane active, set two more settings:
-
-| Setting | Description |
-| --- | --- |
-| `AOS_UI_GUEST_PUBLIC_ORIGIN` | Comma-separated exact origins for the guest lane |
-| `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN` | Sandbox origin for the guest lane |
-
-The guest sandbox must differ in host and port from the operator sandbox and
-from both lanes' public origins. Harness overlays default the guest sandbox to
-`http://sandbox.localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}`.
-
-Apply the same DNS, certificate, and reverse-proxy rules for the guest lane as
-for the operator lane, and give the guest sandbox no wider network exposure than
-the guest lane itself.
+With the guest lane active, set `AOS_UI_GUEST_PUBLIC_ORIGIN` to the origins
+guests open it at; harness overlays default it to loopback on
+`AOS_UI_GUEST_PUBLISHED_PORT`. The guest lane's views load from the same
+sandbox, so its origins fall under the sandbox's rules too. Apply the same DNS,
+certificate, and reverse-proxy rules to the guest lane's name, and give guests'
+browsers a route to the sandbox address: a guest lane behind a tunnel needs the
+sandbox name in that tunnel too, sent to either Caddy site.
 
 ### Development with compose.dev.yaml
 
-`compose.dev.yaml` defaults all four sandbox settings to loopback on the
-published ports, so no extra configuration is needed for local development.
+`compose.dev.yaml` defaults both lanes' origins and the sandbox origin to
+loopback on the published ports, so no extra configuration is needed for local
+development.
 See [Use hot reload in containers](#use-hot-reload-in-containers) for the full
 recipe.
 
@@ -401,11 +429,11 @@ Use host networking in either of these cases:
 
 Compose ignores published ports here, so `AOS_UI_WEB_PUBLISHED_PORT` and the
 bind variables have no effect: the lanes are `http://127.0.0.1:18080` and
-`http://127.0.0.1:18081`, usually behind an external ingress, and the four
-origin settings default to them, with the sandboxes at
-`http://sandbox.localhost:18080` and `http://sandbox.localhost:18081`. The gateway
-configuration must list `127.0.0.1` as both listener hosts, its origins must
-match the address the browser uses, and the `aos-ui` MCP App override can use
+`http://127.0.0.1:18081`, usually behind an external ingress, and the lanes'
+origin settings default to them, with the one sandbox at
+`http://sandbox.localhost:18080`. The gateway configuration must list
+`127.0.0.1` as both listener hosts, its origins must match the address the
+browser uses, and the `aos-ui` MCP App override can use
 `http://127.0.0.1:4110/mcp`, the same URL the host harness registers.
 
 ## Web Push state and VAPID secret

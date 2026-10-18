@@ -245,7 +245,11 @@ proxy is misrouting it. Verify:
    makes them treat the request as a lane request, which returns 404 for the
    sandbox page.
 3. The sandbox name resolves to the right address and has a valid TLS
-   certificate.
+   certificate. A name proxied by Cloudflare sits one level below its zone,
+   where Cloudflare's free certificate covers it.
+4. Guests can reach it. One sandbox serves both lanes, so when views fail for
+   guests alone, the sandbox address is missing from their route: a guest lane
+   behind a tunnel needs the sandbox name in that tunnel too.
 
 **421 from the gateway for a non-browser caller.** The gateway answers 421 for
 any `Host` that is not in its allowed origins and is not exactly `localhost`,
