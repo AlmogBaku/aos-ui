@@ -16,6 +16,10 @@ services:
       # sends to the web server whole; the web server below reads the same
       # value. It defaults to the operator lane's published port.
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: &sandbox-origin ${AOS_UI_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
+      # Optional and off by default: the MCP App stable origins' wildcard,
+      # whose exact stable hosts each site sends to the web server whole, as
+      # it does the sandbox address. Empty, no host is one.
+      AOS_UI_MCP_APP_STABLE_ORIGINS: &stable-origins ${AOS_UI_MCP_APP_STABLE_ORIGINS:-}
     ports:
       - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_WEB_PUBLISHED_PORT:-3000}:18080
     configs:
@@ -55,6 +59,7 @@ services:
       # both default to loopback on the published port.
       AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: *sandbox-origin
+      AOS_UI_MCP_APP_STABLE_ORIGINS: *stable-origins
     expose:
       - "4200"
     configs:

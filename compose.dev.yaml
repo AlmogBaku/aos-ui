@@ -46,10 +46,12 @@ services:
       AOS_UI_GUEST_WEB_HOST: 0.0.0.0
       AOS_UI_GUEST_WEB_PORT: "4201"
       AOS_UI_WEB_EXPOSURE: private-container
-      # Both lanes' origins and the one sandbox origin, as the web service
-      # reads them: its unused operator listener needs the operator's too.
+      # Both lanes' origins, the one sandbox origin, and the optional stable
+      # origins, as the web service reads them: its unused operator listener
+      # needs the operator's too.
       AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: ${AOS_UI_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
+      AOS_UI_MCP_APP_STABLE_ORIGINS: ${AOS_UI_MCP_APP_STABLE_ORIGINS:-}
       AOS_UI_GUEST_PUBLIC_ORIGIN: ${AOS_UI_GUEST_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001},http://127.0.0.1:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}}
     expose:
       - "4201"

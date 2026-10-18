@@ -7,7 +7,9 @@
 # The MCP App sandbox address, a name or a port of its own and one for both
 # lanes, reaches the aos-ui server whole from whichever site receives it,
 # /api/v1 included: the server answers it with the sandbox page and its script
-# alone, and the gateway never serves it.
+# alone, and the gateway never serves it. So does each stable host, exactly a
+# 32-hex-digit label directly below the AOS_UI_MCP_APP_STABLE_ORIGINS
+# wildcard's domain on its port, while that is set; any near miss is foreign.
 #
 # Each site binds loopback unless AOS_UI_CADDY_BIND says otherwise: a
 # host-network deployment ignores Compose `ports:`, so the default lives here.
@@ -24,6 +26,9 @@ http://:18080 {
 		# The sandbox origin's host and port, exactly; never a foreign host.
 		@sandbox expression `"{$AOS_UI_MCP_APP_SANDBOX_ORIGIN}".endsWith("//" + {http.request.hostport})`
 		reverse_proxy @sandbox {$AOS_UI_WEB_UPSTREAM:web:4200}
+		# A stable host: a key label, then exactly the wildcard's "*" tail.
+		@stable expression `{http.request.hostport}.lowerAscii().matches("^[0-9a-f]{32}[.]") && "{$AOS_UI_MCP_APP_STABLE_ORIGINS}".lowerAscii().endsWith("//*" + {http.request.hostport}.lowerAscii().substring(32))`
+		reverse_proxy @stable {$AOS_UI_WEB_UPSTREAM:web:4200}
 		# Only this lane's own names, so a rebound DNS name gets nothing. The
 		# public host is unset by default, leaving loopback only. Two `not`
 		# lines, so a public host that is itself a loopback name is no
