@@ -25,7 +25,7 @@ import { useToolUiLocale } from "@/components/tool-ui/locale"
 import { cn } from "@/lib/utils"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
 import {
-  LANE_ORIGIN_SETTINGS,
+  PUBLIC_ORIGIN_SETTINGS,
   type LaneOrigins,
   type Surface,
 } from "@shared/lane-origins"
@@ -620,7 +620,7 @@ export default function McpAppFrame({
             ? undefined
             : labels.mcpApp.notAtLaneOrigin(
                 pageOrigin,
-                LANE_ORIGIN_SETTINGS[surface].publicOrigins
+                PUBLIC_ORIGIN_SETTINGS[surface]
               )
         }
       />

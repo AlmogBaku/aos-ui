@@ -127,7 +127,7 @@ async function assetResponse(
 
 /**
  * The exact paths that answer any origin, as the gateway's file route does
- * once it admits a pass: views read them from the lane's sandbox origin.
+ * once it admits a pass: views read them from the sandbox origin.
  */
 const FIXTURE_FILE_PATHS = new Set(FIXTURE_MCP_APP_FILE_PATHS)
 

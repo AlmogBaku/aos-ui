@@ -56,7 +56,7 @@ describe("browser runtime configuration", () => {
   it("recognizes the isolated guest listener and its lane without treating it as a runtime", () => {
     const origins = {
       publicOrigins: ["https://guest.example.test"],
-      mcpAppSandboxOrigin: "https://guest-sandbox.example.test",
+      mcpAppSandboxOrigin: "https://sandbox.example.test",
     }
     expect(
       parsePublicApplicationConfiguration({

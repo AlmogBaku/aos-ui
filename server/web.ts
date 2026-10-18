@@ -11,6 +11,7 @@ import {
   namesSandboxFile,
   sandboxPagePolicy,
   SERVICE_WORKER_HEADER,
+  type SandboxPolicyOrigins,
 } from "../shared/mcp-app-sandbox"
 import { createStaticHandler, requestedFile } from "./static"
 
@@ -20,8 +21,13 @@ export type WebAppOptions = {
   root: string
   /** The operator's public runtime configuration; the guest's is generated. */
   runtimeConfigFile: string
-  /** The surface's lane: its pages' origins and its MCP App sandbox origin. */
+  /** The surface's lane: its pages' origins and the MCP App sandbox origin. */
   origins: LaneOrigins
+  /**
+   * Every lane's origins, the pages that may frame the sandbox page this
+   * surface serves when a request names the sandbox address.
+   */
+  frameAncestors: readonly string[]
 }
 
 /**
@@ -31,12 +37,12 @@ export type WebAppOptions = {
  */
 const GUEST_RESERVED_PATHS = ["/auth", "/sw.js", "/manifest.webmanifest"]
 
-/** Each surface's page policy: both frame their own sandbox origin alone. */
+/** Each surface's page policy: both frame the sandbox origin alone. */
 function pageHeaders(
   surface: Surface,
-  origins: LaneOrigins
+  sandboxOrigin: string
 ): Record<string, string> {
-  const frameSrc = lanePageFrameSrc(origins)
+  const frameSrc = lanePageFrameSrc(sandboxOrigin)
   return surface === "guest"
     ? {
         "content-security-policy": `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; media-src 'self' blob:; font-src 'self' data:; ${frameSrc}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
@@ -49,10 +55,13 @@ function pageHeaders(
 
 /**
  * The MCP App sandbox page, for the view its query names: under that view's
- * own policy, which only the lane's pages may frame, and never cached, since
+ * own policy, which only the lanes' pages may frame, and never cached, since
  * the policy follows the query.
  */
-const sandboxPageHeaders = (origins: LaneOrigins, query: URLSearchParams) => ({
+const sandboxPageHeaders = (
+  origins: SandboxPolicyOrigins,
+  query: URLSearchParams
+) => ({
   "cache-control": "no-store",
   "content-security-policy": sandboxPagePolicy(origins, query),
   "referrer-policy": "no-referrer",
@@ -133,16 +142,21 @@ async function readOperatorConfig(path: string) {
  * The gateway answers `/api/v1` beside it, so every other `/api` path is
  * absent here.
  *
- * The lane's sandbox address serves the MCP App sandbox page and its script
- * alone, never as a service worker's script, and the lane's own addresses
- * serve neither, by the file a request resolves to and by any path whose last
- * segment names one.
+ * The sandbox address serves the MCP App sandbox page, which every lane's
+ * pages may frame, and its script alone, never as a service worker's script;
+ * the lane's own addresses serve neither, by the file a request resolves to
+ * and by any path whose last segment names one.
  */
 export function createWebApp(options: WebAppOptions) {
   const { origins, root } = options
+  const sandboxOrigin = origins.mcpAppSandboxOrigin
+  const policyOrigins = {
+    frameAncestors: options.frameAncestors,
+    sandboxOrigin,
+  }
   const guest = options.surface === "guest"
   const serveStatic = createStaticHandler({ root })
-  const headers = pageHeaders(options.surface, origins)
+  const headers = pageHeaders(options.surface, sandboxOrigin)
   const page = (response: Response) => withHeaders(response, headers)
   const sandboxPage = requestedFile(root, MCP_APP_SANDBOX_PATH)
   const sandboxFiles = new Set([
@@ -176,7 +190,7 @@ export function createWebApp(options: WebAppOptions) {
     return file === sandboxPage && response.ok
       ? withHeaders(
           response,
-          sandboxPageHeaders(origins, new URL(request.url).searchParams)
+          sandboxPageHeaders(policyOrigins, new URL(request.url).searchParams)
         )
       : response
   }
@@ -184,7 +198,7 @@ export function createWebApp(options: WebAppOptions) {
   return async (request: Request): Promise<Response> => {
     const { host, pathname } = new URL(request.url)
     const file = requestedFile(root, pathname)
-    if (isSandboxHost(origins, host)) return sandbox(request, file)
+    if (isSandboxHost(sandboxOrigin, host)) return sandbox(request, file)
     if (sandboxFiles.has(file) || namesSandboxFile(pathname))
       return page(notFound())
     if (guest && guestReserved(pathname)) return page(notFound())

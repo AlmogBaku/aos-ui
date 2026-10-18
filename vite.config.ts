@@ -20,8 +20,10 @@ import {
 } from "./shared/runtime-config.ts"
 import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
 import {
-  LANE_ORIGIN_SETTINGS,
-  readLaneOrigins,
+  MCP_APP_SANDBOX_ORIGIN_SETTING,
+  PUBLIC_ORIGIN_SETTINGS,
+  readPublicOrigins,
+  readSandboxOrigin,
   type LaneOrigins,
 } from "./shared/lane-origins.ts"
 import {
@@ -30,6 +32,7 @@ import {
   MCP_APP_SANDBOX_SCRIPT_PATH,
   namesSandboxFile,
   sandboxPagePolicy,
+  sandboxPolicyOrigins,
   SERVICE_WORKER_HEADER,
 } from "./shared/mcp-app-sandbox.ts"
 import { requestedFile } from "./server/static.ts"
@@ -66,21 +69,25 @@ const DEV_SERVER_PORT = 3000
 type LaneOriginsOf = (request: IncomingMessage) => LaneOrigins
 
 /**
- * The operator lane's origins (`readLaneOrigins`), the only lane these servers
- * serve: its settings, or, where they are unset, loopback names on `port`, the
- * port a request reached, which is this server's own.
+ * The operator lane's origins and the sandbox origin, as the web server reads
+ * them, for the only lane these servers serve: its settings, or, where they
+ * are unset, loopback names on `port`, the port a request reached, which is
+ * this server's own.
  */
 function laneOriginsAt(environment: NodeJS.ProcessEnv) {
-  const settings = LANE_ORIGIN_SETTINGS.operator
-  return (port: number | undefined) => {
+  return (port: number | undefined): LaneOrigins => {
     const loopback: Record<string, string> = {
-      [settings.publicOrigins]: `http://localhost:${port},http://127.0.0.1:${port}`,
-      [settings.mcpAppSandboxOrigin]: `http://sandbox.localhost:${port}`,
+      [PUBLIC_ORIGIN_SETTINGS.operator]: `http://localhost:${port},http://127.0.0.1:${port}`,
+      [MCP_APP_SANDBOX_ORIGIN_SETTING]: `http://sandbox.localhost:${port}`,
     }
-    return readLaneOrigins(
-      (name) => environment[name] || loopback[name],
-      "operator"
-    )
+    const getenv = (name: string) => environment[name] || loopback[name]
+    const publicOrigins = readPublicOrigins(getenv, "operator")
+    return {
+      publicOrigins,
+      mcpAppSandboxOrigin: readSandboxOrigin(getenv, [
+        { surface: "operator", publicOrigins },
+      ]),
+    }
   }
 }
 
@@ -199,7 +206,7 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
 
 /**
  * Adds `Access-Control-Allow-Origin: *` to the synthetic fixture files the
- * artifact view fetches from the lane's sandbox origin. Mirrors what
+ * artifact view fetches from the sandbox origin. Mirrors what
  * `server/static.ts` does in production.
  */
 function fixtureMcpAppFilesPlugin(): Plugin {
@@ -246,10 +253,15 @@ function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
       const url = new URL(`http://request.invalid${request.url ?? "/"}`)
       const requested = requestedFile(root, url.pathname)
       const file = requested === undefined ? undefined : files.get(requested)
-      if (!isSandboxHost(origins, request.headers.host ?? "")) {
+      if (
+        !isSandboxHost(origins.mcpAppSandboxOrigin, request.headers.host ?? "")
+      ) {
         if (file !== undefined || namesSandboxFile(url.pathname))
           return notFound(response)
-        response.setHeader("content-security-policy", lanePageFrameSrc(origins))
+        response.setHeader(
+          "content-security-policy",
+          lanePageFrameSrc(origins.mcpAppSandboxOrigin)
+        )
         return next()
       }
       if (
@@ -262,7 +274,7 @@ function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
       if (file === MCP_APP_SANDBOX_PATH) {
         response.setHeader(
           "content-security-policy",
-          sandboxPagePolicy(origins, url.searchParams)
+          sandboxPagePolicy(sandboxPolicyOrigins(origins), url.searchParams)
         )
         response.setHeader("cache-control", "no-store")
       }
@@ -467,7 +479,10 @@ export default defineConfig(({ mode }) => {
       ws: true,
       // The sandbox address never reaches the gateway, WebSockets included.
       bypass: (request: IncomingMessage) =>
-        isSandboxHost(originsOf(request), request.headers.host ?? "")
+        isSandboxHost(
+          originsOf(request).mcpAppSandboxOrigin,
+          request.headers.host ?? ""
+        )
           ? false
           : undefined,
     },

@@ -31,14 +31,22 @@ export type SandboxPageView = {
   fileLocations: readonly string[]
 }
 
-/** What a lane's sandbox policies are framed by and served from. */
-export const sandboxPolicyOrigins = (origins: LaneOrigins) => ({
+/** The pages a sandbox policy lets frame it, and the origin it is served from. */
+export type SandboxPolicyOrigins = {
+  frameAncestors: readonly string[]
+  sandboxOrigin: string
+}
+
+/** A lane's own pages, framing the sandbox. */
+export const sandboxPolicyOrigins = (
+  origins: LaneOrigins
+): SandboxPolicyOrigins => ({
   frameAncestors: origins.publicOrigins,
   sandboxOrigin: origins.mcpAppSandboxOrigin,
 })
 
 /**
- * The sandbox page address for one view, at its lane's sandbox origin with the
+ * The sandbox page address for one view, at the sandbox origin with the
  * view's declared lists in the query, from which the server rebuilds the
  * view's policy; `undefined` when it would be longer than
  * `MAX_SANDBOX_PAGE_URL_LENGTH`.
@@ -58,18 +66,18 @@ export function sandboxPageUrl(
 }
 
 /**
- * The policy the sandbox page is sent with for the view its query names.
- * Anyone can ask for the page with any query; `mcpAppSandboxPolicy` checks
- * every value before it writes it.
+ * The policy the sandbox page is sent with for the view its query names, which
+ * `origins.frameAncestors` may frame. Anyone can ask for the page with any
+ * query; `mcpAppSandboxPolicy` checks every value before it writes it.
  */
 export function sandboxPagePolicy(
-  origins: LaneOrigins,
+  origins: SandboxPolicyOrigins,
   query: URLSearchParams
 ): string {
   const csp: McpUiCsp = {}
   for (const list of CSP_LISTS) csp[list] = query.getAll(list)
   return mcpAppSandboxPolicy({
-    ...sandboxPolicyOrigins(origins),
+    ...origins,
     csp,
     fileLocations: query.getAll(FILE_PARAMETER),
   })
@@ -111,10 +119,10 @@ export function namesSandboxFile(pathname: string): boolean {
  */
 export const SERVICE_WORKER_HEADER = "service-worker"
 
-/** Whether a request's `Host` names the lane's sandbox address. */
-export const isSandboxHost = (origins: LaneOrigins, host: string) =>
-  host.toLowerCase() === new URL(origins.mcpAppSandboxOrigin).host
+/** Whether a request's `Host` names the sandbox address. */
+export const isSandboxHost = (sandboxOrigin: string, host: string) =>
+  host.toLowerCase() === new URL(sandboxOrigin).host
 
-/** A lane page's policy: it frames its own sandbox origin and nothing else. */
-export const lanePageFrameSrc = (origins: LaneOrigins) =>
-  `frame-src ${origins.mcpAppSandboxOrigin}`
+/** A lane page's policy: it frames the sandbox origin and nothing else. */
+export const lanePageFrameSrc = (sandboxOrigin: string) =>
+  `frame-src ${sandboxOrigin}`

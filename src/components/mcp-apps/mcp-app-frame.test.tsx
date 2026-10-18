@@ -465,7 +465,7 @@ describe("MCP App sandbox", () => {
     </ToolUiLocaleProvider>
   )
 
-  it("loads the sandbox page from the lane's sandbox origin, with the view's declared lists and no pass", async () => {
+  it("loads the sandbox page from the sandbox origin, with the view's declared lists and no pass", async () => {
     render(
       frame({
         view: {
@@ -508,7 +508,7 @@ describe("MCP App sandbox", () => {
       `Apps show only at an address AOS_UI_PUBLIC_ORIGIN lists, and this page is at ${window.location.origin}.`,
     ],
     [
-      "the lane's sandbox origin",
+      "the sandbox origin",
       "guest",
       {
         publicOrigins: [window.location.origin],
