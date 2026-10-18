@@ -50,7 +50,7 @@ the OpenClaw and OpenCode equivalents). Set `AOS_UI_PUBLIC_HOST` and
 **Before configuring addresses, ask for:**
 
 1. The exact origin(s) the browser will open the operator lane at (comma-separated if more than one), for `AOS_UI_PUBLIC_ORIGIN`.
-2. The sandbox address for the operator lane: a separate registrable domain (`https://agents-sandbox.example` beside `https://agents.example`) or the lane's name on another port (`https://agents.example:8443`), for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A sibling subdomain (`https://sandbox.agents.example`) is the same site and shares `SameSite=Strict` cookies; prefer a separate registrable domain.
+2. The sandbox address for the operator lane: a separate registrable domain (`https://agents-sandbox.example` beside `https://agents.example`) or the lane's name on another port (`https://agents.example:8443`), for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A sibling subdomain (`https://sandbox.agents.example`) or the lane's name on another port is the same site and receives the lane's `SameSite=Strict` cookies; the port form also shares the lane's whole cookie jar, since cookies ignore ports, so its views can read the lane's cookies that are not `HttpOnly` and set host-only cookies the lane receives. Prefer a separate registrable domain.
 3. The same pair for the guest lane when it is active (`AOS_UI_GUEST_PUBLIC_ORIGIN`, `AOS_UI_GUEST_MCP_APP_SANDBOX_ORIGIN`).
 
 Set all four in `/etc/aos-ui/aos-ui.env` (or `.env` for a Compose-only deployment). The web server refuses to start if any is missing, not an exact origin, or overlapping another in host and port.
@@ -78,7 +78,9 @@ curl -I "https://<lane-address>//mcp-app-sandbox.html" # expect 404
 curl -I https://<sandbox-address>/mcp-app-sandbox.html
 # Content-Security-Policy header must include: frame-ancestors https://<lane-address>
 
-# Gateway answers 421 for a host it does not serve:
+# Host networking only (bridged Compose publishes no gateway port, and Caddy
+# never sends the sandbox address to the gateway): the gateway answers 421 for
+# a host it does not serve.
 curl -I -H "Host: <sandbox-address-host>" http://127.0.0.1:4100/api/v1/healthz
 ```
 

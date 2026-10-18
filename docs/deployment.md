@@ -116,9 +116,8 @@ web server refuses to start without them, naming each one it rejects.
 | `AOS_UI_PUBLIC_ORIGIN` | Comma-separated exact origins | The origins the browser opens the lane at; the only addresses that may frame App views |
 | `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | Single exact origin | The separate address views load from; must differ in host and port from every entry in `AOS_UI_PUBLIC_ORIGIN`, and be `https:` when any of them is |
 
-An exact origin passes `new URL(value).origin === value`: a scheme, a host, and
-the port when it is not the default for the scheme. `https://agents.example` is
-exact; `https://agents.example/` is not.
+Each value is an [exact origin](configuration.md#exact-origins):
+`https://agents.example` is exact; `https://agents.example/` is not.
 
 Compose defaults both to loopback on the published port, or on `18080` under
 [host networking](#host-networking). Local development and containerized
@@ -139,7 +138,10 @@ addresses in entirely separate cookie jars and distinct `SameSite` contexts.
 A sibling subdomain (`https://sandbox.agents.example`) or a different port on
 the same name (`https://agents.example:8443`) is the same site as the lane.
 Views running there can set `Domain=agents.example` cookies and receive the
-lane's `SameSite` cookies on every request, `SameSite=Strict` included.
+lane's `SameSite` cookies on every request, `SameSite=Strict` included. The
+port form shares more still: cookies ignore ports, so it shares the lane's
+whole cookie jar, and its views can read the lane's cookies that are not
+`HttpOnly` and set host-only cookies the lane then receives.
 Chromium also shares the lane's renderer process with a same-site origin. AOS
 itself sets only a locale preference cookie, but App servers may set broader
 ones; prefer a separate registrable domain unless the deployment controls the
@@ -187,7 +189,9 @@ If you terminate TLS in front of Caddy or run a different reverse proxy:
 
 For a **port-form sandbox** (`https://agents.example:8443` beside
 `https://agents.example`), add a TLS listener on port 8443 that forwards to the
-same Caddy lane port (`:18080`) keeping the `Host` header. Caddy's `@sandbox`
+lane's own Caddy port, keeping the `Host` header: `127.0.0.1:18080` under
+[host networking](#host-networking), or the published
+`AOS_UI_WEB_PUBLISHED_PORT` (default `3000`) under bridged Compose. Caddy's `@sandbox`
 matcher routes requests for that host and port to the web server, as with a
 separate name; the gateway on port 4100 never sees port-8443 requests.
 
@@ -213,9 +217,14 @@ curl -I "https://agents.example//mcp-app-sandbox.html"
 curl -I https://agents-sandbox.example/mcp-app-sandbox.html
 # Content-Security-Policy: … frame-ancestors https://agents.example; …
 
-# Gateway answers 421 for a host it does not serve:
+# Gateway answers 421 for a host it does not serve (host networking only):
 curl -I -H "Host: agents-sandbox.example" http://127.0.0.1:4100/api/v1/healthz
 ```
+
+The last check needs the gateway on the host's `127.0.0.1:4100`, as under
+[host networking](#host-networking). Bridged Compose publishes no gateway port,
+and Caddy never sends the sandbox address to the gateway, so there the first
+check stands for it.
 
 ### Guest lane sandbox
 

@@ -250,10 +250,18 @@ proxy is misrouting it. Verify:
 **421 from the gateway for a non-browser caller.** The gateway answers 421 for
 any `Host` that is not in its allowed origins and is not exactly `localhost`,
 `127.0.0.1`, or `[::1]`. This includes container names, `host.docker.internal`,
-and sandbox addresses. `AOS_GATEWAY_URL` must name a host the gateway's listener
-allows. Under bridged Compose, `http://127.0.0.1:4100` is not reachable from
-inside a container; use the service name instead (`http://gateway:4100`). Under
-host networking, `http://127.0.0.1:4100` reaches the gateway directly.
+and sandbox addresses. A container name can never be listed: the gateway admits
+only `https:` origins, or `http:` on an exact loopback host, so
+`http://gateway:4100` always gets 421. A caller that sets `AOS_GATEWAY_URL`,
+such as `aos-invite-link`, must either:
+
+- from a container, use an `https:` name the gateway's listener lists, such as
+  the lane's own `https://agents.example`; or
+- run under [host networking](deployment.md#host-networking) and use
+  `http://127.0.0.1:4100`.
+
+Under bridged Compose the gateway's port 4100 is not published to the host
+either, so `http://127.0.0.1:4100` reaches nothing there.
 
 ## A published Artifact cannot load
 

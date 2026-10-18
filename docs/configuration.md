@@ -80,7 +80,7 @@ the gateway answers `/api/v1` beside it.
 | ------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `AOS_UI_WEB_HOST`                    | `127.0.0.1`                                                                    | Operator surface bind address: `127.0.0.1`, `::1`, or a wildcard with `AOS_UI_WEB_EXPOSURE`.                                                                 |
 | `AOS_UI_WEB_PORT`                    | `3000`                                                                         | Operator surface port. Compose uses `4200`.                                                                                                                  |
-| `AOS_UI_PUBLIC_ORIGIN`               | required; Compose defaults to `http://localhost:<port>,http://127.0.0.1:<port>` | The exact origins the browser opens the operator lane at, comma-separated. Must be exact origins (`new URL(v).origin === v`). Served in `/runtime-config.json` as `publicOrigins`. |
+| `AOS_UI_PUBLIC_ORIGIN`               | required; Compose defaults to `http://localhost:<port>,http://127.0.0.1:<port>` | The exact origins the browser opens the operator lane at, comma-separated. Must be [exact origins](#exact-origins). Served in `/runtime-config.json` as `publicOrigins`. |
 | `AOS_UI_MCP_APP_SANDBOX_ORIGIN`      | required; Compose defaults to `http://sandbox.localhost:<port>`                 | The sandbox origin MCP App views load from. Must be an exact origin differing in host and port from every entry in `AOS_UI_PUBLIC_ORIGIN`, `https:` when any of them is, and loopback exactly when the lane is, then a `*.localhost` name. Served in `/runtime-config.json` as `mcpAppSandboxOrigin`. |
 | `AOS_UI_GUEST_WEB_PORT`              | unset                                                                          | Guest surface port; the guest surface runs only when it is set. Compose's harness overlays use `4201`.                                                        |
 | `AOS_UI_GUEST_WEB_HOST`              | `127.0.0.1`                                                                    | Guest surface bind address, under the same rule as `AOS_UI_WEB_HOST`.                                                                                        |
@@ -90,19 +90,28 @@ the gateway answers `/api/v1` beside it.
 | `AOS_UI_STATIC_ROOT`                 | `/app/dist`                                                                    | The built app, holding `build-id` beside the assets.                                                                                                         |
 | `AOS_UI_RUNTIME_CONFIG_FILE`         | `/run/aos-ui/runtime-config.json`                                              | The operator's public runtime configuration.                                                                                                                  |
 
-An exact origin passes `isMcpAppPolicyOrigin`: lowercase label characters, an
-`http:` or `https:` scheme, no IPv6 literal, and no path component. The sandbox
-address answers 404 to service-worker script requests (`Service-Worker:` header)
-so nothing installs a worker there.
+The sandbox address answers 404 to service-worker script requests
+(`Service-Worker:` header) so nothing installs a worker there.
 
 The web server refuses to start when any required origin setting is missing,
-not an exact origin, overlapping another in host and port, an `http:` sandbox
+not an [exact origin](#exact-origins), overlapping another in host and port, an `http:` sandbox
 under an `https:` lane, or a loopback sandbox that is not a `*.localhost` name.
 The guest origin settings are required only when `AOS_UI_GUEST_WEB_PORT` is
 set. See [MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins) for
 naming and proxy guidance.
 
 The guest surface never serves `/auth`, `/sw.js`, or `/manifest.webmanifest`.
+
+### Exact origins {#exact-origins}
+
+Every origin setting takes exact origins, the ones `isMcpAppPolicyOrigin` in
+`@harness-gw/sdk/protocol` accepts: an `http:` or `https:` origin written
+exactly as a browser's `URL` writes it, whose host is a name or an IPv4
+address. It is lowercase, ends without a path or `/`, and names no port that is
+its scheme's default; an IPv6 literal is refused. `https://agents.example` and
+`http://127.0.0.1:3000` are exact; `https://agents.example/`,
+`https://Agents.example`, `https://agents.example:443`, and `http://[::1]:3000`
+are not.
 
 ## Compose host variables
 
