@@ -167,6 +167,27 @@ describe("MCP App views", () => {
       ])
     }
   )
+
+  it("declares the stable origin it is given on the artifact view alone, in its listing and its content", async () => {
+    const domain = "0123456789abcdef0123456789abcdef.mcp-apps.example.test"
+    const stable = new Client({ name: "tools-mcp-test", version: "0.0.0" })
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair()
+    await createToolsServer({ views }, { artifactDomain: domain }).connect(
+      serverTransport
+    )
+    await stable.connect(clientTransport)
+
+    const { resources } = await stable.listResources()
+    for (const [, uri, , ui] of declared) {
+      const expected = uri === "ui://aos-ui/artifact" ? { ...ui, domain } : ui
+      const listed = resources.find((resource) => resource.uri === uri)
+      const [content] = (await stable.readResource({ uri })).contents
+      expect(listed?._meta?.ui, uri).toEqual(expected)
+      expect(content?._meta?.ui, uri).toEqual(expected)
+    }
+    await stable.close()
+  })
 })
 
 describe("view files", () => {

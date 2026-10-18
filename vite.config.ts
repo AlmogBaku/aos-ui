@@ -44,6 +44,7 @@ import {
 import { readTitleBarColors } from "./shared/theme-color.ts"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
+  FIXTURE_ARTIFACT_VIEW_DOMAIN,
   FIXTURE_MCP_APP_FILE_PATHS,
 } from "./shared/presentation/views.ts"
 import {
@@ -290,7 +291,11 @@ function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
   }
 }
 
-/** The real `aos-ui` server's answers, as JSON, from views built right now. */
+/**
+ * The real `aos-ui` server's answers, as JSON, from views built right now, its
+ * artifact view on the fixture's stable origin, which a preview with stable
+ * origins on frames it from and any other ignores.
+ */
 async function recordToolsServer() {
   const [views, pdfjs, grammars, maplibre] = await Promise.all([
     buildViews(),
@@ -299,7 +304,10 @@ async function recordToolsServer() {
     buildMaplibre(),
   ])
   return JSON.stringify(
-    await snapshotToolsServer({ views, pdfjs, grammars, maplibre })
+    await snapshotToolsServer(
+      { views, pdfjs, grammars, maplibre },
+      { artifactDomain: FIXTURE_ARTIFACT_VIEW_DOMAIN }
+    )
   )
 }
 

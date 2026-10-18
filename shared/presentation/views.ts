@@ -94,6 +94,21 @@ export const GRAMMAR_RESOURCE_URI = "ui://aos-ui/grammars/"
  */
 export const FIXTURE_AOS_UI_MCP_PATH = "/fixture/aos-ui-mcp.json"
 
+/**
+ * The domain the fixture's stable origins sit under, as the preview that
+ * turns them on names them: `http://*.mcp-apps.localhost:<its port>`.
+ */
+export const FIXTURE_MCP_APP_STABLE_DOMAIN = "mcp-apps.localhost"
+
+/**
+ * The fixture's artifact view's `_meta.ui.domain`: the stable origin key of
+ * `http://127.0.0.1:4110/mcp`, the URL a harness on the host registers the
+ * `aos-ui` server at, below `FIXTURE_MCP_APP_STABLE_DOMAIN`. The browser
+ * computes no key, so it was computed once and pasted:
+ * `bun -e 'import { mcpAppStableOriginKey } from "@harness-gw/sdk/node"; console.log(mcpAppStableOriginKey("http://127.0.0.1:4110/mcp"))'`.
+ */
+export const FIXTURE_ARTIFACT_VIEW_DOMAIN = `7cc446137c2736c67e8c3639c0348c67.${FIXTURE_MCP_APP_STABLE_DOMAIN}`
+
 /** The path prefix for the synthetic files the fixture serves to the artifact view. */
 export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files"
 
@@ -125,3 +140,31 @@ export const FIXTURE_MCP_APP_FILES = {
 export const FIXTURE_MCP_APP_FILE_PATHS = Object.values(
   FIXTURE_MCP_APP_FILES
 ).map((name) => `${FIXTURE_MCP_APP_FILES_PATH}/${name}`)
+
+/**
+ * Each fixture file's `fileId` by its path, as the tools server and the
+ * gateway give one: `artifactFileId` (`@harness-gw/sdk/node`) of the path.
+ * The browser computes none, so each was computed once and pasted:
+ * `bun -e 'import { artifactFileId } from "@harness-gw/sdk/node"; console.log(artifactFileId("/fixture/mcp-app-files/report.pdf"))'`.
+ */
+export const FIXTURE_MCP_APP_FILE_IDS: ReadonlyMap<string, string> = new Map(
+  (
+    [
+      ["pdf", "83dd05ab7501dab3"],
+      ["png", "39f6f21ba2b120b9"],
+      ["html", "31f870e8fd4a5d2e"],
+      ["audio", "64791ac3ef3d8d6d"],
+      ["video", "9e3286011078f802"],
+      ["markdown", "2ac3018a4fdefe21"],
+      ["csv", "37ef13d87f7a4393"],
+      ["json", "e633aa9f35c4e001"],
+      ["code", "aa845e2768a8c3f0"],
+      ["page", "19ca46590f90e9d6"],
+    ] as const satisfies ReadonlyArray<
+      readonly [keyof typeof FIXTURE_MCP_APP_FILES, string]
+    >
+  ).map(([file, fileId]) => [
+    `${FIXTURE_MCP_APP_FILES_PATH}/${FIXTURE_MCP_APP_FILES[file]}`,
+    fileId,
+  ])
+)

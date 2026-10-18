@@ -47,6 +47,15 @@ export type ToolsServerFiles = {
   maplibre?: ViewFiles
 }
 
+/** What the server declares about its views beyond their files. */
+export type ToolsServerOptions = {
+  /**
+   * The artifact view's stable origin host, its `_meta.ui.domain`, which it
+   * declares only when set; no other view declares one.
+   */
+  artifactDomain?: string
+}
+
 const SAFE_OUTPUT =
   "Never emit executable HTML, scripts, or browser-side code; Mermaid belongs only in fenced mermaid blocks."
 
@@ -138,10 +147,16 @@ function presentationResult(
   }
 }
 
-function registerView(server: McpServer, view: PresentationView, html: string) {
+function registerView(
+  server: McpServer,
+  view: PresentationView,
+  html: string,
+  domain: string | undefined
+) {
   const ui = {
     csp: view.csp,
     ...(view.permissions ? { permissions: view.permissions } : {}),
+    ...(domain ? { domain } : {}),
   }
   registerAppResource(
     server,
@@ -213,16 +228,24 @@ function registerFiles(
  * `ui://aos-ui/<view>` resource. `present_artifact` opens no file: its view
  * reads the file through the address the page hands it.
  */
-export function createToolsServer({
-  views,
-  pdfjs = new Map(),
-  grammars = new Map(),
-  maplibre = new Map(),
-}: ToolsServerFiles): McpServer {
+export function createToolsServer(
+  {
+    views,
+    pdfjs = new Map(),
+    grammars = new Map(),
+    maplibre = new Map(),
+  }: ToolsServerFiles,
+  { artifactDomain }: ToolsServerOptions = {}
+): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
   for (const view of Object.values(presentationViews))
-    registerView(server, view, views[view.name])
+    registerView(
+      server,
+      view,
+      views[view.name],
+      view.name === "artifact" ? artifactDomain : undefined
+    )
   // pdf.js's worker is script text; every other pdf.js file is bytes.
   registerFiles(server, "pdf.js file", PDFJS_RESOURCE_URI, pdfjs, (path) =>
     path === PDFJS_WORKER_FILE ? "text/javascript" : undefined
