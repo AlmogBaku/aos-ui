@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -191,8 +191,8 @@ describe("web server", () => {
     }
   )
 
-  it("serves neither sandbox file on a lane's own addresses, however its path is spelled, nor any path naming one", async () => {
-    const { guest, operator } = await builtApp()
+  it("serves neither sandbox file on a lane's own addresses, however its path is spelled, nor any path naming one, but serves a file named only like them", async () => {
+    const { guest, operator, root } = await builtApp()
 
     for (const [app, lane] of [
       [operator, OPERATOR],
@@ -216,6 +216,13 @@ describe("web server", () => {
           "/@fs/app/public/mcp-app-sandbox.js",
         ])
           expect((await get(app, path, origin)).status).toBe(404)
+
+    // A chunk built from the sandbox's shared module is the lane's own.
+    await mkdir(join(root, "assets"))
+    await writeFile(join(root, "assets", "mcp-app-sandbox-abc123.js"), "chunk")
+    const chunk = await get(operator, "/assets/mcp-app-sandbox-abc123.js")
+    expect(chunk.status).toBe(200)
+    expect(await chunk.text()).toBe("chunk")
   })
 
   it("keeps the operator's installable shell off the guest surface", async () => {

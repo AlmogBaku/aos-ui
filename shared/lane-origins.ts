@@ -85,7 +85,7 @@ export function readLaneOrigins(
   const sandbox = getenv(settings.mcpAppSandboxOrigin)?.trim()
   if (!sandbox)
     throw new Error(
-      `${settings.mcpAppSandboxOrigin} must name the lane's MCP App sandbox origin, such as https://sandbox.agents.example`
+      `${settings.mcpAppSandboxOrigin} must name the lane's MCP App sandbox origin, such as https://agents-sandbox.example`
     )
   const mcpAppSandboxOrigin = exactOrigin(settings.mcpAppSandboxOrigin, sandbox)
   if (sharesHost(mcpAppSandboxOrigin, publicOrigins))

@@ -76,10 +76,22 @@ export function sandboxPagePolicy(
 }
 
 /**
+ * The sandbox page's and its script's names, and the stem a server may
+ * complete with either extension.
+ */
+const SANDBOX_FILE_NAMES = new Set(
+  [MCP_APP_SANDBOX_PATH, MCP_APP_SANDBOX_SCRIPT_PATH].flatMap((path) => {
+    const name = path.slice(1)
+    return [name, name.slice(0, name.lastIndexOf("."))]
+  })
+)
+
+/**
  * Whether a lane address refuses a request path as one that may reach the
  * sandbox page or its script under a spelling a server rewrites, such as
  * `/mcp-app-sandbox`, `/public/mcp-app-sandbox.html`, or `/@fs/…`: its last
- * segment, decoded and lowercased, starts with `mcp-app-sandbox`. A path that
+ * segment, decoded and lowercased, is one of their names. Any other file, such
+ * as a chunk whose name begins like theirs, is the lane's own. A path that
  * cannot be decoded is refused too.
  */
 export function namesSandboxFile(pathname: string): boolean {
@@ -90,7 +102,7 @@ export function namesSandboxFile(pathname: string): boolean {
     return true
   }
   const last = decoded.split("/").filter(Boolean).at(-1) ?? ""
-  return last.toLowerCase().startsWith("mcp-app-sandbox")
+  return SANDBOX_FILE_NAMES.has(last.toLowerCase())
 }
 
 /**
