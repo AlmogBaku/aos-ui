@@ -57,6 +57,10 @@ describe("browser runtime configuration", () => {
     const origins = {
       publicOrigins: ["https://guest.example.test"],
       mcpAppSandboxOrigin: "https://sandbox.example.test",
+      mcpAppFrameAncestors: [
+        "https://aos.example.test",
+        "https://guest.example.test",
+      ],
     }
     expect(
       parsePublicApplicationConfiguration({

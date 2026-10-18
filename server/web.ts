@@ -10,6 +10,7 @@ import {
   MCP_APP_SANDBOX_SCRIPT_PATH,
   namesSandboxFile,
   sandboxPagePolicy,
+  sandboxPolicyOrigins,
   SERVICE_WORKER_HEADER,
   type SandboxPolicyOrigins,
 } from "../shared/mcp-app-sandbox"
@@ -21,13 +22,11 @@ export type WebAppOptions = {
   root: string
   /** The operator's public runtime configuration; the guest's is generated. */
   runtimeConfigFile: string
-  /** The surface's lane: its pages' origins and the MCP App sandbox origin. */
-  origins: LaneOrigins
   /**
-   * Every lane's origins, the pages that may frame the sandbox page this
-   * surface serves when a request names the sandbox address.
+   * The surface's lane: its pages' origins, the MCP App sandbox origin, and
+   * every lane's origins, which may frame the sandbox page.
    */
-  frameAncestors: readonly string[]
+  origins: LaneOrigins
 }
 
 /**
@@ -150,10 +149,7 @@ async function readOperatorConfig(path: string) {
 export function createWebApp(options: WebAppOptions) {
   const { origins, root } = options
   const sandboxOrigin = origins.mcpAppSandboxOrigin
-  const policyOrigins = {
-    frameAncestors: options.frameAncestors,
-    sandboxOrigin,
-  }
+  const policyOrigins = sandboxPolicyOrigins(origins)
   const guest = options.surface === "guest"
   const serveStatic = createStaticHandler({ root })
   const headers = pageHeaders(options.surface, sandboxOrigin)

@@ -10,11 +10,18 @@ import userEvent from "@testing-library/user-event"
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps/app-bridge"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import type { McpUiCsp } from "@harness-gw/sdk/protocol"
 import { ToolUiLocaleProvider } from "@/components/tool-ui"
 import {
   McpAppFilesRefusedError,
   type McpAppAdapter,
 } from "@/runtime-adapters/contracts"
+
+import {
+  sandboxPagePolicy,
+  sandboxPageUrl,
+  sandboxPolicyOrigins,
+} from "@shared/mcp-app-sandbox"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
 import McpAppFrame, { type McpAppFrameProps } from "./mcp-app-frame"
@@ -36,7 +43,7 @@ const { FakeBridge, bridges } = vi.hoisted(() => {
     constructor(
       _client: unknown,
       _info: unknown,
-      _capabilities: unknown,
+      readonly capabilities: { sandbox?: { csp?: McpUiCsp } },
       options: { hostContext: McpUiHostContext }
     ) {
       this.contexts.push(options.hostContext)
@@ -108,6 +115,7 @@ const LANE = {
   origins: {
     publicOrigins: [window.location.origin],
     mcpAppSandboxOrigin: SANDBOX,
+    mcpAppFrameAncestors: [window.location.origin],
   },
 } as const satisfies Pick<McpAppFrameProps, "surface" | "origins">
 
@@ -504,6 +512,7 @@ describe("MCP App sandbox", () => {
       {
         publicOrigins: ["https://aos.example.test"],
         mcpAppSandboxOrigin: SANDBOX,
+        mcpAppFrameAncestors: ["https://aos.example.test"],
       },
       `Apps show only at an address AOS_UI_PUBLIC_ORIGIN lists, and this page is at ${window.location.origin}.`,
     ],
@@ -513,6 +522,7 @@ describe("MCP App sandbox", () => {
       {
         publicOrigins: [window.location.origin],
         mcpAppSandboxOrigin: window.location.origin,
+        mcpAppFrameAncestors: [window.location.origin],
       },
       `Apps show only at an address AOS_UI_GUEST_PUBLIC_ORIGIN lists, and this page is at ${window.location.origin}.`,
     ],
@@ -532,6 +542,34 @@ describe("MCP App sandbox", () => {
       expect(screen.getByText(reason)).toBeVisible()
     }
   )
+
+  it("reports the domains its sandbox page's policy applies, without one naming another lane's page", () => {
+    const origins = {
+      publicOrigins: [window.location.origin],
+      mcpAppSandboxOrigin: SANDBOX,
+      mcpAppFrameAncestors: [
+        window.location.origin,
+        "https://aos.example.test",
+      ],
+    }
+    const csp = {
+      connectDomains: ["https://aos.example.test", "https://api.example.test"],
+    }
+    render(
+      frame({ surface: "guest", origins, view: { html: "<p>app</p>", csp } })
+    )
+
+    const reported = bridges.at(-1)?.capabilities.sandbox?.csp
+    expect(reported).toEqual({ connectDomains: ["https://api.example.test"] })
+    // The server's header for the same view connects to exactly those.
+    const query = new URL(
+      sandboxPageUrl(origins, { allow: "", csp, fileLocations: [] }) ?? ""
+    ).searchParams
+    const policy = sandboxPagePolicy(sandboxPolicyOrigins(origins), query)
+    expect(policy).toContain(
+      `connect-src ${reported?.connectDomains?.join(" ")};`
+    )
+  })
 
   it("names the setting in Hebrew", () => {
     render(frame({ origins: undefined }, "he"))

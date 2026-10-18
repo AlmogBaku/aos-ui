@@ -5,16 +5,24 @@ export type Surface = "operator" | "guest"
 
 /**
  * Where one lane shows MCP App views, as its `/runtime-config.json` carries
- * them: the origins people open the lane at, and the deployment's one sandbox
- * origin, which every lane's views load from.
+ * them: the origins people open the lane at, the deployment's one sandbox
+ * origin, which every lane's views load from, and every lane's origins, the
+ * only pages that may frame it, which its page's header publishes anyway.
  */
 export type LaneOrigins = {
   publicOrigins: readonly string[]
   mcpAppSandboxOrigin: string
+  mcpAppFrameAncestors: readonly string[]
 }
 
 /** One lane's public origins. */
 export type Lane = { surface: Surface; publicOrigins: readonly string[] }
+
+/** Every lane's public origins, and the one sandbox origin they all frame. */
+export type DeploymentOrigins = {
+  lanes: readonly Lane[]
+  mcpAppSandboxOrigin: string
+}
 
 /** The setting each lane's public origins are read from. */
 export const PUBLIC_ORIGIN_SETTINGS = {
@@ -58,7 +66,7 @@ function exactOrigin(name: string, value: string) {
  * One lane's public origins from its comma-separated setting, each an exact
  * origin (`isMcpAppPolicyOrigin`). Throws naming the setting it refuses.
  */
-export function readPublicOrigins(getenv: Getenv, surface: Surface): string[] {
+function readPublicOrigins(getenv: Getenv, surface: Surface): string[] {
   const setting = PUBLIC_ORIGIN_SETTINGS[surface]
   const publicOrigins = [
     ...new Set(
@@ -83,10 +91,7 @@ export function readPublicOrigins(getenv: Getenv, surface: Surface): string[] {
  * loopback addresses on every port. An `https:` page frames no `http:`
  * sandbox. Throws naming the setting it refuses.
  */
-export function readSandboxOrigin(
-  getenv: Getenv,
-  lanes: readonly Lane[]
-): string {
+function readSandboxOrigin(getenv: Getenv, lanes: readonly Lane[]): string {
   const setting = MCP_APP_SANDBOX_ORIGIN_SETTING
   const value = getenv(setting)?.trim()
   if (!value)
@@ -128,7 +133,7 @@ export function readSandboxOrigin(
 }
 
 /** Refuses an origin two lanes both list: each page belongs to one lane. */
-export function assertLanesApart(lanes: readonly Lane[]) {
+function assertLanesApart(lanes: readonly Lane[]) {
   const owners = new Map<string, Surface>()
   for (const { surface, publicOrigins } of lanes)
     for (const origin of publicOrigins) {
@@ -139,4 +144,39 @@ export function assertLanesApart(lanes: readonly Lane[]) {
         )
       owners.set(origin, surface)
     }
+}
+
+/**
+ * The deployment's origins from its settings, for the lanes in `surfaces`:
+ * each lane's own, and the one sandbox origin, checked against every lane.
+ * Throws naming the setting it refuses.
+ */
+export function readDeploymentOrigins(
+  getenv: Getenv,
+  surfaces: readonly Surface[]
+): DeploymentOrigins {
+  const lanes = surfaces.map((surface) => ({
+    surface,
+    publicOrigins: readPublicOrigins(getenv, surface),
+  }))
+  assertLanesApart(lanes)
+  return { lanes, mcpAppSandboxOrigin: readSandboxOrigin(getenv, lanes) }
+}
+
+/**
+ * The origins `surface`'s runtime configuration carries; every lane's pages,
+ * whichever lane it is, may frame the one sandbox.
+ */
+export function laneOrigins(
+  { lanes, mcpAppSandboxOrigin }: DeploymentOrigins,
+  surface: Surface
+): LaneOrigins {
+  const lane = lanes.find((candidate) => candidate.surface === surface)
+  if (lane === undefined)
+    throw new Error(`The ${surface} lane's origins were not read`)
+  return {
+    publicOrigins: lane.publicOrigins,
+    mcpAppSandboxOrigin,
+    mcpAppFrameAncestors: lanes.flatMap(({ publicOrigins }) => publicOrigins),
+  }
 }

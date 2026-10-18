@@ -20,11 +20,12 @@ import {
 } from "./shared/runtime-config.ts"
 import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
 import {
+  laneOrigins,
   MCP_APP_SANDBOX_ORIGIN_SETTING,
   PUBLIC_ORIGIN_SETTINGS,
-  readPublicOrigins,
-  readSandboxOrigin,
+  readDeploymentOrigins,
   type LaneOrigins,
+  type Surface,
 } from "./shared/lane-origins.ts"
 import {
   isSandboxHost,
@@ -69,25 +70,24 @@ const DEV_SERVER_PORT = 3000
 type LaneOriginsOf = (request: IncomingMessage) => LaneOrigins
 
 /**
- * The operator lane's origins and the sandbox origin, as the web server reads
- * them, for the only lane these servers serve: its settings, or, where they
- * are unset, loopback names on `port`, the port a request reached, which is
- * this server's own.
+ * The operator lane's origins, the only lane these servers serve, read as the
+ * web server reads them (`readDeploymentOrigins`): its settings, or, where
+ * they are unset, loopback names on `port`, the port a request reached, which
+ * is this server's own.
  */
-function laneOriginsAt(environment: NodeJS.ProcessEnv) {
+export function laneOriginsAt(environment: NodeJS.ProcessEnv) {
   return (port: number | undefined): LaneOrigins => {
     const loopback: Record<string, string> = {
       [PUBLIC_ORIGIN_SETTINGS.operator]: `http://localhost:${port},http://127.0.0.1:${port}`,
       [MCP_APP_SANDBOX_ORIGIN_SETTING]: `http://sandbox.localhost:${port}`,
     }
     const getenv = (name: string) => environment[name] || loopback[name]
-    const publicOrigins = readPublicOrigins(getenv, "operator")
-    return {
-      publicOrigins,
-      mcpAppSandboxOrigin: readSandboxOrigin(getenv, [
-        { surface: "operator", publicOrigins },
-      ]),
-    }
+    // The guest lane's pages frame the sandbox Vite serves, as a harness
+    // overlay's web-guest serves them, once its origins are set.
+    const surfaces: Surface[] = getenv(PUBLIC_ORIGIN_SETTINGS.guest)
+      ? ["operator", "guest"]
+      : ["operator"]
+    return laneOrigins(readDeploymentOrigins(getenv, surfaces), "operator")
   }
 }
 

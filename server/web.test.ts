@@ -25,16 +25,23 @@ afterEach(async () => {
 
 /** The one sandbox both lanes' views load from. */
 const SANDBOX = "https://sandbox.example.test"
+const OPERATOR_PAGES = [
+  "https://aos.example.test",
+  "https://aos.tail.example.test",
+]
+const GUEST_PAGES = ["https://guest.example.test"]
+/** Every lane's pages, which may frame the sandbox page. */
+const LANE_ORIGINS = [...OPERATOR_PAGES, ...GUEST_PAGES]
 const OPERATOR: LaneOrigins = {
-  publicOrigins: ["https://aos.example.test", "https://aos.tail.example.test"],
+  publicOrigins: OPERATOR_PAGES,
   mcpAppSandboxOrigin: SANDBOX,
+  mcpAppFrameAncestors: LANE_ORIGINS,
 }
 const GUEST: LaneOrigins = {
-  publicOrigins: ["https://guest.example.test"],
+  publicOrigins: GUEST_PAGES,
   mcpAppSandboxOrigin: SANDBOX,
+  mcpAppFrameAncestors: LANE_ORIGINS,
 }
-/** Every lane's pages, which may frame the sandbox page. */
-const LANE_ORIGINS = [...OPERATOR.publicOrigins, ...GUEST.publicOrigins]
 
 /**
  * A built app with a shell, the installable files, the sandbox page and its
@@ -69,14 +76,12 @@ async function builtApp() {
       root,
       runtimeConfigFile,
       origins: OPERATOR,
-      frameAncestors: LANE_ORIGINS,
     }),
     guest: createWebApp({
       surface: "guest",
       root,
       runtimeConfigFile,
       origins: GUEST,
-      frameAncestors: LANE_ORIGINS,
     }),
   }
 }
@@ -95,14 +100,13 @@ const directives = (policy: string | null, name: string) =>
     .filter((directive) => directive.split(" ")[0] === name)
 
 describe("web server", () => {
-  it("serves each surface's runtime configuration with its own lane's origins, the one sandbox origin, and the served build id", async () => {
+  it("serves each surface's runtime configuration with its own lane's origins, the one sandbox origin, every lane's origins, and the served build id", async () => {
     const { operator, guest } = await builtApp()
 
     const operatorConfig = await get(operator, "/runtime-config.json")
     expect(await operatorConfig.json()).toEqual({
       mode: "aos",
-      publicOrigins: OPERATOR.publicOrigins,
-      mcpAppSandboxOrigin: SANDBOX,
+      ...OPERATOR,
       buildId: "build-2",
     })
     expect(operatorConfig.headers.get("cache-control")).toBe("no-store")
@@ -110,12 +114,7 @@ describe("web server", () => {
       await (
         await get(guest, "/runtime-config.json", GUEST.publicOrigins[0])
       ).json()
-    ).toEqual({
-      surface: "guest",
-      publicOrigins: GUEST.publicOrigins,
-      mcpAppSandboxOrigin: SANDBOX,
-      buildId: "build-2",
-    })
+    ).toEqual({ surface: "guest", ...GUEST, buildId: "build-2" })
   })
 
   it("answers 503 while the operator configuration is missing", async () => {
@@ -265,36 +264,62 @@ describe("web server settings", () => {
   const GUEST_LANE = {
     AOS_UI_GUEST_PUBLIC_ORIGIN: "http://localhost:3001,http://127.0.0.1:3001",
   }
-  const operatorListener = {
-    surface: "operator",
-    host: "127.0.0.1",
-    port: 3000,
-    publicOrigins: ["http://localhost:3000", "http://127.0.0.1:3000"],
-  }
+  const OPERATOR_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+  const GUEST_ORIGINS = ["http://localhost:3001", "http://127.0.0.1:3001"]
+  /** A lane's origins, the one sandbox, and every read lane's pages framing it. */
+  const originsOf = (
+    publicOrigins: readonly string[],
+    frameAncestors: readonly string[]
+  ) => ({
+    publicOrigins,
+    mcpAppSandboxOrigin: "http://sandbox.localhost:3000",
+    mcpAppFrameAncestors: frameAncestors,
+  })
   const env =
     (values: Record<string, string | undefined>) =>
     (name: string): string | undefined =>
       values[name]
 
   it("listens on loopback, and adds the guest surface and its lane only when its port is set, both lanes on the one sandbox", () => {
-    const operatorOnly = readWebServerConfig(env(OPERATOR_LANE))
-    expect(operatorOnly.listeners).toEqual([operatorListener])
-    expect(operatorOnly.mcpAppSandboxOrigin).toBe(
-      "http://sandbox.localhost:3000"
-    )
-    const both = readWebServerConfig(
-      env({ ...OPERATOR_LANE, ...GUEST_LANE, AOS_UI_GUEST_WEB_PORT: "3001" })
-    )
-    expect(both.listeners).toEqual([
-      operatorListener,
+    expect(readWebServerConfig(env(OPERATOR_LANE)).listeners).toEqual([
+      {
+        surface: "operator",
+        host: "127.0.0.1",
+        port: 3000,
+        origins: originsOf(OPERATOR_ORIGINS, OPERATOR_ORIGINS),
+      },
+    ])
+    const lanes = [...OPERATOR_ORIGINS, ...GUEST_ORIGINS]
+    expect(
+      readWebServerConfig(
+        env({ ...OPERATOR_LANE, ...GUEST_LANE, AOS_UI_GUEST_WEB_PORT: "3001" })
+      ).listeners
+    ).toEqual([
+      {
+        surface: "operator",
+        host: "127.0.0.1",
+        port: 3000,
+        origins: originsOf(OPERATOR_ORIGINS, lanes),
+      },
       {
         surface: "guest",
         host: "127.0.0.1",
         port: 3001,
-        publicOrigins: ["http://localhost:3001", "http://127.0.0.1:3001"],
+        origins: originsOf(GUEST_ORIGINS, lanes),
       },
     ])
-    expect(both.mcpAppSandboxOrigin).toBe("http://sandbox.localhost:3000")
+  })
+
+  it("leaves the guest surface off when its port is empty, as the operator-only overlay leaves it, whatever its lane's origins", () => {
+    const config = readWebServerConfig(
+      env({
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos-sandbox.example",
+        ...GUEST_LANE,
+        AOS_UI_GUEST_WEB_PORT: "",
+      })
+    )
+    expect(config.listeners.map(({ surface }) => surface)).toEqual(["operator"])
   })
 
   it.each([
@@ -321,11 +346,18 @@ describe("web server settings", () => {
         }
       )
 
+      const lanes =
+        listeners === 2
+          ? [...OPERATOR_ORIGINS, ...GUEST_ORIGINS]
+          : OPERATOR_ORIGINS
       expect(apps).toHaveLength(listeners)
       for (const app of apps) {
+        // The pages the header lets frame the sandbox are the ones each
+        // surface's views report their policy for.
         const config = await get(app, "/runtime-config.json")
         expect(await config.json()).toMatchObject({
           mcpAppSandboxOrigin: "http://sandbox.localhost:3000",
+          mcpAppFrameAncestors: lanes,
         })
         const page = await get(
           app,
@@ -337,13 +369,7 @@ describe("web server settings", () => {
             page.headers.get("content-security-policy"),
             "frame-ancestors"
           )
-        ).toEqual([
-          `frame-ancestors http://localhost:3000 http://127.0.0.1:3000${
-            listeners === 2
-              ? " http://localhost:3001 http://127.0.0.1:3001"
-              : ""
-          }`,
-        ])
+        ).toEqual([`frame-ancestors ${lanes.join(" ")}`])
       }
     }
   )
@@ -397,12 +423,23 @@ describe("web server settings", () => {
       { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.example.test" },
       /^AOS_UI_MCP_APP_SANDBOX_ORIGIN is not a loopback origin, but AOS_UI_PUBLIC_ORIGIN lists http:\/\/localhost:3000, which is$/u,
     ],
+    // A loopback operator lane beside a public guest lane cannot share one
+    // sandbox, and neither can a named operator lane beside the loopback
+    // guest origins a harness overlay defaults to.
     [
       {
         AOS_UI_GUEST_WEB_PORT: "3001",
         AOS_UI_GUEST_PUBLIC_ORIGIN: "https://guest.example.test",
       },
       /^AOS_UI_MCP_APP_SANDBOX_ORIGIN is a loopback origin, but AOS_UI_GUEST_PUBLIC_ORIGIN lists https:\/\/guest\.example\.test, which is not$/u,
+    ],
+    [
+      {
+        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos-sandbox.example",
+        AOS_UI_GUEST_WEB_PORT: "3001",
+      },
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN is not a loopback origin, but AOS_UI_GUEST_PUBLIC_ORIGIN lists http:\/\/localhost:3001, which is$/u,
     ],
     [
       {
@@ -454,16 +491,18 @@ describe("web server settings", () => {
   })
 
   it("reads an https lane whose sandbox is the lane's name on another port", () => {
-    const config = readWebServerConfig(
-      env({
-        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
-        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos.example.test:8443",
-      })
-    )
-    expect(config.listeners[0]?.publicOrigins).toEqual([
-      "https://aos.example.test",
-    ])
-    expect(config.mcpAppSandboxOrigin).toBe("https://aos.example.test:8443")
+    expect(
+      readWebServerConfig(
+        env({
+          AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+          AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos.example.test:8443",
+        })
+      ).listeners[0]?.origins
+    ).toEqual({
+      publicOrigins: ["https://aos.example.test"],
+      mcpAppSandboxOrigin: "https://aos.example.test:8443",
+      mcpAppFrameAncestors: ["https://aos.example.test"],
+    })
   })
 
   it("binds a wildcard host once the private container exposure is acknowledged", () => {
@@ -475,6 +514,13 @@ describe("web server settings", () => {
           AOS_UI_WEB_EXPOSURE: "private-container",
         })
       ).listeners
-    ).toEqual([{ ...operatorListener, host: "0.0.0.0" }])
+    ).toEqual([
+      {
+        surface: "operator",
+        host: "0.0.0.0",
+        port: 3000,
+        origins: originsOf(OPERATOR_ORIGINS, OPERATOR_ORIGINS),
+      },
+    ])
   })
 })

@@ -37,11 +37,15 @@ export type SandboxPolicyOrigins = {
   sandboxOrigin: string
 }
 
-/** A lane's own pages, framing the sandbox. */
+/**
+ * The origins every sandbox policy is built for, by the server that sends it
+ * and the host that reports what it applies: every lane's pages, framing the
+ * one sandbox.
+ */
 export const sandboxPolicyOrigins = (
   origins: LaneOrigins
 ): SandboxPolicyOrigins => ({
-  frameAncestors: origins.publicOrigins,
+  frameAncestors: origins.mcpAppFrameAncestors,
   sandboxOrigin: origins.mcpAppSandboxOrigin,
 })
 

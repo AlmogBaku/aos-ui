@@ -1,20 +1,23 @@
 import {
-  assertLanesApart,
-  readPublicOrigins,
-  readSandboxOrigin,
-  type Lane,
+  laneOrigins,
+  readDeploymentOrigins,
+  type LaneOrigins,
+  type Surface,
 } from "../shared/lane-origins"
 import { createWebApp } from "./web"
 
 type Getenv = (name: string) => string | undefined
 
-export type WebListener = Lane & { host: string; port: number }
+export type WebListener = {
+  surface: Surface
+  host: string
+  port: number
+  origins: LaneOrigins
+}
 
 export type WebServerConfig = {
   root: string
   runtimeConfigFile: string
-  /** The one MCP App sandbox origin, which every listener's lane frames. */
-  mcpAppSandboxOrigin: string
   listeners: WebListener[]
 }
 
@@ -49,40 +52,51 @@ function host(name: string, value: string, getenv: Getenv) {
 
 /**
  * Reads the web server's settings; the guest listener, and the guest lane's
- * origins, only when its port is set. The one sandbox origin is checked
- * against every listener's lane.
+ * origins, only when its port is set and not empty, as the operator-only
+ * overlay leaves it.
  */
 export function readWebServerConfig(getenv: Getenv): WebServerConfig {
+  const guestPort = getenv("AOS_UI_GUEST_WEB_PORT") || undefined
+  const operatorBind = {
+    host: host(
+      "AOS_UI_WEB_HOST",
+      getenv("AOS_UI_WEB_HOST") ?? "127.0.0.1",
+      getenv
+    ),
+    port: port("AOS_UI_WEB_PORT", getenv("AOS_UI_WEB_PORT") ?? "3000"),
+  }
+  const guestBind =
+    guestPort === undefined
+      ? undefined
+      : {
+          host: host(
+            "AOS_UI_GUEST_WEB_HOST",
+            getenv("AOS_UI_GUEST_WEB_HOST") ?? "127.0.0.1",
+            getenv
+          ),
+          port: port("AOS_UI_GUEST_WEB_PORT", guestPort),
+        }
+  const deployment = readDeploymentOrigins(
+    getenv,
+    guestBind ? ["operator", "guest"] : ["operator"]
+  )
   const listeners: WebListener[] = [
     {
       surface: "operator",
-      host: host(
-        "AOS_UI_WEB_HOST",
-        getenv("AOS_UI_WEB_HOST") ?? "127.0.0.1",
-        getenv
-      ),
-      port: port("AOS_UI_WEB_PORT", getenv("AOS_UI_WEB_PORT") ?? "3000"),
-      publicOrigins: readPublicOrigins(getenv, "operator"),
+      ...operatorBind,
+      origins: laneOrigins(deployment, "operator"),
     },
   ]
-  const guestPort = getenv("AOS_UI_GUEST_WEB_PORT")
-  if (guestPort !== undefined)
+  if (guestBind)
     listeners.push({
       surface: "guest",
-      host: host(
-        "AOS_UI_GUEST_WEB_HOST",
-        getenv("AOS_UI_GUEST_WEB_HOST") ?? "127.0.0.1",
-        getenv
-      ),
-      port: port("AOS_UI_GUEST_WEB_PORT", guestPort),
-      publicOrigins: readPublicOrigins(getenv, "guest"),
+      ...guestBind,
+      origins: laneOrigins(deployment, "guest"),
     })
-  assertLanesApart(listeners)
   return {
     root: getenv("AOS_UI_STATIC_ROOT") ?? "/app/dist",
     runtimeConfigFile:
       getenv("AOS_UI_RUNTIME_CONFIG_FILE") ?? "/run/aos-ui/runtime-config.json",
-    mcpAppSandboxOrigin: readSandboxOrigin(getenv, listeners),
     listeners,
   }
 }
@@ -98,11 +112,7 @@ type Serve = (options: {
  * serves the sandbox page, which every lane's pages may frame.
  */
 export function startWebServer(config: WebServerConfig, serve: Serve) {
-  const { mcpAppSandboxOrigin } = config
-  const frameAncestors = config.listeners.flatMap(
-    ({ publicOrigins }) => publicOrigins
-  )
-  return config.listeners.map(({ surface, host, port, publicOrigins }) =>
+  return config.listeners.map(({ surface, host, port, origins }) =>
     serve({
       hostname: host,
       port,
@@ -110,8 +120,7 @@ export function startWebServer(config: WebServerConfig, serve: Serve) {
         surface,
         root: config.root,
         runtimeConfigFile: config.runtimeConfigFile,
-        origins: { publicOrigins, mcpAppSandboxOrigin },
-        frameAncestors,
+        origins,
       }),
     })
   )

@@ -113,22 +113,25 @@ const buildIdField = { buildId: z.string().optional() }
 
 const policyOrigin = z.string().refine(isMcpAppPolicyOrigin)
 
-/** The lane's own origins, which its web server writes over any configured. */
+/** The lane's origins, which its web server writes over any configured. */
 const laneOriginFields = {
   publicOrigins: z.array(policyOrigin).min(1).optional(),
   mcpAppSandboxOrigin: policyOrigin.optional(),
+  mcpAppFrameAncestors: z.array(policyOrigin).min(1).optional(),
 }
 
-/** Both of the lane's origin fields, or nothing when either is missing. */
+/** All of the lane's origin fields, or nothing when any is missing. */
 function laneOrigins({
   publicOrigins,
   mcpAppSandboxOrigin,
+  mcpAppFrameAncestors,
 }: {
   publicOrigins?: string[] | undefined
   mcpAppSandboxOrigin?: string | undefined
+  mcpAppFrameAncestors?: string[] | undefined
 }): { origins?: LaneOrigins } {
-  return publicOrigins && mcpAppSandboxOrigin
-    ? { origins: { publicOrigins, mcpAppSandboxOrigin } }
+  return publicOrigins && mcpAppSandboxOrigin && mcpAppFrameAncestors
+    ? { origins: { publicOrigins, mcpAppSandboxOrigin, mcpAppFrameAncestors } }
     : {}
 }
 
