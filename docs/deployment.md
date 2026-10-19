@@ -190,6 +190,80 @@ own views then load the sandbox over that public route as well, and stop
 showing while it is down. The sandbox address serves only the sandbox page and
 its relay script; every other path on it, `/api/v1` included, is 404.
 
+### Stable origins (optional) {#stable-origins-optional}
+
+`AOS_UI_MCP_APP_STABLE_ORIGINS` is off by default. Installing AOS UI needs
+nothing new; skip this section unless you specifically want Apps to run on
+their own origins.
+
+Set it to a wildcard origin:
+
+```
+AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.mcp-apps.agents.example
+```
+
+The web server refuses to start when the value is not a valid
+`<scheme>://*.<domain>[:port]` wildcard origin; when any lane's host or the
+sandbox's is at or below `<domain>`; when the wildcard is `http:` under an
+`https:` lane; or when loopback status does not match the lanes.
+
+A view that asks for a stable domain gets its sandbox page from
+`https://<32hexkey>.mcp-apps.agents.example`, with the wildcard's scheme and
+port, when the domain the gateway forwarded is exactly one 32-hex-digit key
+label below the wildcard's domain. Any other host at or below that domain —
+a label that is 31 or 33 hex digits, a label that is not hex, an extra label,
+or the wrong port — returns 404 from the web server. Nothing at or below the
+domain bypasses the web server through Caddy; the gateway never sees a stable
+host.
+
+**DNS and certificate.** Every `<32hexkey>.mcp-apps.agents.example` host needs
+DNS and a TLS certificate. A wildcard DNS record (`*` CNAME or A) covers all
+keys. The certificate must cover `*.mcp-apps.agents.example`; add it as a SAN
+to the lane's certificate, use a wildcard certificate for that subdomain, or
+obtain a separate certificate for it. With Caddy, an ACME DNS challenge issues
+a wildcard certificate without a separate listener per key. A Cloudflare-proxied
+name must sit exactly one level below the zone — for example
+`*.mcp-apps.agents.example` in the `agents.example` zone — for Cloudflare's
+free certificate to cover it. A proxied wildcard one level deeper, such as
+`*.mcp-apps.example` in the `example` zone (i.e. two levels below the zone),
+needs Cloudflare's paid certificate or a separate DNS zone.
+
+**Caddy routing.** Both Caddy sites already match each stable host, using the
+same `@stable` expression, and send it to the web server's own listener.
+No manual Caddyfile change is needed; setting the variable is enough. Verify:
+
+```bash
+# A stable host returns the sandbox page, not a gateway route:
+curl -I https://<32hexkey>.mcp-apps.agents.example/api/v1/healthz  # expect 404
+curl -I https://<32hexkey>.mcp-apps.agents.example/mcp-app-sandbox.html  # expect 200
+
+# A near-miss (hex label with the wrong length) returns 404:
+curl -I https://<31digits>.mcp-apps.agents.example/mcp-app-sandbox.html  # expect 404
+```
+
+**Proxy rules.** Send only exact stable hosts — a 32-hex-digit label directly
+below the wildcard's domain, on the wildcard's port — to the web server, the
+same way the sandbox address is routed. The gateway must never receive a stable
+host request. Any other name at or below the domain returns 404 from the web
+server; do not let a wildcard DNS catch-all route non-stable names to the
+gateway.
+
+**Tools server.** The tools server declares a stable domain for the artifact
+view when both `AOS_UI_MCP_APP_STABLE_ORIGINS` and `AOS_UI_TOOLS_MCP_URL` are
+set. `AOS_UI_TOOLS_MCP_URL` must equal exactly the URL the gateway dials the
+tools server at, so the key the tools server computes matches the one the
+gateway checks. Under the Hermes and OpenCode harness overlays, both default to
+`http://tools-mcp:4110/mcp`, which the gateway's own `mcpApps.fallback`
+override also names. Under host networking and in fixture mode, both default to
+`http://127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}/mcp`. Set
+`AOS_UI_TOOLS_MCP_URL` explicitly when the gateway's configuration dials
+another URL. See [Tools MCP server configuration](configuration.md#tools-mcp-server)
+for the full rules.
+
+**Lockstep deploy.** The gateway (0.13.0) and this aos-ui build use a strict
+view schema. An older aos-ui that has not consumed the 0.13.0 SDK refuses a
+view carrying `domain`. Deploy and roll back the gateway and aos-ui together.
+
 ### DNS and certificate
 
 The sandbox address is a real hostname, not a path alias, and needs its own DNS

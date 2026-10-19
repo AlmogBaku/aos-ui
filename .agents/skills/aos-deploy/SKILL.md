@@ -101,6 +101,52 @@ create a tunnel, alter DNS, or assume Tailscale unless the operator explicitly
 selected it. For Cloudflare, route the selected guest hostname to the guest
 listener and retain the same guest-only path boundary.
 
+## Stable origins (optional)
+
+Skip this section unless the operator explicitly asks for App stable origins.
+
+`AOS_UI_MCP_APP_STABLE_ORIGINS` is off by default and requires no change for a
+standard deployment. Set it only when an App needs a fixed origin of its own
+(OAuth callback, CORS or API-key allowlist, persistent `localStorage`). Before
+setting it, confirm:
+
+1. **A wildcard DNS record** (`*.mcp-apps.agents.example` CNAME or A) points to
+   the Caddy host for every stable key the operator expects.
+2. **A wildcard TLS certificate** (`*.mcp-apps.agents.example`) is in place.
+   Caddy's ACME DNS challenge issues one without a separate listener. A
+   Cloudflare-proxied wildcard must sit one level below the zone; a wildcard
+   two levels deep requires Cloudflare's paid certificate or a separate zone.
+3. **The domain sits outside every lane and sandbox.** The web server refuses
+   `AOS_UI_MCP_APP_STABLE_ORIGINS` when any lane's or the sandbox's host is at
+   or below the wildcard's domain.
+
+Set both variables in `/etc/aos-ui/aos-ui.env` (or `.env`):
+
+```bash
+AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.mcp-apps.agents.example
+AOS_UI_TOOLS_MCP_URL=http://tools-mcp:4110/mcp   # the URL the gateway dials
+```
+
+`AOS_UI_TOOLS_MCP_URL` must equal the URL the gateway dials the tools server
+at, including any `mcpApps.fallback.servers.aos-ui.url` override in the gateway
+configuration. Under the Hermes and OpenCode overlays it defaults to
+`http://tools-mcp:4110/mcp`; under host networking it defaults to
+`http://127.0.0.1:4110/mcp`.
+
+After setting them, verify:
+
+```bash
+# The web server reports a stable domain in its startup log.
+# A stable host serves the sandbox page, not a gateway route:
+curl -I https://<32hexkey>.mcp-apps.agents.example/api/v1/healthz  # 404
+curl -I https://<32hexkey>.mcp-apps.agents.example/mcp-app-sandbox.html  # 200
+```
+
+Deploy and roll back the gateway and aos-ui together: the strict view schema
+means an older browser client refuses a view carrying `domain`.
+See [Stable origins](../../docs/deployment.md#stable-origins-optional) and
+[Troubleshooting](../../docs/troubleshooting.md#a-view-loads-from-the-shared-sandbox-instead-of-its-stable-origin).
+
 ## Secrets and runtime integration
 
 Put browser-safe runtime configuration in `/runtime-config.json` only. Keep

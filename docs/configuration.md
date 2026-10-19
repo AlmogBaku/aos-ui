@@ -91,6 +91,7 @@ the gateway answers `/api/v1` beside it.
 | `AOS_UI_GUEST_WEB_HOST`              | `127.0.0.1`                                                                    | Guest surface bind address, under the same rule as `AOS_UI_WEB_HOST`.                                                                                        |
 | `AOS_UI_GUEST_PUBLIC_ORIGIN`         | required with `AOS_UI_GUEST_WEB_PORT`; Compose defaults to loopback on `AOS_UI_GUEST_PUBLISHED_PORT` | Guest-lane public origins, comma-separated. Same rules as `AOS_UI_PUBLIC_ORIGIN`. Must not overlap the operator lane's origins. |
 | `AOS_UI_WEB_EXPOSURE`                | unset                                                                          | `private-container` allows a wildcard bind (`0.0.0.0` or `::`) inside a private container network.                                                           |
+| `AOS_UI_MCP_APP_STABLE_ORIGINS`      | unset                                                                          | Optional MCP App stable origins wildcard: `<scheme>://*.<domain>[:port]`. Off while unset; a view that asks for a stable domain loads from that origin instead of the shared sandbox. The web server refuses to start when the value is set but malformed, when any lane's or the sandbox's host is at or below `<domain>`, when the wildcard is `http:` under an `https:` lane, or when loopback status does not match. See [Stable origins](deployment.md#stable-origins-optional). |
 | `AOS_UI_STATIC_ROOT`                 | `/app/dist`                                                                    | The built app, holding `build-id` beside the assets.                                                                                                         |
 | `AOS_UI_RUNTIME_CONFIG_FILE`         | `/run/aos-ui/runtime-config.json`                                              | The operator's public runtime configuration.                                                                                                                  |
 
@@ -142,6 +143,25 @@ published on `127.0.0.1`, whatever the operator bind address.
 Each harness overlay also requires its secret-file variables, such as
 `HARNESS_GW_HERMES_TOKEN_FILE` and `HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE`;
 see [Deployment](deployment.md).
+
+## Tools MCP server {#tools-mcp-server}
+
+The stateless `tools-mcp` service serves `render_chart`, `render_map`,
+`render_stats`, and `present_artifact`. These two settings control its stable
+origins behavior:
+
+| Variable                        | Default                                                                                             | Use                                                                                                                                                                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AOS_UI_MCP_APP_STABLE_ORIGINS` | unset                                                                                               | The same wildcard the web server reads. When set, the tools server declares a stable domain for the artifact view.                                                                                                                        |
+| `AOS_UI_TOOLS_MCP_URL`          | `http://tools-mcp:4110/mcp` (Hermes and OpenCode overlays); `http://127.0.0.1:<port>/mcp` (others) | The URL the gateway dials this server at. It must match the URL the gateway uses exactly — including the `mcpApps.fallback` override if one is set — so the key computed here matches the key the gateway checks. Defaults follow each Compose shape; set it explicitly when the gateway configuration dials another URL. |
+
+With either `AOS_UI_MCP_APP_STABLE_ORIGINS` or `AOS_UI_TOOLS_MCP_URL` unset,
+the artifact view declares no stable domain and the server logs why. Under
+`--stdio` the server also declares none, because no gateway dials a URL for it.
+A malformed value for either setting stops the server at startup.
+
+The other three views (`render_chart`, `render_map`, `render_stats`) declare no
+stable domain regardless of these settings.
 
 ## Caddy routing
 

@@ -86,6 +86,63 @@ shows views as unavailable with the name of the setting to set.
 
 The view frame may not navigate the workspace, open pop-ups, or submit forms.
 
+### Stable origins (optional) {#stable-origins}
+
+An App can declare `_meta.ui.domain` to request an origin of its own, separate
+from the shared sandbox. AOS honors it only when `AOS_UI_MCP_APP_STABLE_ORIGINS`
+is set; with it unset every view loads from the shared sandbox and no
+configuration is required for a new installation. Two protocol fixes apply
+regardless of that setting: `_meta.ui` is taken from the `resources/list` entry
+when the `resources/read` content item declares none, and a file the gateway
+delivers by a native path carries a `fileId` that matches `present_artifact`'s
+for the same path.
+
+**Format.** A domain AOS accepts is `<32 hex digits>.<the wildcard's domain>`,
+where the 32-digit prefix is the first 32 hex digits of a SHA-256 of the MCP
+server URL the gateway dials, computed by `mcpAppStableOriginKey` from
+`@harness-gw/sdk/node`. The gateway hashes the URL in its canonical form — the
+WHATWG URL serialization with no trailing slash — so
+`https://Example.com:443/mcp/` and `https://example.com/mcp` give the same key.
+A server declares its own `domain` by computing the key from the same URL the
+gateway dials it at; if that URL differs from what the server computed the key
+from, the gateway drops the domain and opens the view on the shared sandbox.
+Claude's ext-apps documentation published this format.
+
+**Gateway check.** On every view path — tool-call views and published-Artifact
+views alike — the gateway verifies that the domain's first label equals the key
+for the URL it dialed. A domain that passes the check is forwarded to the
+browser; one that fails is dropped and logged as `mcp_app.domain.dropped` with
+the server name and `reason: "mismatch"` (first label present but wrong) or
+`reason: "malformed"` (no parseable first label). The log carries no URL.
+Coverage is Hermes and OpenCode; OpenClaw's native App views and stdio servers
+carry no domain.
+
+**Browser.** A view whose `domain` is exactly one 32-hex-digit label directly
+below the configured wildcard's domain loads from that host, with the
+wildcard's scheme and port. Every other view loads from the shared sandbox.
+Lane pages' `frame-src` adds the wildcard when it is set.
+
+**Artifact view storage.** The `present_artifact` view keeps each Agent HTML
+file's `localStorage` per file across preview sessions when it runs on its
+stable origin: values are keyed by `fileId`, injected before the file's scripts
+run, and updated through a message the file's own frame sends on each write.
+Each file's share is capped at 64 KiB of JSON. A quota error fails only that
+file's write and changes nothing else. `sessionStorage` always lives in memory
+for the life of the preview. Values from one file are separate from another's;
+a message from any other frame is ignored. On any other origin (shared sandbox,
+or no `fileId` in the result), all storage lives in memory.
+
+**Risks.** Browsers partition storage by top-level site, and Safari may clear
+it. Whatever HTML later sits at a given file path — by any Agent — can read
+what was saved there. `MEDIA:` results now carry a truncated path hash to the
+browser and to guests, as `present_artifact` results already do; a holder can
+check a guessed path. A bug in the artifact view's renderers costs more on the
+artifact origin, which holds every saved file. Turning stable origins on moves
+the artifact view to the new origin; nothing stored before carries over.
+
+See [Stable origins](deployment.md#stable-origins-optional) for DNS,
+certificate, Compose settings, and proxy rules.
+
 AOS builds the view's CSP from its declared `_meta.ui.csp`:
 
 | Field             | Accepted                                                                              |

@@ -269,6 +269,45 @@ such as `aos-invite-link`, must either:
 Under bridged Compose the gateway's port 4100 is not published to the host
 either, so `http://127.0.0.1:4100` reaches nothing there.
 
+## A view loads from the shared sandbox instead of its stable origin
+
+The gateway drops a declared `domain` and opens the view on the shared sandbox
+when the domain's first label does not match the key it computed for the URL it
+dialed. Check the gateway log for `mcp_app.domain.dropped`:
+
+| `reason`    | Meaning                                                                   | Fix                                                                                                    |
+| ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `mismatch`  | The declared label is present but does not equal the expected key         | Confirm `AOS_UI_TOOLS_MCP_URL` equals the URL the gateway dials — including any `mcpApps.fallback` override in the gateway config |
+| `malformed` | The domain has no parseable 32-hex-digit first label                      | Confirm the tools server starts without error and declares a domain; check `AOS_UI_MCP_APP_STABLE_ORIGINS` |
+
+The log carries the server name but never the URL. The most common mismatch is
+`AOS_UI_TOOLS_MCP_URL` naming a different URL than `mcpApps.fallback.servers.aos-ui.url` in the gateway configuration. Under the Hermes and OpenCode overlays both default to `http://tools-mcp:4110/mcp`; under host networking both default to `http://127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}/mcp`.
+
+## A stable host returns 404
+
+A request for a stable host, such as `<32hexkey>.mcp-apps.agents.example`,
+returns 404 when any of these is true:
+
+- `AOS_UI_MCP_APP_STABLE_ORIGINS` is not set in the Compose environment or
+  `.env`; Caddy's `@stable` matcher then never matches.
+- The host is a near miss: the label is fewer or more than 32 hex digits, is
+  not all hex, has an extra label, or uses the wrong port.
+- DNS for the wildcard `*.mcp-apps.agents.example` does not resolve to the
+  Caddy host, or TLS for it is not valid.
+
+The web server returns 404 to any host at or below the stable origins' domain
+that is not exactly a 32-hex-digit label on the wildcard's port. This is
+intentional: near-miss names get nothing.
+
+## The web server refuses to start with `AOS_UI_MCP_APP_STABLE_ORIGINS`
+
+The web server logs the setting name and the reason it refused it. Common causes:
+
+- **Not a wildcard origin.** The value must be `<scheme>://*.<domain>[:port]`; omitting `*.` is the most frequent mistake.
+- **A lane or sandbox host is at or below `<domain>`.** For example, if `AOS_UI_PUBLIC_ORIGIN` is `https://agents.example` and `AOS_UI_MCP_APP_STABLE_ORIGINS` is `https://*.agents.example`, the lane origin `agents.example` is at `<domain>`. Choose a distinct domain such as `mcp-apps.agents.example`.
+- **`http:` wildcard under an `https:` lane.** The wildcard must be `https:` when any lane is.
+- **Loopback mismatch.** The wildcard must be loopback exactly when the lanes are, and a loopback value must be a name below `localhost`, such as `http://*.mcp-apps.localhost:3000`.
+
 ## A published Artifact cannot load
 
 ### present_artifact file not loading

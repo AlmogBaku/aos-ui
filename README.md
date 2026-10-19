@@ -139,7 +139,9 @@ overlay turns the guest lane on, so `AOS_UI_GUEST_PUBLIC_ORIGIN` is required
 there, on the same side of loopback as the operator's: a loopback operator lane
 beside a public guest lane is unsupported with one shared sandbox. Without a
 guest lane, add `deploy/compose.operator-only.yaml`. See
-[MCP App sandbox origins](docs/deployment.md#mcp-app-sandbox-origins).
+[MCP App sandbox origins](docs/deployment.md#mcp-app-sandbox-origins). For
+Apps that need a fixed origin of their own, `AOS_UI_MCP_APP_STABLE_ORIGINS` is
+an optional opt-in; see [Stable origins](docs/deployment.md#stable-origins-optional).
 
 For a containerized fixture preview:
 
