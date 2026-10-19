@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { artifactFileId } from "@harness-gw/sdk/node"
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
@@ -393,7 +394,7 @@ describe("present_artifact", () => {
     }
   )
 
-  it("gives one path one id whatever its title or spelling, and another path another", async () => {
+  it("gives one path the id the gateway gives it, whatever its title or spelling, and another path another", async () => {
     const id = async (args: Record<string, unknown>) =>
       (
         (await call("present_artifact", args)).structuredContent as {
@@ -402,6 +403,7 @@ describe("present_artifact", () => {
       ).value.fileId
     const plain = await id({ path: "/workspace/out/report.pdf" })
 
+    expect(plain).toBe(artifactFileId("/workspace/out/report.pdf"))
     expect(await id({ path: "/workspace/out/report.pdf", title: "Q3" })).toBe(
       plain
     )

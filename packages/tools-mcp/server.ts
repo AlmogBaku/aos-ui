@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto"
 import { posix } from "node:path"
+import { artifactFileId } from "@harness-gw/sdk/node"
 import {
   registerAppResource,
   registerAppTool,
@@ -112,19 +112,6 @@ function displayFilename(path: string, title: string | undefined) {
   return title.toLowerCase().endsWith(extension.toLowerCase())
     ? title
     : `${title}${extension}`
-}
-
-/**
- * The file's identity across calls: a digest of its normalized path, so every
- * call for one path names the same Artifact whatever its title, while a
- * result still carries no path. Sixteen hex digits keep it apart from any
- * other file in a Session and short in the text the model reads back.
- */
-function fileId(path: string) {
-  return createHash("sha256")
-    .update(posix.normalize(path))
-    .digest("hex")
-    .slice(0, 16)
 }
 
 /**
@@ -301,7 +288,9 @@ export function createToolsServer(
     ({ path, title, mimeType }) => {
       const file: PresentArtifactResult = {
         filename: displayFilename(path, title),
-        fileId: fileId(path),
+        // One file has one id however it is shown: the gateway gives a file
+        // it delivers by path the same one.
+        fileId: artifactFileId(path),
         ...(mimeType ? { mimeType } : {}),
       }
       return presentationResult("present_artifact", file.filename, file)
