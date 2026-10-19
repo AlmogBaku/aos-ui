@@ -71,7 +71,7 @@ import {
   tabConnectionOptions,
   watchTabBuild,
 } from "@/runtime-adapters/aos/acp/tab"
-import type { LaneOrigins } from "@shared/lane-origins"
+import type { DeploymentOrigins } from "@shared/lane-origins"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -192,7 +192,7 @@ function GuestArtifactShell({
   sessionId: string
   artifacts: AosArtifactAdapter
   mcpApps: AosMcpAppAdapter
-  mcpAppOrigins: LaneOrigins | undefined
+  mcpAppOrigins: DeploymentOrigins | undefined
   title?: string
   message?: string
   brandName: string
@@ -388,7 +388,7 @@ function ReadyGuestAosSurface({
   context: GuestRuntimeContext
   inviteToken: string
   locale: Locale
-  mcpAppOrigins: LaneOrigins | undefined
+  mcpAppOrigins: DeploymentOrigins | undefined
 }) {
   const { agentId } = context
   const sessionId = context.conversationRef
@@ -639,8 +639,8 @@ export function GuestAosSurface({
 }: {
   inviteToken?: string
   locale: Locale
-  /** The guest lane's origins, which App views show on. */
-  mcpAppOrigins?: LaneOrigins
+  /** The deployment's origins, which App views show on. */
+  mcpAppOrigins?: DeploymentOrigins
 }) {
   const contextKey = inviteToken ?? ""
   const [attempt, setAttempt] = useState(0)

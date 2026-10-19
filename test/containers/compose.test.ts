@@ -126,6 +126,10 @@ function publishedPorts(config: ComposeConfig) {
   )
 }
 
+/** Both lanes' loopback origins, on the default published ports. */
+const BOTH_LANES =
+  "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
+
 const loopbackPort = (published: string, target: number) =>
   expect.objectContaining({ host_ip: "127.0.0.1", published, target })
 
@@ -193,7 +197,7 @@ describe("container orchestration", () => {
     )
   })
 
-  it("defaults each lane's origins to loopback on its published port, the one sandbox, Caddy's and the web server's, to the operator's, and leaves the stable origins off", () => {
+  it("defaults the origins to both lanes' loopback ones on their published ports, the one sandbox, Caddy's and the web server's, to the operator's, and leaves the stable origins off", () => {
     const { caddy, web } = composeConfig(
       ["compose.yaml", "compose.hermes.yaml"],
       harnessEnvironment("hermes", {
@@ -203,10 +207,10 @@ describe("container orchestration", () => {
     ).services
 
     expect(web.environment).toMatchObject({
-      AOS_UI_PUBLIC_ORIGIN: "http://localhost:3400,http://127.0.0.1:3400",
+      AOS_UI_PUBLIC_ORIGIN:
+        "http://localhost:3400,http://127.0.0.1:3400,http://localhost:3401,http://127.0.0.1:3401",
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3400",
       AOS_UI_MCP_APP_STABLE_ORIGINS: "",
-      AOS_UI_GUEST_PUBLIC_ORIGIN: "http://localhost:3401,http://127.0.0.1:3401",
     })
     expect(caddy.environment).toMatchObject({
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3400",
@@ -215,16 +219,14 @@ describe("container orchestration", () => {
   })
 
   it.each(["openclaw", "opencode"] as const)(
-    "gives the %s overlay's guest lane its origins on the guest port",
+    "lists the %s overlay's guest lane origins beside the operator's",
     (runtime) => {
       const { web } = composeConfig(
         ["compose.yaml", `compose.${runtime}.yaml`],
         harnessEnvironment(runtime)
       ).services
 
-      expect(web.environment?.AOS_UI_GUEST_PUBLIC_ORIGIN).toBe(
-        "http://localhost:3001,http://127.0.0.1:3001"
-      )
+      expect(web.environment?.AOS_UI_PUBLIC_ORIGIN).toBe(BOTH_LANES)
     }
   )
 
@@ -489,20 +491,19 @@ describe("container orchestration", () => {
     expect(web!.environment).toMatchObject({
       AOS_UI_WEB_HOST: "127.0.0.1",
       AOS_UI_GUEST_WEB_HOST: "127.0.0.1",
-      AOS_UI_PUBLIC_ORIGIN: "http://127.0.0.1:18080,http://localhost:18080",
+      AOS_UI_PUBLIC_ORIGIN:
+        "http://127.0.0.1:18080,http://localhost:18080,http://127.0.0.1:18081,http://localhost:18081",
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:18080",
-      AOS_UI_GUEST_PUBLIC_ORIGIN:
-        "http://127.0.0.1:18081,http://localhost:18081",
     })
     expect(toolsMcp!.command?.join(" ")).toContain("--host 127.0.0.1")
   })
 
-  it("keeps each lane's origins, and the URL the gateway dials the tools MCP server at, overridable under host networking", () => {
+  it("keeps the origins, and the URL the gateway dials the tools MCP server at, overridable under host networking", () => {
     const lanes = {
-      AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+      AOS_UI_PUBLIC_ORIGIN:
+        "https://aos.example.test,https://guest.example.test",
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos-sandbox.example",
       AOS_UI_MCP_APP_STABLE_ORIGINS: "https://*.mcp-apps.example.test",
-      AOS_UI_GUEST_PUBLIC_ORIGIN: "https://guest.example.test",
     }
     const dialed = "http://tools.example.test:4110/mcp"
     const {
@@ -561,32 +562,23 @@ describe("container orchestration", () => {
     expect(caddyFiles(true)).toEqual(["/etc/caddy/Caddyfile"])
   })
 
-  it.each([
-    ["starts", true],
-    ["is refused", false],
-  ] as const)(
-    "a named operator lane %s beside the overlay's loopback guest origins, as the operator-only overlay turns the guest listener off or not",
-    (_label, operatorOnly) => {
-      const { web } = composeConfig(
-        [
-          "compose.yaml",
-          "compose.hermes.yaml",
-          ...(operatorOnly ? ["deploy/compose.operator-only.yaml"] : []),
-        ],
-        harnessEnvironment("hermes", {
-          AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
-          AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos-sandbox.example",
-        })
-      ).services
-      const read = () => readWebServerConfig((name) => web.environment?.[name])
+  it("turns the guest listener off under the operator-only overlay, and defaults the origins back to the operator's on its published port", () => {
+    const { web } = composeConfig(
+      [
+        "compose.yaml",
+        "compose.hermes.yaml",
+        "deploy/compose.operator-only.yaml",
+      ],
+      harnessEnvironment("hermes", { AOS_UI_WEB_PUBLISHED_PORT: "3400" })
+    ).services
+    const config = readWebServerConfig((name) => web.environment?.[name])
 
-      if (operatorOnly)
-        expect(read().listeners.map(({ surface }) => surface)).toEqual([
-          "operator",
-        ])
-      else expect(read).toThrow(/AOS_UI_GUEST_PUBLIC_ORIGIN lists http:/u)
-    }
-  )
+    expect(config.listeners.map(({ surface }) => surface)).toEqual(["operator"])
+    expect(config.origins.publicOrigins).toEqual([
+      "http://localhost:3400",
+      "http://127.0.0.1:3400",
+    ])
+  })
 
   it("uses the Vite development target and source mount behind Caddy", () => {
     const web = composeConfig(["compose.yaml", "compose.dev.yaml"]).services.web
@@ -629,8 +621,11 @@ describe("container orchestration", () => {
       AOS_UI_WEB_GUEST_UPSTREAM: "web-guest:4201",
     })
     expect(guest.build?.target).toBe("web")
+    // The guest page frames the sandbox Vite serves, so both list it.
+    expect(services.web.environment?.AOS_UI_PUBLIC_ORIGIN).toBe(BOTH_LANES)
     expect(guest.environment).toMatchObject({
       AOS_UI_GUEST_WEB_PORT: "4201",
+      AOS_UI_PUBLIC_ORIGIN: BOTH_LANES,
       AOS_UI_MCP_APP_SANDBOX_ORIGIN:
         services.caddy.environment?.AOS_UI_MCP_APP_SANDBOX_ORIGIN,
       AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.localhost:3000",

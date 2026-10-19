@@ -5,16 +5,16 @@ import {
   stableOriginsOf,
 } from "./mcp-app-sandbox"
 
-/** The two lanes AOS UI serves, each on origins of its own. */
+/** The two lanes AOS UI serves. */
 export type Surface = "operator" | "guest"
 
 /**
- * Where one lane shows MCP App views, as its `/runtime-config.json` carries
- * them: the origins people open the lane at, the deployment's one sandbox
- * origin, which every lane's views load from, and every lane's origins, the
- * only pages that may frame it, which its page's header publishes anyway.
+ * Where MCP App views show, as every surface's `/runtime-config.json` carries
+ * them: the origins people open AOS UI at, operator and guest alike, the only
+ * pages that may frame the sandbox, which its page's header publishes anyway,
+ * and the deployment's one sandbox origin, which every view loads from.
  */
-export type LaneOrigins = {
+export type DeploymentOrigins = {
   publicOrigins: readonly string[]
   mcpAppSandboxOrigin: string
   /**
@@ -23,27 +23,10 @@ export type LaneOrigins = {
    * with its scheme and port, instead of the one sandbox. Unset, none does.
    */
   mcpAppStableOrigins?: string
-  mcpAppFrameAncestors: readonly string[]
 }
 
-/** One lane's public origins. */
-export type Lane = { surface: Surface; publicOrigins: readonly string[] }
-
-/**
- * Every lane's public origins, the one sandbox origin they all frame, and the
- * stable origins' wildcard, when it is set, which they frame too.
- */
-export type DeploymentOrigins = {
-  lanes: readonly Lane[]
-  mcpAppSandboxOrigin: string
-  mcpAppStableOrigins?: string
-}
-
-/** The setting each lane's public origins are read from. */
-export const PUBLIC_ORIGIN_SETTINGS = {
-  operator: "AOS_UI_PUBLIC_ORIGIN",
-  guest: "AOS_UI_GUEST_PUBLIC_ORIGIN",
-} as const satisfies Record<Surface, string>
+/** The setting every origin people open AOS UI at is read from. */
+export const PUBLIC_ORIGIN_SETTING = "AOS_UI_PUBLIC_ORIGIN"
 
 /** The setting the deployment's one MCP App sandbox origin is read from. */
 export const MCP_APP_SANDBOX_ORIGIN_SETTING = "AOS_UI_MCP_APP_SANDBOX_ORIGIN"
@@ -78,11 +61,11 @@ function exactOrigin(name: string, value: string) {
 }
 
 /**
- * One lane's public origins from its comma-separated setting, each an exact
- * origin (`isMcpAppPolicyOrigin`). Throws naming the setting it refuses.
+ * Every origin people open AOS UI at, from its comma-separated setting, each
+ * an exact origin (`isMcpAppPolicyOrigin`). Throws naming the setting.
  */
-function readPublicOrigins(getenv: Getenv, surface: Surface): string[] {
-  const setting = PUBLIC_ORIGIN_SETTINGS[surface]
+function readPublicOrigins(getenv: Getenv): string[] {
+  const setting = PUBLIC_ORIGIN_SETTING
   const publicOrigins = [
     ...new Set(
       (getenv(setting) ?? "")
@@ -93,56 +76,48 @@ function readPublicOrigins(getenv: Getenv, surface: Surface): string[] {
   ].map((value) => exactOrigin(setting, value))
   if (publicOrigins.length === 0)
     throw new Error(
-      `${setting} must list the origins the lane is opened at, ${EXAMPLE}`
+      `${setting} must list every origin AOS UI is opened at, operator and guest alike, ${EXAMPLE}`
     )
   return publicOrigins
 }
 
-/** A lane's origin, and the setting that lists it. */
-type Listed = { origin: string; list: string }
-
-const listedOrigins = (lanes: readonly Lane[]): Listed[] =>
-  lanes.flatMap(({ surface, publicOrigins }) =>
-    publicOrigins.map((origin) => ({
-      origin,
-      list: PUBLIC_ORIGIN_SETTINGS[surface],
-    }))
-  )
-
 /**
- * Refuses what `setting` names for every lane's pages to frame unless it is
- * loopback exactly when they are, so a page on one side never frames one on
- * the other, and `https:` when any of them is, since such a page frames no
+ * Refuses what `setting` names for the pages to frame unless it is loopback
+ * exactly when they are, so a page on one side never frames one on the
+ * other, and `https:` when any of them is, since such a page frames no
  * `http:` one.
  */
 function assertFramable(
   setting: string,
   framed: string,
-  listed: readonly Listed[]
+  publicOrigins: readonly string[]
 ) {
   const loopback = isLoopback(framed)
-  const mismatched = listed.find(
-    ({ origin }) => isLoopback(origin) !== loopback
+  const mismatched = publicOrigins.find(
+    (origin) => isLoopback(origin) !== loopback
   )
   if (mismatched !== undefined)
     throw new Error(
-      `${setting} is ${loopback ? "" : "not "}a loopback origin, but ${mismatched.list} lists ${mismatched.origin}, which is${loopback ? " not" : ""}`
+      `${setting} is ${loopback ? "" : "not "}a loopback origin, but ${PUBLIC_ORIGIN_SETTING} lists ${mismatched}, which is${loopback ? " not" : ""}`
     )
-  const secure = listed.find(({ origin }) => origin.startsWith("https:"))
+  const secure = publicOrigins.find((origin) => origin.startsWith("https:"))
   if (secure !== undefined && framed.startsWith("http:"))
     throw new Error(
-      `${setting} must be https:, since ${secure.list} lists ${secure.origin}, whose page cannot frame an http: one`
+      `${setting} must be https:, since ${PUBLIC_ORIGIN_SETTING} lists ${secure}, whose page cannot frame an http: one`
     )
 }
 
 /**
- * The deployment's one sandbox origin, which every lane's pages frame: an
- * exact origin whose host and port are no lane origin's, framable by them all
+ * The deployment's one sandbox origin, which every page frames: an exact
+ * origin whose host and port are no page's, framable by them all
  * (`assertFramable`), and, on loopback, a name below `localhost`, since the
  * gateway answers `localhost` and loopback addresses on every port. Throws
  * naming the setting it refuses.
  */
-function readSandboxOrigin(getenv: Getenv, listed: readonly Listed[]): string {
+function readSandboxOrigin(
+  getenv: Getenv,
+  publicOrigins: readonly string[]
+): string {
   const setting = MCP_APP_SANDBOX_ORIGIN_SETTING
   const value = getenv(setting)?.trim()
   if (!value)
@@ -150,14 +125,11 @@ function readSandboxOrigin(getenv: Getenv, listed: readonly Listed[]): string {
       `${setting} must name the MCP App sandbox origin, such as https://agents-sandbox.example`
     )
   const sandbox = exactOrigin(setting, value)
-  const overlapping = listed.find(
-    ({ origin }) => hostOf(origin) === hostOf(sandbox)
-  )
-  if (overlapping !== undefined)
+  if (publicOrigins.some((origin) => hostOf(origin) === hostOf(sandbox)))
     throw new Error(
-      `${setting} must differ in host and port from every origin in ${overlapping.list}`
+      `${setting} must differ in host and port from every origin in ${PUBLIC_ORIGIN_SETTING}`
     )
-  assertFramable(setting, sandbox, listed)
+  assertFramable(setting, sandbox, publicOrigins)
   if (isLoopback(sandbox) && !new URL(sandbox).hostname.endsWith(".localhost"))
     throw new Error(
       `${setting} must be a name below localhost, such as http://sandbox.localhost:3000: the gateway answers localhost and loopback addresses on every port`
@@ -167,14 +139,14 @@ function readSandboxOrigin(getenv: Getenv, listed: readonly Listed[]): string {
 
 /**
  * The stable origins' wildcard, lowercased, or `undefined` while it is unset:
- * a `<scheme>://*.<domain>[:port]` (`stableOriginsOf`) framable by every
- * lane's pages (`assertFramable`), whose domain has no lane's host nor the
- * sandbox's at or below it, since every host there is a stable one or
- * refused. Throws naming the setting it refuses.
+ * a `<scheme>://*.<domain>[:port]` (`stableOriginsOf`) framable by every page
+ * (`assertFramable`), whose domain has no page's host nor the sandbox's at or
+ * below it, since every host there is a stable one or refused. Throws naming
+ * the setting it refuses.
  */
 function readStableOrigins(
   getenv: Getenv,
-  listed: readonly Listed[],
+  publicOrigins: readonly string[],
   sandbox: string
 ): string | undefined {
   const setting = MCP_APP_STABLE_ORIGINS_SETTING
@@ -185,75 +157,35 @@ function readStableOrigins(
     throw new Error(
       `${setting}: ${value} is not a wildcard origin, such as https://*.mcp-apps.example`
     )
-  const claimed = [
-    ...listed,
-    { origin: sandbox, list: MCP_APP_SANDBOX_ORIGIN_SETTING },
-  ].find(({ origin }) => {
+  const claimed = [...publicOrigins, sandbox].find((origin) => {
     const { hostname } = new URL(origin)
     return hostname === stable.domain || hostname.endsWith(`.${stable.domain}`)
   })
   if (claimed !== undefined)
     throw new Error(
-      `${setting} must name a domain no lane or sandbox host is at or below, but ${claimed.list} names ${claimed.origin}`
+      `${setting} must name a domain that no origin in ${PUBLIC_ORIGIN_SETTING} or ${MCP_APP_SANDBOX_ORIGIN_SETTING} is at or below, but ${claimed} is`
     )
-  assertFramable(setting, value, listed)
+  assertFramable(setting, value, publicOrigins)
   return value
 }
 
-/** Refuses an origin two lanes both list: each page belongs to one lane. */
-function assertLanesApart(lanes: readonly Lane[]) {
-  const owners = new Map<string, Surface>()
-  for (const { surface, publicOrigins } of lanes)
-    for (const origin of publicOrigins) {
-      const owner = owners.get(origin)
-      if (owner !== undefined)
-        throw new Error(
-          `${origin} is in both ${PUBLIC_ORIGIN_SETTINGS[owner]} and ${PUBLIC_ORIGIN_SETTINGS[surface]}`
-        )
-      owners.set(origin, surface)
-    }
-}
-
 /**
- * The deployment's origins from its settings, for the lanes in `surfaces`:
- * each lane's own, the one sandbox origin, and the stable origins' wildcard,
- * each checked against every lane. Throws naming the setting it refuses.
+ * The deployment's origins from its settings, which every surface's runtime
+ * configuration carries: every origin people open AOS UI at, the one sandbox
+ * origin, and the stable origins' wildcard, each checked against those pages.
+ * The wildcard's key is there even while it is unset, so it writes over any
+ * the configuration file names. Throws naming the setting it refuses.
  */
-export function readDeploymentOrigins(
-  getenv: Getenv,
-  surfaces: readonly Surface[]
-): DeploymentOrigins {
-  const lanes = surfaces.map((surface) => ({
-    surface,
-    publicOrigins: readPublicOrigins(getenv, surface),
-  }))
-  assertLanesApart(lanes)
-  const listed = listedOrigins(lanes)
-  const mcpAppSandboxOrigin = readSandboxOrigin(getenv, listed)
+export function readDeploymentOrigins(getenv: Getenv): DeploymentOrigins {
+  const publicOrigins = readPublicOrigins(getenv)
+  const mcpAppSandboxOrigin = readSandboxOrigin(getenv, publicOrigins)
   return {
-    lanes,
+    publicOrigins,
     mcpAppSandboxOrigin,
-    mcpAppStableOrigins: readStableOrigins(getenv, listed, mcpAppSandboxOrigin),
-  }
-}
-
-/**
- * The origins `surface`'s runtime configuration carries; every lane's pages,
- * whichever lane it is, may frame the one sandbox and the stable origins. The
- * wildcard's key is there even while it is unset, so it writes over any the
- * configuration file names.
- */
-export function laneOrigins(
-  { lanes, mcpAppSandboxOrigin, mcpAppStableOrigins }: DeploymentOrigins,
-  surface: Surface
-): LaneOrigins {
-  const lane = lanes.find((candidate) => candidate.surface === surface)
-  if (lane === undefined)
-    throw new Error(`The ${surface} lane's origins were not read`)
-  return {
-    publicOrigins: lane.publicOrigins,
-    mcpAppSandboxOrigin,
-    mcpAppStableOrigins,
-    mcpAppFrameAncestors: lanes.flatMap(({ publicOrigins }) => publicOrigins),
+    mcpAppStableOrigins: readStableOrigins(
+      getenv,
+      publicOrigins,
+      mcpAppSandboxOrigin
+    ),
   }
 }

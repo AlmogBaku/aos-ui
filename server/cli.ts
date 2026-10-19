@@ -1,23 +1,19 @@
 import {
-  laneOrigins,
   readDeploymentOrigins,
-  type LaneOrigins,
+  type DeploymentOrigins,
   type Surface,
 } from "../shared/lane-origins"
 import { createWebApp } from "./web"
 
 type Getenv = (name: string) => string | undefined
 
-export type WebListener = {
-  surface: Surface
-  host: string
-  port: number
-  origins: LaneOrigins
-}
+export type WebListener = { surface: Surface; host: string; port: number }
 
 export type WebServerConfig = {
   root: string
   runtimeConfigFile: string
+  /** The deployment's origins, which every listener serves alike. */
+  origins: DeploymentOrigins
   listeners: WebListener[]
 }
 
@@ -51,9 +47,8 @@ function host(name: string, value: string, getenv: Getenv) {
 }
 
 /**
- * Reads the web server's settings; the guest listener, and the guest lane's
- * origins, only when its port is set and not empty, as the operator-only
- * overlay leaves it.
+ * Reads the web server's settings; the guest listener only when its port is
+ * set and not empty, as the operator-only overlay leaves it.
  */
 export function readWebServerConfig(getenv: Getenv): WebServerConfig {
   const guestPort = getenv("AOS_UI_GUEST_WEB_PORT") || undefined
@@ -76,27 +71,13 @@ export function readWebServerConfig(getenv: Getenv): WebServerConfig {
           ),
           port: port("AOS_UI_GUEST_WEB_PORT", guestPort),
         }
-  const deployment = readDeploymentOrigins(
-    getenv,
-    guestBind ? ["operator", "guest"] : ["operator"]
-  )
-  const listeners: WebListener[] = [
-    {
-      surface: "operator",
-      ...operatorBind,
-      origins: laneOrigins(deployment, "operator"),
-    },
-  ]
-  if (guestBind)
-    listeners.push({
-      surface: "guest",
-      ...guestBind,
-      origins: laneOrigins(deployment, "guest"),
-    })
+  const listeners: WebListener[] = [{ surface: "operator", ...operatorBind }]
+  if (guestBind) listeners.push({ surface: "guest", ...guestBind })
   return {
     root: getenv("AOS_UI_STATIC_ROOT") ?? "/app/dist",
     runtimeConfigFile:
       getenv("AOS_UI_RUNTIME_CONFIG_FILE") ?? "/run/aos-ui/runtime-config.json",
+    origins: readDeploymentOrigins(getenv),
     listeners,
   }
 }
@@ -112,7 +93,7 @@ type Serve = (options: {
  * a stable host, serves the sandbox page, which every lane's pages may frame.
  */
 export function startWebServer(config: WebServerConfig, serve: Serve) {
-  return config.listeners.map(({ surface, host, port, origins }) =>
+  return config.listeners.map(({ surface, host, port }) =>
     serve({
       hostname: host,
       port,
@@ -120,7 +101,7 @@ export function startWebServer(config: WebServerConfig, serve: Serve) {
         surface,
         root: config.root,
         runtimeConfigFile: config.runtimeConfigFile,
-        origins,
+        origins: config.origins,
       }),
     })
   )

@@ -55,8 +55,9 @@ services:
       AOS_UI_WEB_HOST: 0.0.0.0
       AOS_UI_WEB_PORT: "4200"
       AOS_UI_WEB_EXPOSURE: private-container
-      # The origins the operator lane is opened at, and the sandbox origin;
-      # both default to loopback on the published port.
+      # Every origin people open AOS UI at, and the sandbox origin; both
+      # default to loopback on the published port. A harness overlay adds the
+      # guest lane's loopback origins to the default.
       AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: *sandbox-origin
       AOS_UI_MCP_APP_STABLE_ORIGINS: *stable-origins

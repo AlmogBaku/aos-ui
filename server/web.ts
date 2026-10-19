@@ -3,7 +3,7 @@ import { join } from "node:path"
 
 import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
 
-import type { LaneOrigins, Surface } from "../shared/lane-origins"
+import type { DeploymentOrigins, Surface } from "../shared/lane-origins"
 import {
   lanePageFrameSrc,
   MCP_APP_SANDBOX_SCRIPT_PATH,
@@ -22,11 +22,11 @@ export type WebAppOptions = {
   /** The operator's public runtime configuration; the guest's is generated. */
   runtimeConfigFile: string
   /**
-   * The surface's lane: its pages' origins, the MCP App sandbox origin, the
-   * stable origins' wildcard when it is set, and every lane's origins, which
-   * may frame the sandbox page.
+   * The deployment's origins: every page's, which may frame the sandbox page,
+   * the MCP App sandbox origin, and the stable origins' wildcard when it is
+   * set.
    */
-  origins: LaneOrigins
+  origins: DeploymentOrigins
 }
 
 /**
@@ -42,7 +42,7 @@ const GUEST_RESERVED_PATHS = ["/auth", "/sw.js", "/manifest.webmanifest"]
  */
 function pageHeaders(
   surface: Surface,
-  origins: LaneOrigins
+  origins: DeploymentOrigins
 ): Record<string, string> {
   const frameSrc = lanePageFrameSrc(origins)
   return surface === "guest"
@@ -140,9 +140,9 @@ async function readOperatorConfig(path: string) {
 
 /**
  * One surface of the web app: the built pages, the runtime configuration with
- * the served build id and the lane's origins, and the surface's page policy.
- * The gateway answers `/api/v1` beside it, so every other `/api` path is
- * absent here.
+ * the served build id and the deployment's origins, and the surface's page
+ * policy. The gateway answers `/api/v1` beside it, so every other `/api` path
+ * is absent here.
  *
  * The sandbox address, and exactly each stable host, serves the MCP App
  * sandbox page, which every lane's pages may frame, under the policy for its

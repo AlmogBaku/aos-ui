@@ -34,9 +34,8 @@ services:
       # On the host network a wildcard bind reaches every host interface, so
       # the bridged shape's acknowledgement does not carry over.
       AOS_UI_WEB_EXPOSURE: ""
-      AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://127.0.0.1:18080,http://localhost:18080}
+      AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://127.0.0.1:18080,http://localhost:18080,http://127.0.0.1:18081,http://localhost:18081}
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: *sandbox-origin
-      AOS_UI_GUEST_PUBLIC_ORIGIN: ${AOS_UI_GUEST_PUBLIC_ORIGIN:-http://127.0.0.1:18081,http://localhost:18081}
 
   gateway:
     network_mode: host

@@ -1,13 +1,17 @@
 # Operator-only, added after the harness overlay when the gateway configuration
 # has no `guest` block. It mounts the Caddyfile alone, without the overlay's
 # guest site, so the guest lane serves nothing instead of a guest page whose
-# /api/v1 answers 502, and turns off the web server's guest listener, so the
-# overlay's loopback guest origins never meet a named operator lane.
+# /api/v1 answers 502, turns off the web server's guest listener, and defaults
+# the origins back to the operator's loopback ones, as compose.yaml does.
+# deploy/compose.host.yaml, added after this file, sets its own default, which
+# lists the guest port too; set AOS_UI_PUBLIC_ORIGIN to list the operator's
+# alone there.
 services:
   web:
     environment:
       # Empty is unset: Compose cannot remove a key an overlay set.
       AOS_UI_GUEST_WEB_PORT: ""
+      AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
     expose: !reset []
 
   caddy:

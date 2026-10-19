@@ -2,7 +2,7 @@ import { IncomingMessage } from "node:http"
 import { Socket } from "node:net"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import viteConfig, { laneOriginsAt } from "../vite.config"
+import viteConfig, { deploymentOriginsAt } from "../vite.config"
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -75,22 +75,26 @@ describe("Vite development server", () => {
   )
 
   it.each([
-    ["set", "http://localhost:3001,http://127.0.0.1:3001", true],
-    ["unset", undefined, false],
+    [
+      "every origin it lists, a guest page's too",
+      "http://localhost:3000,http://localhost:3001",
+      ["http://localhost:3000", "http://localhost:3001"],
+    ],
+    [
+      "loopback names on the port it serves while it is unset",
+      undefined,
+      ["http://localhost:4200", "http://127.0.0.1:4200"],
+    ],
   ] as const)(
-    "lets the guest lane's pages frame the sandbox it serves when their origins are %s",
-    (_label, guest, framed) => {
-      const operator = ["http://localhost:4200", "http://127.0.0.1:4200"]
-      const origins = laneOriginsAt({
-        AOS_UI_GUEST_PUBLIC_ORIGIN: guest,
-      })(4200)
+    "reads AOS_UI_PUBLIC_ORIGIN as the pages that may frame the sandbox it serves: %s",
+    (_label, listed, publicOrigins) => {
+      const origins = deploymentOriginsAt({ AOS_UI_PUBLIC_ORIGIN: listed })(
+        4200
+      )
 
       expect(origins).toEqual({
-        publicOrigins: operator,
+        publicOrigins,
         mcpAppSandboxOrigin: "http://sandbox.localhost:4200",
-        mcpAppFrameAncestors: framed
-          ? [...operator, "http://localhost:3001", "http://127.0.0.1:3001"]
-          : operator,
       })
     }
   )

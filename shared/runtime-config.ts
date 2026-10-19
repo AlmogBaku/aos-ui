@@ -1,7 +1,7 @@
 import { isMcpAppPolicyOrigin } from "@harness-gw/sdk/protocol"
 import { z } from "zod"
 
-import type { LaneOrigins } from "./lane-origins"
+import type { DeploymentOrigins } from "./lane-origins"
 import { stableOriginsOf } from "./mcp-app-sandbox"
 import { DEFAULT_RUNTIME_MODE } from "./runtime-modes"
 
@@ -22,8 +22,8 @@ export const DEFAULT_COMPOSER_FEATURE_CONFIG: ComposerFeatureConfig = {
 type ReadyRuntimeConfiguration = {
   status: "ready"
   composerFeatures: ComposerFeatureConfig
-  /** The lane's origins, which its web server adds; views need them to show. */
-  origins?: LaneOrigins
+  /** The origins the web server adds, which views need to show. */
+  origins?: DeploymentOrigins
 }
 
 export type RuntimeConfiguration =
@@ -42,7 +42,7 @@ export type PublicRuntimeConfiguration =
 export type GuestSurfaceConfiguration = {
   status: "ready"
   surface: "guest"
-  origins?: LaneOrigins
+  origins?: DeploymentOrigins
 }
 
 export type ApplicationConfiguration =
@@ -114,39 +114,35 @@ const buildIdField = { buildId: z.string().optional() }
 
 const policyOrigin = z.string().refine(isMcpAppPolicyOrigin)
 
-/** The lane's origins, which its web server writes over any configured. */
-const laneOriginFields = {
+/** The deployment's origins, which the web server writes over any set. */
+const originFields = {
   publicOrigins: z.array(policyOrigin).min(1).optional(),
   mcpAppSandboxOrigin: policyOrigin.optional(),
   mcpAppStableOrigins: z
     .string()
     .refine((wildcard) => stableOriginsOf(wildcard) !== undefined)
     .optional(),
-  mcpAppFrameAncestors: z.array(policyOrigin).min(1).optional(),
 }
 
 /**
- * All of the lane's origin fields, the stable origins' wildcard when it is
- * set, or nothing when any other is missing.
+ * Both of the deployment's origin fields, and the stable origins' wildcard
+ * when it is set, or nothing when either is missing.
  */
-function laneOrigins({
+function deploymentOrigins({
   publicOrigins,
   mcpAppSandboxOrigin,
   mcpAppStableOrigins,
-  mcpAppFrameAncestors,
 }: {
   publicOrigins?: string[] | undefined
   mcpAppSandboxOrigin?: string | undefined
   mcpAppStableOrigins?: string | undefined
-  mcpAppFrameAncestors?: string[] | undefined
-}): { origins?: LaneOrigins } {
-  return publicOrigins && mcpAppSandboxOrigin && mcpAppFrameAncestors
+}): { origins?: DeploymentOrigins } {
+  return publicOrigins && mcpAppSandboxOrigin
     ? {
         origins: {
           publicOrigins,
           mcpAppSandboxOrigin,
           ...(mcpAppStableOrigins ? { mcpAppStableOrigins } : {}),
-          mcpAppFrameAncestors,
         },
       }
     : {}
@@ -161,7 +157,7 @@ const publicConfigurationSchema = z
   .object({
     mode: z.enum(["aos", "fixture"]),
     ...publicComposerFeatureFields,
-    ...laneOriginFields,
+    ...originFields,
     ...buildIdField,
   })
   .strict()
@@ -182,14 +178,14 @@ export function parsePublicRuntimeConfiguration(
       config.composerContextEnabled === false ? "false" : undefined,
   })
   return resolved.status === "ready"
-    ? { ...resolved, ...laneOrigins(config) }
+    ? { ...resolved, ...deploymentOrigins(config) }
     : resolved
 }
 
 const guestSurfaceSchema = z
   .object({
     surface: z.literal("guest"),
-    ...laneOriginFields,
+    ...originFields,
     ...buildIdField,
   })
   .strict()
@@ -203,7 +199,7 @@ export function parsePublicApplicationConfiguration(
     return {
       status: "ready",
       surface: guest.data.surface,
-      ...laneOrigins(guest.data),
+      ...deploymentOrigins(guest.data),
     }
   return parsePublicRuntimeConfiguration(input)
 }

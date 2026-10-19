@@ -20,12 +20,10 @@ import {
 } from "./shared/runtime-config.ts"
 import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
 import {
-  laneOrigins,
   MCP_APP_SANDBOX_ORIGIN_SETTING,
-  PUBLIC_ORIGIN_SETTINGS,
+  PUBLIC_ORIGIN_SETTING,
   readDeploymentOrigins,
-  type LaneOrigins,
-  type Surface,
+  type DeploymentOrigins,
 } from "./shared/lane-origins.ts"
 import {
   lanePageFrameSrc,
@@ -68,33 +66,28 @@ function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
 
 const DEV_SERVER_PORT = 3000
 
-type LaneOriginsOf = (request: IncomingMessage) => LaneOrigins
+type DeploymentOriginsOf = (request: IncomingMessage) => DeploymentOrigins
 
 /**
- * The operator lane's origins, the only lane these servers serve, read as the
- * web server reads them (`readDeploymentOrigins`): its settings, or, where
- * they are unset, loopback names on `port`, the port a request reached, which
- * is this server's own.
+ * The deployment's origins, read as the web server reads them
+ * (`readDeploymentOrigins`): its settings, or, where they are unset, loopback
+ * names on `port`, the port a request reached, which is this server's own.
+ * A guest page that frames the sandbox Vite serves, as a harness overlay's
+ * web-guest serves it, is listed in `AOS_UI_PUBLIC_ORIGIN` with the rest.
  */
-export function laneOriginsAt(environment: NodeJS.ProcessEnv) {
-  return (port: number | undefined): LaneOrigins => {
+export function deploymentOriginsAt(environment: NodeJS.ProcessEnv) {
+  return (port: number | undefined): DeploymentOrigins => {
     const loopback: Record<string, string> = {
-      [PUBLIC_ORIGIN_SETTINGS.operator]: `http://localhost:${port},http://127.0.0.1:${port}`,
+      [PUBLIC_ORIGIN_SETTING]: `http://localhost:${port},http://127.0.0.1:${port}`,
       [MCP_APP_SANDBOX_ORIGIN_SETTING]: `http://sandbox.localhost:${port}`,
     }
-    const getenv = (name: string) => environment[name] || loopback[name]
-    // The guest lane's pages frame the sandbox Vite serves, as a harness
-    // overlay's web-guest serves them, once its origins are set.
-    const surfaces: Surface[] = getenv(PUBLIC_ORIGIN_SETTINGS.guest)
-      ? ["operator", "guest"]
-      : ["operator"]
-    return laneOrigins(readDeploymentOrigins(getenv, surfaces), "operator")
+    return readDeploymentOrigins((name) => environment[name] || loopback[name])
   }
 }
 
 function runtimeConfigurationPlugin(
   environment: NodeJS.ProcessEnv,
-  originsOf: LaneOriginsOf
+  originsOf: DeploymentOriginsOf
 ): Plugin {
   const configureRuntimeConfiguration = (
     server: PreviewServer | ViteDevServer
@@ -117,7 +110,7 @@ function runtimeConfigurationPlugin(
             Array.isArray(configured)
           )
             throw new Error("The runtime configuration is not an object")
-          // The lane's own origins, over any the file names, as the web
+          // The deployment's origins, over any the file names, as the web
           // server writes them.
           response.end(JSON.stringify({ ...configured, ...originsOf(request) }))
         } catch {
@@ -241,7 +234,7 @@ const notFound = (response: ServerResponse) => {
  * file or by any path whose last segment names one, as these servers rewrite
  * paths to files, and pages that frame the sandbox origins alone.
  */
-function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
+function mcpAppSandboxPlugin(originsOf: DeploymentOriginsOf): Plugin {
   const secure = (server: ViteDevServer | PreviewServer, root: string) => {
     const files = new Map(
       [MCP_APP_SANDBOX_PATH, MCP_APP_SANDBOX_SCRIPT_PATH].map((file) => [
@@ -472,8 +465,8 @@ export default defineConfig(({ mode }) => {
     environment.AOS_UI_RUNTIME_MODE ??
     DEFAULT_RUNTIME_MODE
   ).replace(/[^a-zA-Z0-9_-]/g, "-")
-  const originsAt = laneOriginsAt(environment)
-  const originsOf: LaneOriginsOf = (request) =>
+  const originsAt = deploymentOriginsAt(environment)
+  const originsOf: DeploymentOriginsOf = (request) =>
     originsAt(request.socket.localPort)
   // Read once now, so a malformed setting stops the server and names itself;
   // the sandbox's name and the stable origins' domain, which no port changes,

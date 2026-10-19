@@ -19,7 +19,7 @@ import {
   type ShownFile,
 } from "@/artifacts/artifacts"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
-import type { LaneOrigins } from "@shared/lane-origins"
+import type { DeploymentOrigins } from "@shared/lane-origins"
 
 import type { AppConnectionStatus } from "./use-app-files"
 
@@ -74,8 +74,8 @@ export type McpAppHost = {
   adapter: McpAppAdapter
   agentId: string
   sessionId: string
-  /** The lane's origins, from its runtime configuration; none shows without. */
-  origins: LaneOrigins | undefined
+  /** The origins from the runtime configuration; no view shows without them. */
+  origins: DeploymentOrigins | undefined
   /** The runtime connection's state, which the views' files follow. */
   connectionStatus?: AppConnectionStatus
   /** What the side panel shows, while its Session is the one shown. */
@@ -154,7 +154,7 @@ export function McpAppHostProvider({
   adapter?: McpAppAdapter
   agentId?: string
   sessionId?: string
-  origins?: LaneOrigins
+  origins?: DeploymentOrigins
   connectionStatus?: AppConnectionStatus
   /** The Session's conversation, which says what each file's latest call is. */
   messages?: readonly ArtifactMessage[]

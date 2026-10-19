@@ -1,4 +1,4 @@
-import type { LaneOrigins } from "@shared/lane-origins"
+import type { DeploymentOrigins } from "@shared/lane-origins"
 
 /**
  * MCP Apps render behind a double iframe, as the spec's sandbox proxy does.
@@ -15,13 +15,13 @@ import type { LaneOrigins } from "@shared/lane-origins"
 export const SANDBOX_PROXY_SANDBOX = "allow-scripts allow-same-origin"
 
 /**
- * Whether views may show on a page at `pageOrigin`: one of its lane's own
- * origins, and never its sandbox's.
+ * Whether views may show on a page at `pageOrigin`: one of the origins AOS UI
+ * is opened at, and never its sandbox's.
  */
 export const showsViewsAt = (
-  origins: LaneOrigins | undefined,
+  origins: DeploymentOrigins | undefined,
   pageOrigin: string
-): origins is LaneOrigins =>
+): origins is DeploymentOrigins =>
   origins !== undefined &&
   origins.publicOrigins.includes(pageOrigin) &&
   origins.mcpAppSandboxOrigin !== pageOrigin

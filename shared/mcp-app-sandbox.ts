@@ -6,7 +6,7 @@ import {
   type McpUiCsp,
 } from "@harness-gw/sdk/protocol"
 
-import type { LaneOrigins } from "./lane-origins"
+import type { DeploymentOrigins } from "./lane-origins"
 
 /** The relay script the sandbox page loads. */
 export const MCP_APP_SANDBOX_SCRIPT_PATH = "/mcp-app-sandbox.js"
@@ -84,13 +84,13 @@ const isStableName = (name: string, domain: string) =>
  * shared sandbox.
  */
 export function sandboxPolicyOrigins(
-  origins: LaneOrigins,
+  origins: DeploymentOrigins,
   domain?: string
 ): SandboxPolicyOrigins {
   const stable = stableOriginsOf(origins.mcpAppStableOrigins)
   const name = domain?.toLowerCase()
   return {
-    frameAncestors: origins.mcpAppFrameAncestors,
+    frameAncestors: origins.publicOrigins,
     sandboxOrigin:
       stable !== undefined &&
       name !== undefined &&
@@ -108,7 +108,7 @@ export function sandboxPolicyOrigins(
  * case-insensitively, as DNS names do.
  */
 export function sandboxAt(
-  origins: LaneOrigins,
+  origins: DeploymentOrigins,
   host: string
 ): SandboxPolicyOrigins | "refused" | undefined {
   const requested = host.toLowerCase()
@@ -206,5 +206,5 @@ export const SERVICE_WORKER_HEADER = "service-worker"
 export const lanePageFrameSrc = ({
   mcpAppSandboxOrigin,
   mcpAppStableOrigins,
-}: LaneOrigins) =>
+}: DeploymentOrigins) =>
   `frame-src ${mcpAppSandboxOrigin}${mcpAppStableOrigins ? ` ${mcpAppStableOrigins}` : ""}`

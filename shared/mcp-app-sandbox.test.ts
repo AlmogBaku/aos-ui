@@ -8,7 +8,6 @@ describe("sandboxPolicyOrigins", () => {
   const origins = {
     publicOrigins: ["http://localhost:3000"],
     mcpAppSandboxOrigin: SANDBOX,
-    mcpAppFrameAncestors: ["http://localhost:3000"],
     mcpAppStableOrigins: "http://*.mcp-apps.localhost:3000",
   }
 

@@ -24,7 +24,7 @@ import {
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 import { cn } from "@/lib/utils"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
-import type { LaneOrigins } from "@shared/lane-origins"
+import type { DeploymentOrigins } from "@shared/lane-origins"
 import { sandboxPageUrl, sandboxPolicyOrigins } from "@shared/mcp-app-sandbox"
 
 import { AppUnavailable } from "./app-unavailable"
@@ -136,8 +136,8 @@ export type McpAppFrameProps = {
   onMove?: (placement: AppPlacement) => void
   target: McpAppTarget
   adapter: McpAppAdapter
-  /** The lane's origins; without them, or off them, the view cannot show. */
-  origins: LaneOrigins | undefined
+  /** The deployment's origins; without them, or off them, no view shows. */
+  origins: DeploymentOrigins | undefined
   /** The view's name: its frame's, and its header's in full screen. */
   title: string
   /** The type of the file the view shows, under its name in full screen. */
@@ -204,8 +204,8 @@ export default function McpAppFrame({
     () => buildAllowAttribute(view.permissions),
     [view.permissions]
   )
-  // Views show only on one of their lane's own pages, whose origin the
-  // sandbox page's policy names as the one that may frame it.
+  // Views show only on a page AOS UI is opened at, one the sandbox page's
+  // policy names among those that may frame it.
   const pageOrigin = window.location.origin
   const atLaneOrigin = showsViewsAt(origins, pageOrigin)
   // The view's own stable origin when its domain names one, else the shared

@@ -80,7 +80,7 @@ import {
 } from "@/components/runtime-interactions/side-question-store"
 import { SideQuestionTray } from "@/components/runtime-interactions/side-question-tray"
 import { useStableHandlers } from "@/hooks/use-stable-handlers"
-import type { LaneOrigins } from "@shared/lane-origins"
+import type { DeploymentOrigins } from "@shared/lane-origins"
 
 type AosUiWorkspaceProps = {
   runtime: HarnessRuntime
@@ -90,8 +90,8 @@ type AosUiWorkspaceProps = {
   readNow?: () => Date
   browserSettings?: BrowserSettingsView
   browserNotificationPort?: BrowserNotificationPort
-  /** The operator lane's origins, which App views show on. */
-  mcpAppOrigins?: LaneOrigins
+  /** The deployment's origins, which App views show on. */
+  mcpAppOrigins?: DeploymentOrigins
 }
 
 /**
@@ -210,7 +210,7 @@ function ArtifactWorkspaceBridge({
   artifactMessageProjector?: (
     messages: readonly ArtifactMessage[]
   ) => readonly ArtifactMessage[]
-  mcpAppOrigins?: LaneOrigins
+  mcpAppOrigins?: DeploymentOrigins
 } & WorkspaceShellProps) {
   const selectArtifactMessages = useMemo(() => {
     const stabilize = createArtifactMessageStabilizer(artifactMessageProjector)

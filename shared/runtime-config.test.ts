@@ -55,15 +55,11 @@ describe("browser runtime configuration", () => {
     }
   })
 
-  it("recognizes the isolated guest listener and its lane without treating it as a runtime", () => {
+  it("recognizes the isolated guest listener and the deployment's origins without treating it as a runtime", () => {
     const origins = {
-      publicOrigins: ["https://guest.example.test"],
+      publicOrigins: ["https://aos.example.test", "https://guest.example.test"],
       mcpAppSandboxOrigin: "https://sandbox.example.test",
       mcpAppStableOrigins: "https://*.mcp-apps.example.test",
-      mcpAppFrameAncestors: [
-        "https://aos.example.test",
-        "https://guest.example.test",
-      ],
     }
     expect(
       parsePublicApplicationConfiguration({

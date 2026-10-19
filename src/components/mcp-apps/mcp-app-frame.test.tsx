@@ -115,7 +115,6 @@ const LANE = {
   origins: {
     publicOrigins: [window.location.origin],
     mcpAppSandboxOrigin: SANDBOX,
-    mcpAppFrameAncestors: [window.location.origin],
   },
 } as const satisfies Pick<McpAppFrameProps, "origins">
 
@@ -511,7 +510,6 @@ describe("MCP App sandbox", () => {
       {
         publicOrigins: ["https://aos.example.test"],
         mcpAppSandboxOrigin: SANDBOX,
-        mcpAppFrameAncestors: ["https://aos.example.test"],
       },
     ],
     [
@@ -519,7 +517,6 @@ describe("MCP App sandbox", () => {
       {
         publicOrigins: [window.location.origin],
         mcpAppSandboxOrigin: window.location.origin,
-        mcpAppFrameAncestors: [window.location.origin],
       },
     ],
     ["any address, with no origins", undefined],
@@ -538,14 +535,10 @@ describe("MCP App sandbox", () => {
     }
   )
 
-  it("reports the domains its sandbox page's policy applies, without one naming another lane's page", () => {
+  it("reports the domains its sandbox page's policy applies, without one naming another page AOS UI is opened at", () => {
     const origins = {
-      publicOrigins: [window.location.origin],
+      publicOrigins: [window.location.origin, "https://aos.example.test"],
       mcpAppSandboxOrigin: SANDBOX,
-      mcpAppFrameAncestors: [
-        window.location.origin,
-        "https://aos.example.test",
-      ],
     }
     const csp = {
       connectDomains: ["https://aos.example.test", "https://api.example.test"],
