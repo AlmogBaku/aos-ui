@@ -1,7 +1,7 @@
 # Hermes itself remains operator-managed. This overlay adds the harness-gw
 # gateway in front of it and opens the guest lane: Caddy's guest site, the
 # app's guest listener, and the gateway's guest listener. External ingress owns
-# TLS; only Caddy's two lane ports are published.
+# TLS; only Caddy's two lane ports and its sandbox port are published.
 services:
   gateway:
     image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.13.0}

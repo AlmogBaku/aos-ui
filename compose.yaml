@@ -2,7 +2,8 @@ name: aos-ui
 
 services:
   # The only lane listener on the host: Caddy joins the app and, under a
-  # harness overlay, the gateway on one origin per lane (deploy/Caddyfile).
+  # harness overlay, the gateway on one origin per lane, and serves the MCP App
+  # sandbox from a site of its own (deploy/Caddyfile).
   caddy:
     image: caddy:2.11-alpine
     environment:
@@ -12,16 +13,18 @@ services:
       # Never empty: an empty name leaves Caddy's host matcher with no host and
       # Caddy refuses to start. `localhost` adds nothing to the loopback names.
       AOS_UI_PUBLIC_HOST: ${AOS_UI_PUBLIC_HOST:-localhost}
-      # The one MCP App sandbox address, for both lanes, which each Caddy site
-      # sends to the web server whole; the web server below reads the same
-      # value. It defaults to the operator lane's published port.
-      AOS_UI_MCP_APP_SANDBOX_ORIGIN: &sandbox-origin ${AOS_UI_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
+      # The one MCP App sandbox address, for both lanes, which Caddy's sandbox
+      # site sends to the web server whole; the web server below reads the
+      # same value. It defaults to the sandbox site's published port.
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN: &sandbox-origin ${AOS_UI_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:${AOS_UI_SANDBOX_PUBLISHED_PORT:-3002}}
       # Optional and off by default: the MCP App stable origins' wildcard,
-      # whose exact stable hosts each site sends to the web server whole, as
-      # it does the sandbox address. Empty, no host is one.
+      # whose exact stable hosts the sandbox site sends to the web server
+      # whole, as it does the sandbox address. Empty, no host is one.
       AOS_UI_MCP_APP_STABLE_ORIGINS: &stable-origins ${AOS_UI_MCP_APP_STABLE_ORIGINS:-}
     ports:
       - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_WEB_PUBLISHED_PORT:-3000}:18080
+      # The MCP App sandbox site, which belongs to neither lane.
+      - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_SANDBOX_PUBLISHED_PORT:-3002}:18082
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
@@ -56,8 +59,8 @@ services:
       AOS_UI_WEB_PORT: "4200"
       AOS_UI_WEB_EXPOSURE: private-container
       # Every origin people open AOS UI at, and the sandbox origin; both
-      # default to loopback on the published port. A harness overlay adds the
-      # guest lane's loopback origins to the default.
+      # default to loopback on their published ports. A harness overlay adds
+      # the guest lane's loopback origins to the default.
       AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: *sandbox-origin
       AOS_UI_MCP_APP_STABLE_ORIGINS: *stable-origins

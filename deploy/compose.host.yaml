@@ -6,13 +6,13 @@
 #
 # Compose ignores published ports here, so every listener binds loopback
 # itself: Caddy keeps the Caddyfile's own 127.0.0.1 default on 18080 (and 18081
-# for guests), its upstreams move from the Compose service names to the
-# loopback ports, and the lanes' origins default to those two ports, the one
-# sandbox origin to the operator's. The gateway's listeners come from its own
-# configuration file, which must list 127.0.0.1 too. A host whose exit-node
-# routes capture the Docker bridge subnets needs this shape, because a bridged,
-# published port is unreachable; so does a gateway that reaches a Hermes on
-# host loopback.
+# for guests) and on 18082 for the MCP App sandbox site, its upstreams move
+# from the Compose service names to the loopback ports, and the lanes' origins
+# default to their two ports, the one sandbox origin to the sandbox site's.
+# The gateway's listeners come from its own configuration file, which must
+# list 127.0.0.1 too. A host whose exit-node routes capture the Docker bridge
+# subnets needs this shape, because a bridged, published port is unreachable;
+# so does a gateway that reaches a Hermes on host loopback.
 services:
   caddy:
     network_mode: host
@@ -23,7 +23,7 @@ services:
       AOS_UI_GATEWAY_GUEST_UPSTREAM: 127.0.0.1:4101
       AOS_UI_WEB_UPSTREAM: 127.0.0.1:4200
       AOS_UI_WEB_GUEST_UPSTREAM: 127.0.0.1:4201
-      AOS_UI_MCP_APP_SANDBOX_ORIGIN: &sandbox-origin ${AOS_UI_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:18080}
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN: &sandbox-origin ${AOS_UI_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:18082}
 
   web:
     network_mode: host
