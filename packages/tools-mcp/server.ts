@@ -30,7 +30,12 @@ import {
   type PresentationView,
   type PresentationViewName,
 } from "../../shared/presentation/views"
-import { registerFileReads, type FileReadOptions } from "./file-reads"
+import {
+  fileReader,
+  registerFileReads,
+  type FileReadOptions,
+  type FileReader,
+} from "./file-reads"
 
 /** Each presentation view's built, self-contained HTML document. */
 export type PresentationViewDocuments = Record<PresentationViewName, string>
@@ -240,14 +245,16 @@ export function toolsServerFactory(
   files: ToolsServerFiles,
   { artifactStableOrigin, fileReads = { origins: [] } }: ToolsServerOptions = {}
 ): () => McpServer {
+  // One reader for every server made, so its bound on reads holds across them.
+  const readFile = fileReader(fileReads)
   if (artifactStableOrigin === undefined)
-    return () => createToolsServer(files, undefined, fileReads)
+    return () => createToolsServer(files, undefined, readFile)
   const { domain, host } = artifactStableOrigin
   const views = {
     ...files.views,
     artifact: withExpectedHost(files.views.artifact, host),
   }
-  return () => createToolsServer({ ...files, views }, domain, fileReads)
+  return () => createToolsServer({ ...files, views }, domain, readFile)
 }
 
 /**
@@ -258,7 +265,7 @@ export function toolsServerFactory(
  * `ui://aos-ui/<view>` resource, the artifact view's declaring
  * `artifactDomain`, when it has one. `present_artifact` opens no file: its
  * view reads the file at the address the page hands it, which the server
- * answers by `fileReads` alone.
+ * answers with `readFile` alone.
  */
 function createToolsServer(
   {
@@ -268,7 +275,7 @@ function createToolsServer(
     maplibre = new Map(),
   }: ToolsServerFiles,
   artifactDomain: string | undefined,
-  fileReads: FileReadOptions
+  readFile: FileReader
 ): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
@@ -298,7 +305,7 @@ function createToolsServer(
     () => "text/javascript"
   )
   // Last, so it sees only the URIs no resource above answers.
-  registerFileReads(server, fileReads)
+  registerFileReads(server, readFile)
 
   for (const [name, definition] of Object.entries(
     presentationToolDefinitions

@@ -13,6 +13,7 @@ import {
 } from "vitest"
 
 import { ARTIFACT_VIEW_HOST_META } from "../../shared/presentation/views"
+import { useFakeClock } from "../../test/support/fake-clock"
 import { fileReadSettings, type FileReadOptions } from "./file-reads"
 import { toolsServerFactory } from "./server"
 
@@ -276,6 +277,17 @@ describe("file reads", () => {
   const ROUTE = "/api/v1/agents/a1/sessions/s1/tool-calls/c1/app/files/path"
   const address = `${LANE}${ROUTE}?pass=${PASS}`
 
+  /** A client of a server `factory` makes. */
+  async function connect(factory: ReturnType<typeof toolsServerFactory>) {
+    const reading = new Client({ name: "tools-mcp-test", version: "0.0.0" })
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair()
+    await factory().connect(serverTransport)
+    await reading.connect(clientTransport)
+    onTestFinished(() => reading.close())
+    return reading
+  }
+
   /**
    * A client of a server that answers file reads by `fileReads`, its every
    * fetch answered by `answer`.
@@ -286,16 +298,11 @@ describe("file reads", () => {
       new Response("Quarterly notes")
   ) {
     const fetch = vi.fn(answer)
-    const reading = new Client({ name: "tools-mcp-test", version: "0.0.0" })
-    const [clientTransport, serverTransport] =
-      InMemoryTransport.createLinkedPair()
-    await toolsServerFactory(
+    const factory = toolsServerFactory(
       { views },
       { fileReads: { origins: [LANE], fetch, ...fileReads } }
-    )().connect(serverTransport)
-    await reading.connect(clientTransport)
-    onTestFinished(() => reading.close())
-    return { client: reading, fetch }
+    )
+    return { client: await connect(factory), fetch }
   }
 
   /** Everything the server wrote to the console, as one string. */
@@ -358,7 +365,13 @@ describe("file reads", () => {
       `${LANE}/api/v1/agents/a1/sessions/s1/messages/c1/app/files/path?pass=${PASS}`,
     ],
     ["a path that climbs out", `${LANE}${ROUTE}/../../../healthz?pass=${PASS}`],
-    ["an address with credentials", `http://user:pw@localhost:3000${ROUTE}`],
+    [
+      "an address with credentials",
+      `http://user:pw@localhost:3000${ROUTE}?pass=${PASS}`,
+    ],
+    // The lane would judge a read without a pass by the listener's own login.
+    ["an address without a pass", `${LANE}${ROUTE}?pas=${PASS}`],
+    ["an address with an empty pass", `${LANE}${ROUTE}?pass=`],
     ["another scheme", `ftp://localhost:3000${ROUTE}?pass=${PASS}`],
     ["a ui:// resource no view serves", "ui://aos-ui/unknown"],
   ])("finds no resource at %s, reading nothing", async (_case, uri) => {
@@ -452,6 +465,70 @@ describe("file reads", () => {
       expect(output().join("\n")).not.toContain(PASS)
     }
   )
+
+  it("fetches one read at a time for every server it makes, hands the next turn to the first waiting, and refuses a read past its queue or its wait as unreachable", async () => {
+    const clock = useFakeClock()
+    const answers: Array<(response: Response) => void> = []
+    const fetch = vi.fn<NonNullable<FileReadOptions["fetch"]>>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answers.push(resolve)
+        })
+    )
+    const factory = toolsServerFactory(
+      { views },
+      {
+        fileReads: {
+          origins: [LANE],
+          fetch,
+          concurrency: 1,
+          queue: 2,
+          waitMs: 1_000,
+        },
+      }
+    )
+    const [one, other] = await Promise.all([connect(factory), connect(factory)])
+    const file = (argument: string) =>
+      `${LANE}${ROUTE.replace(/path$/u, argument)}?pass=${PASS}`
+    const fetched = () =>
+      fetch.mock.calls.map(([target]) => target.pathname.split("/").at(-1))
+    const reason = (read: Promise<unknown>) =>
+      read.then(
+        () => undefined,
+        (error: { data?: { reason?: string } }) => error.data?.reason
+      )
+
+    const first = one.readResource({ uri: file("a") })
+    const second = other.readResource({ uri: file("b") })
+    const third = one.readResource({ uri: file("c") })
+    expect(await reason(other.readResource({ uri: file("d") }))).toBe(
+      "unreachable"
+    )
+    await clock.advance(0)
+    expect(fetched()).toEqual(["a"])
+
+    answers[0]!(new Response("A"))
+    expect((await first).contents).toHaveLength(1)
+    await clock.advance(0)
+    expect(fetched()).toEqual(["a", "b"])
+    answers[1]!(new Response("B"))
+    expect((await second).contents).toHaveLength(1)
+    await clock.advance(0)
+    expect(fetched()).toEqual(["a", "b", "c"])
+    answers[2]!(new Response("C"))
+    expect((await third).contents).toHaveLength(1)
+
+    const held = one.readResource({ uri: file("e") })
+    const waited = reason(other.readResource({ uri: file("f") }))
+    await clock.advance(999)
+    expect(fetched()).toEqual(["a", "b", "c", "e"])
+    await clock.advance(1)
+    expect(await waited).toBe("unreachable")
+    answers[3]!(new Response("E"))
+    expect((await held).contents).toHaveLength(1)
+    await clock.advance(0)
+    expect(fetched()).toEqual(["a", "b", "c", "e"])
+  })
 
   it("reads a lane at its upstream under the lane's own Host, and any other lane as it is", async () => {
     const guest = "http://localhost:3001"
