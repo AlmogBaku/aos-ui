@@ -373,7 +373,9 @@ Additional checks by area:
   To run e2e against an external preview instead of the built-in server, set
   `AOS_UI_E2E_BASE_URL` to the preview's root URL. The stable-origins spec
   needs a second preview with stable origins on; point it there with
-  `AOS_UI_E2E_STABLE_ORIGINS_BASE_URL`. Without that variable, an external run
+  `AOS_UI_E2E_STABLE_ORIGINS_BASE_URL`, and build it with
+  `AOS_UI_E2E_STABLE_ORIGINS_PORT` set to its port, or its artifact view
+  expects no port and keeps nothing. Without that variable, an external run
   skips the stable-origins spec.
 - Tools MCP server or shared presentation schemas: `bunx vitest run packages/tools-mcp`
   and `tsc -p tsconfig.tools-mcp.json --noEmit`; both also run inside the root

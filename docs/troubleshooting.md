@@ -281,7 +281,7 @@ dialed. Check the gateway log for `mcp_app.domain.dropped`:
 | `malformed` | The declared value is not a valid lowercase host name                     | Confirm the tools server starts without error and declares a domain; check `AOS_UI_MCP_APP_STABLE_ORIGINS` |
 
 The log carries the server name but never the URL. The most common mismatch is
-`AOS_UI_TOOLS_MCP_URL` naming a different URL than `mcpApps.fallback.servers.aos-ui.url` in the gateway configuration. Under the Hermes and OpenCode overlays both default to `http://tools-mcp:4110/mcp`; under host networking both default to `http://127.0.0.1:4110/mcp`.
+`AOS_UI_TOOLS_MCP_URL` naming a different URL than `mcpApps.fallback.servers.aos-ui.url` in the gateway configuration. Under the Hermes overlay both default to `http://tools-mcp:4110/mcp`. The OpenCode overlay sets no override: the gateway dials the URL OpenCode registers, also `http://tools-mcp:4110/mcp`. Under host networking both default to `http://127.0.0.1:4110/mcp`.
 
 ## A stable host returns 421 or 404
 

@@ -199,7 +199,7 @@ their own origins.
 Set it to a wildcard origin:
 
 ```
-AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.mcp-apps.agents.example
+AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.agents-apps.example
 ```
 
 The web server refuses to start when the value is not a valid
@@ -235,7 +235,7 @@ wildcard sits one level below the zone apex — for example `*.agents-apps.examp
 in a zone whose apex is `agents-apps.example`. A `<domain>` that is itself a
 subdomain of another zone, such as `mcp-apps.agents.example` in
 `agents.example`, puts the wildcard two levels below the apex and requires
-Cloudflare's paid certificate or a separate DNS zone for `mcp-apps.agents.example`.
+Cloudflare's paid certificate or a separate domain, as in the example above.
 
 **Caddy routing.** Both Caddy sites already match each stable host, using the
 same `@stable` expression, and send it to the web server's own listener.

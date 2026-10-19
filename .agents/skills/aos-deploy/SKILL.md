@@ -119,7 +119,7 @@ setting it, confirm:
    example `*.agents-apps.example` in a `agents-apps.example` zone of its own.
    A `<domain>` that is a subdomain of another zone, such as
    `mcp-apps.agents.example` in `agents.example`, needs Cloudflare's paid
-   certificate or a separate DNS zone.
+   certificate or a separate domain, as in the example above.
 3. **The domain sits outside every lane and sandbox.** The web server refuses
    `AOS_UI_MCP_APP_STABLE_ORIGINS` when any lane's or the sandbox's host is at
    or below the wildcard's domain.
