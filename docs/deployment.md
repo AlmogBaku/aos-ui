@@ -66,15 +66,25 @@ path:
   server accepts reads only for addresses whose origin is in this list. Every
   Compose shape passes it to the `tools-mcp` service; set it explicitly when
   running outside Compose.
-- **`AOS_UI_TOOLS_MCP_LANE_UPSTREAMS`** — how the server reaches each lane
-  when the lane's public origin is not directly reachable from inside the
-  container. Format: `<lane origin>=<base URL>`, comma-separated. Bridged
-  Compose shapes set operator and guest entries pointing to the internal Caddy
-  addresses (`http://caddy:18080`, `http://caddy:18081`). Under host
-  networking (`deploy/compose.host.yaml`) this is left empty, because the
-  server runs on the host network and can reach the loopback gateway directly.
-  Set it explicitly when running outside Compose in a network where the lane
-  origins are not directly reachable.
+- **`AOS_UI_TOOLS_MCP_LANE_UPSTREAMS`** — the lane's own Caddy site the
+  server reads each lane's addresses at, keeping the lane's `Host`. Format:
+  `<lane origin>=<base URL>`, comma-separated. Each lane origin must map to its
+  own lane's site: the gateway's guest listener alone accepts a guest pass.
+  Compose's defaults cover only the loopback default origins: the bridged
+  shapes map them to `http://caddy:18080` (operator) and `http://caddy:18081`
+  (guest), and host networking (`deploy/compose.host.yaml`) leaves the setting
+  empty, since its default origins are Caddy's own loopback sites already.
+  **Whenever the lane origins are not the loopback defaults, set it** to each
+  lane's own Caddy site. Otherwise the server reads every address through the
+  public edge in front of Caddy, so a guest's file hairpins out through it and
+  back. Under host networking:
+
+  ```bash
+  AOS_UI_TOOLS_MCP_LANE_UPSTREAMS=https://agents.example.com=http://127.0.0.1:18080,https://guest.example.com=http://127.0.0.1:18081
+  ```
+
+  In a bridged shape, map the same origins to `http://caddy:18080` and
+  `http://caddy:18081`.
 
 With `AOS_UI_PUBLIC_ORIGIN` unset, the server refuses all file reads and logs
 the reason on startup.

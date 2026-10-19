@@ -49,7 +49,9 @@ services:
       # The tools-mcp name does not resolve on the host network, so the gateway
       # dials the loopback URL a harness on the host registers.
       AOS_UI_TOOLS_MCP_URL: ${AOS_UI_TOOLS_MCP_URL:-http://127.0.0.1:4110/mcp}
-      # On the host network every lane's origin is reachable as it is.
+      # The default origins are Caddy's own loopback sites, so they need no
+      # upstream; any other lane origin names its own lane's site in .env, such
+      # as https://agents.example.com=http://127.0.0.1:18080.
       AOS_UI_PUBLIC_ORIGIN: *public-origins
       AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: ${AOS_UI_TOOLS_MCP_LANE_UPSTREAMS:-}
     command:

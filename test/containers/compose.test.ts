@@ -369,6 +369,30 @@ describe("container orchestration", () => {
     )
   })
 
+  it.each([
+    ["the bridged Hermes", ["compose.yaml", "compose.hermes.yaml"]],
+    [
+      "the host-network Hermes",
+      ["compose.yaml", "compose.hermes.yaml", "deploy/compose.host.yaml"],
+    ],
+  ])(
+    "lets the operator name each lane's own Caddy site for the tools MCP server in %s shape",
+    (_shape, files) => {
+      const upstreams =
+        "https://agents.example.test=http://127.0.0.1:18080,https://guest.example.test=http://127.0.0.1:18081"
+      const { "tools-mcp": toolsMcp } = composeConfig(
+        files,
+        harnessEnvironment("hermes", {
+          AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: upstreams,
+        })
+      ).services
+
+      expect(toolsMcp!.environment?.AOS_UI_TOOLS_MCP_LANE_UPSTREAMS).toBe(
+        upstreams
+      )
+    }
+  )
+
   it("keeps the tools MCP server on loopback whatever the bind address", () => {
     const toolsMcp = composeConfig(["compose.yaml"], {
       AOS_UI_BIND_ADDRESS: "0.0.0.0",
