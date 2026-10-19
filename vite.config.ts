@@ -294,19 +294,28 @@ function mcpAppSandboxPlugin(originsOf: LaneOriginsOf): Plugin {
 /**
  * The real `aos-ui` server's answers, as JSON, from views built right now, its
  * artifact view on the fixture's stable origin, which a preview with stable
- * origins on frames it from and any other ignores.
+ * origins on frames it from and any other ignores. The view expects that
+ * origin on `stablePort`, the port of the preview that turns stable origins on
+ * (`AOS_UI_E2E_STABLE_ORIGINS_PORT`); without one it expects no port, which no
+ * preview has, so it keeps Agent HTML storage in memory everywhere.
  */
-async function recordToolsServer() {
+async function recordToolsServer(stablePort: string | undefined) {
   const [views, pdfjs, grammars, maplibre] = await Promise.all([
     buildViews(),
     buildPdfjs(),
     buildGrammars(),
     buildMaplibre(),
   ])
+  const domain = FIXTURE_ARTIFACT_VIEW_DOMAIN
   return JSON.stringify(
     await snapshotToolsServer(
       { views, pdfjs, grammars, maplibre },
-      { artifactDomain: FIXTURE_ARTIFACT_VIEW_DOMAIN }
+      {
+        artifactStableOrigin: {
+          domain,
+          host: stablePort ? `${domain}:${stablePort}` : domain,
+        },
+      }
     )
   )
 }
@@ -318,7 +327,7 @@ async function recordToolsServer() {
  * request and again after a view or schema changes; the build writes the file
  * into `dist`, where preview and the web server serve it.
  */
-function fixtureToolsServerPlugin(): Plugin {
+function fixtureToolsServerPlugin(stablePort: string | undefined): Plugin {
   const sources = [
     path.resolve(import.meta.dirname, "packages/tools-mcp"),
     path.resolve(import.meta.dirname, "shared/presentation"),
@@ -337,7 +346,7 @@ function fixtureToolsServerPlugin(): Plugin {
         async (_request, response) => {
           response.setHeader("cache-control", "no-store")
           try {
-            recorded ??= recordToolsServer()
+            recorded ??= recordToolsServer(stablePort)
             const body = await recorded
             response.setHeader(
               "content-type",
@@ -358,7 +367,7 @@ function fixtureToolsServerPlugin(): Plugin {
       this.emitFile({
         type: "asset",
         fileName: FIXTURE_AOS_UI_MCP_PATH.slice(1),
-        source: await recordToolsServer(),
+        source: await recordToolsServer(stablePort),
       })
     },
   }
@@ -509,7 +518,7 @@ export default defineConfig(({ mode }) => {
       runtimeConfigurationPlugin(environment, originsOf),
       e2eReadinessPlugin(environment),
       fixtureMcpAppFilesPlugin(),
-      fixtureToolsServerPlugin(),
+      fixtureToolsServerPlugin(environment.AOS_UI_E2E_STABLE_ORIGINS_PORT),
       buildIdPlugin(),
       titleBarColorPlugin(titleBarColors),
       // Push only: `src/sw/sw.ts` is bundled as-is, with no precache manifest

@@ -20,6 +20,7 @@ import {
   type PresentationToolName,
 } from "../../shared/presentation/tools"
 import {
+  ARTIFACT_VIEW_HOST_META,
   GRAMMAR_RESOURCE_URI,
   MAPLIBRE_RESOURCE_URI,
   PDFJS_RESOURCE_URI,
@@ -47,13 +48,17 @@ export type ToolsServerFiles = {
   maplibre?: ViewFiles
 }
 
+/**
+ * The artifact view's stable origin: the `domain` its resource declares, and
+ * the host its HTML expects to run on, that domain with the stable origins'
+ * port, if they name one.
+ */
+export type ArtifactStableOrigin = { domain: string; host: string }
+
 /** What the server declares about its views beyond their files. */
 export type ToolsServerOptions = {
-  /**
-   * The artifact view's stable origin host, its `_meta.ui.domain`, which it
-   * declares only when set; no other view declares one.
-   */
-  artifactDomain?: string
+  /** Declared by the artifact view alone, and only when set. */
+  artifactStableOrigin?: ArtifactStableOrigin
 }
 
 const SAFE_OUTPUT =
@@ -134,17 +139,34 @@ function presentationResult(
   }
 }
 
+const HEAD = "<head>"
+
+/**
+ * The view's HTML with the host it expects to run on as the first child of its
+ * head, where the view reads it before it keeps anything in storage. A host
+ * name and port need no escaping.
+ */
+function withExpectedHost(html: string, host: string) {
+  if (!html.includes(HEAD))
+    throw new Error("A view with a stable origin needs a <head> to name it in")
+  return html.replace(
+    HEAD,
+    () => `${HEAD}<meta name="${ARTIFACT_VIEW_HOST_META}" content="${host}">`
+  )
+}
+
 function registerView(
   server: McpServer,
   view: PresentationView,
   html: string,
-  domain: string | undefined
+  stable: ArtifactStableOrigin | undefined
 ) {
   const ui = {
     csp: view.csp,
     ...(view.permissions ? { permissions: view.permissions } : {}),
-    ...(domain ? { domain } : {}),
+    ...(stable ? { domain: stable.domain } : {}),
   }
+  const text = stable ? withExpectedHost(html, stable.host) : html
   registerAppResource(
     server,
     `aos-ui ${view.name} view`,
@@ -155,7 +177,7 @@ function registerView(
         {
           uri: view.resourceUri,
           mimeType: PRESENTATION_VIEW_MIME_TYPE,
-          text: html,
+          text,
           _meta: { ui },
         },
       ],
@@ -222,7 +244,7 @@ export function createToolsServer(
     grammars = new Map(),
     maplibre = new Map(),
   }: ToolsServerFiles,
-  { artifactDomain }: ToolsServerOptions = {}
+  { artifactStableOrigin }: ToolsServerOptions = {}
 ): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
@@ -231,7 +253,7 @@ export function createToolsServer(
       server,
       view,
       views[view.name],
-      view.name === "artifact" ? artifactDomain : undefined
+      view.name === "artifact" ? artifactStableOrigin : undefined
     )
   // pdf.js's worker is script text; every other pdf.js file is bytes.
   registerFiles(server, "pdf.js file", PDFJS_RESOURCE_URI, pdfjs, (path) =>

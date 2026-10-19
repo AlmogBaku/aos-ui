@@ -81,7 +81,13 @@ export default defineConfig({
     : [
         {
           command: `bun run build && bun run preview -- --host 127.0.0.1 --port ${port}`,
-          env: { ...fixtureEnvironment, VITE_AOS_UI_E2E: "1" },
+          // The build bakes the stable preview's port into the artifact view,
+          // which keeps Agent HTML storage only on that host.
+          env: {
+            ...fixtureEnvironment,
+            VITE_AOS_UI_E2E: "1",
+            AOS_UI_E2E_STABLE_ORIGINS_PORT: String(stablePort),
+          },
           url: `http://127.0.0.1:${port}/en`,
           reuseExistingServer: false,
           timeout: 120_000,

@@ -62,6 +62,14 @@ export const presentationViewNames = Object.values(presentationViews).map(
 )
 
 /**
+ * The `<meta>` name under which the `aos-ui` server writes, into the artifact
+ * view's HTML, the host the view expects when it declares a stable origin: its
+ * `domain`, with the stable origins' port, if they name one. Only on that host
+ * does the view keep Agent HTML storage past the preview.
+ */
+export const ARTIFACT_VIEW_HOST_META = "aos-ui-artifact-host"
+
+/**
  * Where the artifact view reads pdf.js's own files from the `aos-ui` server:
  * its worker, character maps, standard fonts, and image decoders, each by its
  * path in the pdf.js package. The view's sandbox fetches nothing else.
