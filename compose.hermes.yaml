@@ -61,6 +61,13 @@ services:
       gateway:
         condition: service_healthy
 
+  tools-mcp:
+    environment:
+      # The URL harness-gw's example configuration dials this server at
+      # (mcpApps.fallback.servers.aos-ui.url) in place of the loopback one
+      # Hermes on the host registers.
+      AOS_UI_TOOLS_MCP_URL: ${AOS_UI_TOOLS_MCP_URL:-http://tools-mcp:4110/mcp}
+
 configs:
   runtime-config:
     file: ${AOS_UI_RUNTIME_CONFIG_FILE:-./deploy/runtime-config.hermes.json}

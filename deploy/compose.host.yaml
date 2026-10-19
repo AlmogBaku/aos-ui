@@ -46,6 +46,10 @@ services:
   tools-mcp:
     network_mode: host
     ports: !reset []
+    environment:
+      # The tools-mcp name does not resolve on the host network, so the gateway
+      # dials the loopback URL a harness on the host registers.
+      AOS_UI_TOOLS_MCP_URL: ${AOS_UI_TOOLS_MCP_URL:-http://127.0.0.1:4110/mcp}
     command:
       - bun
       - run

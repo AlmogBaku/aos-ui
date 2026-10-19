@@ -61,6 +61,11 @@ services:
       gateway:
         condition: service_healthy
 
+  tools-mcp:
+    environment:
+      # The URL OpenCode registers below, which the gateway dials.
+      AOS_UI_TOOLS_MCP_URL: ${AOS_UI_TOOLS_MCP_URL:-http://tools-mcp:4110/mcp}
+
   opencode:
     build:
       context: .

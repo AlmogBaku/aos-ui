@@ -228,6 +228,61 @@ describe("container orchestration", () => {
     }
   )
 
+  it.each([
+    ["the base", ["compose.yaml"], undefined, "http://127.0.0.1:4110/mcp"],
+    [
+      "the Hermes",
+      ["compose.yaml", "compose.hermes.yaml"],
+      "hermes",
+      "http://tools-mcp:4110/mcp",
+    ],
+    [
+      "the OpenClaw",
+      ["compose.yaml", "compose.openclaw.yaml"],
+      "openclaw",
+      "http://127.0.0.1:4110/mcp",
+    ],
+    [
+      "the OpenCode",
+      ["compose.yaml", "compose.opencode.yaml"],
+      "opencode",
+      "http://tools-mcp:4110/mcp",
+    ],
+    [
+      "the host-network Hermes",
+      ["compose.yaml", "compose.hermes.yaml", "deploy/compose.host.yaml"],
+      "hermes",
+      "http://127.0.0.1:4110/mcp",
+    ],
+    [
+      "the host-network OpenCode",
+      [
+        "compose.yaml",
+        "compose.opencode.yaml",
+        "deploy/compose.host.yaml",
+        "deploy/compose.host.opencode.yaml",
+      ],
+      "opencode",
+      "http://127.0.0.1:4110/mcp",
+    ],
+  ] as const)(
+    "tells the tools MCP server, in %s shape, the URL the gateway dials it at, with the stable origins off",
+    (_shape, files, runtime, dialed) => {
+      const { "tools-mcp": toolsMcp, opencode } = composeConfig(
+        [...files],
+        runtime ? harnessEnvironment(runtime) : {}
+      ).services
+
+      expect(toolsMcp!.environment).toEqual({
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "",
+        AOS_UI_TOOLS_MCP_URL: dialed,
+      })
+      // The gateway dials the URL OpenCode registers, which harness-gw's
+      // example configuration does not override.
+      expect(opencode?.environment?.AOS_UI_TOOLS_MCP_URL ?? dialed).toBe(dialed)
+    }
+  )
+
   it("keeps the tools MCP server on loopback whatever the bind address", () => {
     const toolsMcp = composeConfig(["compose.yaml"], {
       AOS_UI_BIND_ADDRESS: "0.0.0.0",
@@ -440,22 +495,31 @@ describe("container orchestration", () => {
     expect(toolsMcp!.command?.join(" ")).toContain("--host 127.0.0.1")
   })
 
-  it("keeps each lane's origins overridable under host networking", () => {
+  it("keeps each lane's origins, and the URL the gateway dials the tools MCP server at, overridable under host networking", () => {
     const lanes = {
       AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://aos-sandbox.example",
       AOS_UI_MCP_APP_STABLE_ORIGINS: "https://*.mcp-apps.example.test",
       AOS_UI_GUEST_PUBLIC_ORIGIN: "https://guest.example.test",
     }
-    const { caddy, web } = composeConfig(
+    const dialed = "http://tools.example.test:4110/mcp"
+    const {
+      caddy,
+      web,
+      "tools-mcp": toolsMcp,
+    } = composeConfig(
       ["compose.yaml", "compose.hermes.yaml", "deploy/compose.host.yaml"],
-      harnessEnvironment("hermes", lanes)
+      harnessEnvironment("hermes", { ...lanes, AOS_UI_TOOLS_MCP_URL: dialed })
     ).services
 
     expect(web.environment).toMatchObject(lanes)
     expect(caddy.environment).toMatchObject({
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: lanes.AOS_UI_MCP_APP_SANDBOX_ORIGIN,
       AOS_UI_MCP_APP_STABLE_ORIGINS: lanes.AOS_UI_MCP_APP_STABLE_ORIGINS,
+    })
+    expect(toolsMcp!.environment).toEqual({
+      AOS_UI_MCP_APP_STABLE_ORIGINS: lanes.AOS_UI_MCP_APP_STABLE_ORIGINS,
+      AOS_UI_TOOLS_MCP_URL: dialed,
     })
   })
 

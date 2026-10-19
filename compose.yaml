@@ -95,6 +95,13 @@ services:
       - 0.0.0.0
       - --port
       - "4110"
+    environment:
+      # Off while the stable origins are: with them and the URL the gateway
+      # dials this server at, the artifact view declares a stable origin. That
+      # URL defaults to the loopback one a harness on the host registers; a
+      # harness overlay whose gateway dials another names it.
+      AOS_UI_MCP_APP_STABLE_ORIGINS: *stable-origins
+      AOS_UI_TOOLS_MCP_URL: ${AOS_UI_TOOLS_MCP_URL:-http://127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}/mcp}
     ports:
       - 127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}:4110
     healthcheck:
