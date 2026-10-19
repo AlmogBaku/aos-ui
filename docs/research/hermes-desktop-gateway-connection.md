@@ -2,7 +2,7 @@
 
 Research date: 2026-09-14. “Current upstream” below means
 [`NousResearch/hermes-agent@5eb99eb`](https://github.com/NousResearch/hermes-agent/tree/5eb99eb2844b22ebb723711b8e6a0bbb80bb5f04).
-The local comparison is `/home/anakin/work/fix-cron-standalone-delivery-ack` at
+The local comparison is `/home/example/work/fix-cron-standalone-delivery-ack` at
 `793741fceaf84b0a0557f669148ee3ba42f8a65b`. Only repository source and its
 current documentation/comments were used; statements labelled **Inference**
 are architectural conclusions rather than explicit upstream promises.
@@ -184,7 +184,7 @@ sign-in-required state rather than an endless reconnect loop.
 
 The local checkout already has the same high-level Desktop topology: primary
 per window, persistent secondary per other live profile
-(`/home/anakin/work/fix-cron-standalone-delivery-ack/apps/desktop/src/store/gateway.ts:11-19`),
+(`/home/example/work/fix-cron-standalone-delivery-ack/apps/desktop/src/store/gateway.ts:11-19`),
 exact Session owner routing, turn leases, event replay, 20-second orphan grace,
 and activity-aware reaping.
 
@@ -193,7 +193,7 @@ Two relevant differences from current upstream are material:
 1. Local Session attachment is single-owner-with-viewer-fallback, not true
    additive fanout. `prompt.submit` replaces `session["transport"]` with the
    current request transport
-   (`/home/anakin/work/fix-cron-standalone-delivery-ack/tui_gateway/methods_prompt.py:471-475`),
+   (`/home/example/work/fix-cron-standalone-delivery-ack/tui_gateway/methods_prompt.py:471-475`),
    and disconnect hands ownership to the newest surviving viewer or parks it
    (`.../tui_gateway/server.py:1601-1677`). Upstream's
    `session_transports.py` instead attaches multiple simultaneous members and

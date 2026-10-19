@@ -197,6 +197,21 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
   }
 }
 
+/** Says once, as a server starts, that it forwards `/api/v1` to no gateway. */
+function gatewayTargetNoticePlugin(target: string | undefined): Plugin {
+  const notice = (server: PreviewServer | ViteDevServer) => {
+    if (target === undefined)
+      server.config.logger.warn(
+        "AOS_UI_GATEWAY_TARGET is unset, so /api/v1 reaches no gateway. Fixture mode needs none; for aos mode, set it to the gateway's URL."
+      )
+  }
+  return {
+    name: "aos-gateway-target-notice",
+    configureServer: notice,
+    configurePreviewServer: notice,
+  }
+}
+
 const notFound = (response: ServerResponse) => {
   response.statusCode = 404
   response.end()
@@ -462,19 +477,26 @@ export default defineConfig(({ mode }) => {
       new URL(origins.mcpAppSandboxOrigin).hostname,
       stableDomain === undefined ? [] : `.${stableDomain}`
     )
-  const gatewayProxy = {
-    "/api/v1": {
-      target: environment.AOS_UI_GATEWAY_TARGET ?? "http://127.0.0.1:4100",
-      changeOrigin: false,
-      ws: true,
-      // No sandbox address, nor any host at or below the stable origins'
-      // domain, reaches the gateway, WebSockets included.
-      bypass: (request: IncomingMessage) =>
-        sandboxAt(originsOf(request), request.headers.host ?? "") === undefined
-          ? undefined
-          : false,
-    },
-  }
+  // No default gateway: on a shared host the usual gateway port may be another
+  // deployment's, so with the setting unset nothing is forwarded anywhere.
+  const gatewayTarget = environment.AOS_UI_GATEWAY_TARGET || undefined
+  const gatewayProxy =
+    gatewayTarget === undefined
+      ? undefined
+      : {
+          "/api/v1": {
+            target: gatewayTarget,
+            changeOrigin: false,
+            ws: true,
+            // No sandbox address, nor any host at or below the stable origins'
+            // domain, reaches the gateway, WebSockets included.
+            bypass: (request: IncomingMessage) =>
+              sandboxAt(originsOf(request), request.headers.host ?? "") ===
+              undefined
+                ? undefined
+                : false,
+          },
+        }
 
   return {
     cacheDir: path.resolve(
@@ -488,6 +510,7 @@ export default defineConfig(({ mode }) => {
       reactCompiler(),
       runtimeConfigurationPlugin(environment, originsOf),
       e2eReadinessPlugin(environment),
+      gatewayTargetNoticePlugin(gatewayTarget),
       fixtureToolsServerPlugin(environment.AOS_UI_E2E_STABLE_ORIGINS_PORT),
       buildIdPlugin(),
       titleBarColorPlugin(titleBarColors),

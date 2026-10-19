@@ -10,7 +10,7 @@ clusters: transport reliability, run lifecycle, rejection handling, replay/dedup
 ownership, and interactions protocol mismatch. This document records each confirmed
 finding for engineering reference and fix tracking.
 
-Raw audit data: `~/.claude/projects/-home-anakin-projects-aos-ui/3ee71a8b-d477-45da-841e-682cc0304ea7/research/hermes-audit.json`
+Raw audit data: `~/.claude/projects/-home-example-projects-aos-ui/3ee71a8b-d477-45da-841e-682cc0304ea7/research/hermes-audit.json`
 
 ---
 
