@@ -61,7 +61,7 @@ services:
       # Every origin people open AOS UI at, and the sandbox origin; both
       # default to loopback on their published ports. A harness overlay adds
       # the guest lane's loopback origins to the default.
-      AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
+      AOS_UI_PUBLIC_ORIGIN: &public-origins ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
       AOS_UI_MCP_APP_SANDBOX_ORIGIN: *sandbox-origin
       AOS_UI_MCP_APP_STABLE_ORIGINS: *stable-origins
     expose:
@@ -106,6 +106,14 @@ services:
       # harness overlay whose gateway dials another names it.
       AOS_UI_MCP_APP_STABLE_ORIGINS: *stable-origins
       AOS_UI_TOOLS_MCP_URL: ${AOS_UI_TOOLS_MCP_URL:-http://127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}/mcp}
+      # The artifact view reads its file through this server, which reads it
+      # from the lane's gateway at the address the page hands the view: only
+      # an address on one of the origins people open AOS UI at, as the web
+      # server reads them. A lane's loopback origin is this container's own
+      # loopback, so the server reaches the lane through Caddy's site for it,
+      # under the lane's own Host.
+      AOS_UI_PUBLIC_ORIGIN: *public-origins
+      AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: ${AOS_UI_TOOLS_MCP_LANE_UPSTREAMS:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000}=http://caddy:18080,http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}=http://caddy:18080}
     ports:
       - 127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}:4110
     healthcheck:

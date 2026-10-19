@@ -2,8 +2,9 @@
 # has no `guest` block. It mounts the Caddyfile alone, its operator and MCP App
 # sandbox sites without the overlay's guest site, so the guest lane serves
 # nothing instead of a guest page whose /api/v1 answers 502, turns off the web
-# server's guest listener, and defaults the origins back to the operator's
-# loopback ones, as compose.yaml does.
+# server's guest listener, and defaults the origins, the web server's and the
+# tools MCP server's, back to the operator's loopback ones, as compose.yaml
+# does.
 # deploy/compose.host.yaml, added after this file, sets its own default, which
 # lists the guest port too; set AOS_UI_PUBLIC_ORIGIN to list the operator's
 # alone there.
@@ -12,8 +13,13 @@ services:
     environment:
       # Empty is unset: Compose cannot remove a key an overlay set.
       AOS_UI_GUEST_WEB_PORT: ""
-      AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
+      AOS_UI_PUBLIC_ORIGIN: &public-origins ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
     expose: !reset []
+
+  tools-mcp:
+    environment:
+      AOS_UI_PUBLIC_ORIGIN: *public-origins
+      AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: ${AOS_UI_TOOLS_MCP_LANE_UPSTREAMS:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000}=http://caddy:18080,http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}=http://caddy:18080}
 
   caddy:
     configs: !override
