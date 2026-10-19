@@ -139,7 +139,9 @@ overlay, which opens the guest lane, lists both lanes' loopback origins:
 Without a harness overlay, or with
 [`deploy/compose.operator-only.yaml`](#run-without-the-guest-lane),
 `AOS_UI_PUBLIC_ORIGIN` defaults to the operator lane's two loopback origins
-alone.
+alone, except under host networking, where the operator-only overlay still
+leaves the guest port listed; see
+[Run without the guest lane](#run-without-the-guest-lane).
 
 ### Choosing a sandbox address
 

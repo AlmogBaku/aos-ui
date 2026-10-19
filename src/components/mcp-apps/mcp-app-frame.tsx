@@ -207,13 +207,13 @@ export default function McpAppFrame({
   // Views show only on a page AOS UI is opened at, one the sandbox page's
   // policy names among those that may frame it.
   const pageOrigin = window.location.origin
-  const atLaneOrigin = showsViewsAt(origins, pageOrigin)
+  const atPublicOrigin = showsViewsAt(origins, pageOrigin)
   // The view's own stable origin when its domain names one, else the shared
   // sandbox, by the rule the server serves that page's policy by.
   const policyOrigins = useMemo(
     () =>
-      atLaneOrigin ? sandboxPolicyOrigins(origins, view.domain) : undefined,
-    [atLaneOrigin, origins, view.domain]
+      atPublicOrigin ? sandboxPolicyOrigins(origins, view.domain) : undefined,
+    [atPublicOrigin, origins, view.domain]
   )
   // A renewal changes only the passes, which the address leaves out, so the
   // view keeps running.
@@ -613,7 +613,9 @@ export default function McpAppFrame({
     return (
       <AppUnavailable
         detail={
-          atLaneOrigin ? undefined : labels.mcpApp.notAtPublicOrigin(pageOrigin)
+          atPublicOrigin
+            ? undefined
+            : labels.mcpApp.notAtPublicOrigin(pageOrigin)
         }
       />
     )
