@@ -35,17 +35,29 @@ function sandboxedPage() {
   return { page, posted }
 }
 
-/** The stand-ins as the view starts them, from `saved`, capped at `limit`. */
-function standIns(saved = {}, limit = 1024): StandInOptions {
-  return { linkType: AGENT_LINK, storageType: AGENT_STORAGE, saved, limit }
+/** The longest JSON a kept `localStorage` holds here. */
+const LIMIT = 64
+
+/**
+ * The stand-ins as the view starts them: where it `persists` the file's
+ * storage, from `saved`, capped at `LIMIT`.
+ */
+function standIns(persists: boolean, saved = {}): StandInOptions {
+  return {
+    linkType: AGENT_LINK,
+    storageType: AGENT_STORAGE,
+    persists,
+    saved,
+    limit: LIMIT,
+  }
 }
 
 describe("installStandIns", () => {
-  it("stores and reads values in memory where the browser's storage throws", () => {
-    const { page } = sandboxedPage()
+  it("stores and reads values in memory where the browser's storage throws, without a cap, sending the view nothing", () => {
+    const { page, posted } = sandboxedPage()
     expect(() => page.localStorage).toThrow("sandboxed")
 
-    installStandIns(page, standIns())
+    installStandIns(page, standIns(false))
     const { localStorage, sessionStorage } = page
     localStorage.setItem("ticks", "[1,3]")
     localStorage.setItem("theme", "dark")
@@ -61,11 +73,14 @@ describe("installStandIns", () => {
     localStorage.clear()
     expect(localStorage).toHaveLength(0)
     expect(sessionStorage.getItem("step")).toBe("2")
+    localStorage.setItem("notes", "x".repeat(LIMIT))
+    expect(localStorage.getItem("notes")).toHaveLength(LIMIT)
+    expect(posted).toEqual([])
   })
 
   it("starts localStorage from the file's saved values and sends the view all of them after each change, and sessionStorage nothing", () => {
     const { page, posted } = sandboxedPage()
-    installStandIns(page, standIns({ ticks: "[1]" }))
+    installStandIns(page, standIns(true, { ticks: "[1]" }))
 
     expect(page.localStorage.getItem("ticks")).toBe("[1]")
     page.localStorage.setItem("theme", "dark")
@@ -79,9 +94,9 @@ describe("installStandIns", () => {
 
   it("refuses a write past the file's share as a full storage does, keeping what it held", () => {
     const { page, posted } = sandboxedPage()
-    installStandIns(page, standIns({ ticks: "[1]" }, 32))
+    installStandIns(page, standIns(true, { ticks: "[1]" }))
 
-    expect(() => page.localStorage.setItem("notes", "x".repeat(32))).toThrow(
+    expect(() => page.localStorage.setItem("notes", "x".repeat(LIMIT))).toThrow(
       expect.objectContaining({ name: "QuotaExceededError" })
     )
     expect(page.localStorage.getItem("notes")).toBeNull()
@@ -91,7 +106,7 @@ describe("installStandIns", () => {
 
   it("sends window.open's https address to the view and opens nothing itself", () => {
     const { page, posted } = sandboxedPage()
-    installStandIns(page, standIns())
+    installStandIns(page, standIns(false))
 
     expect(page.open("https://example.invalid/report")).toBeNull()
     page.open("http://example.invalid/report")

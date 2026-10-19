@@ -24,11 +24,11 @@ const CDNS = AGENT_HTML_DOMAINS.join(" ")
  * the view's own policy, which only narrows this one.
  *
  * In addition to this CSP, `installStandIns` is injected before the page's
- * own scripts and gives it `localStorage` and `sessionStorage` of its own.
- * Its `localStorage` starts from what the view saved for the file and posts
- * an `aos/storage` message after each change, which the view saves for the
- * file only on its stable origin (`agentStorage`); `sessionStorage` lives in
- * memory for the life of the preview. `https:` link clicks and `window.open`
+ * own scripts and gives it in-memory `localStorage` and `sessionStorage` for
+ * the life of the preview. Where the view keeps the file's storage, on its
+ * stable origin (`agentStorage`), `localStorage` instead starts from what the
+ * view saved for the file and posts an `aos/storage` message after each
+ * change, which the view saves. `https:` link clicks and `window.open`
  * calls post an `aos/openLink` message to the view (via `parent.postMessage`);
  * the view calls `ui/open-link` to open the URL in the workspace.
  */
@@ -92,26 +92,28 @@ export type AgentWindow = Pick<
 export type StandInOptions = {
   linkType: string
   storageType: string
-  /** The file's saved values, which its `localStorage` starts with. */
+  /** Whether the view keeps the file's `localStorage`, from `saved` on. */
+  persists: boolean
+  /** The file's saved values, which a kept `localStorage` starts with. */
   saved: SavedItems
-  /** The longest JSON its `localStorage` values may take. */
+  /** The longest JSON a kept `localStorage`'s values may take. */
   limit: number
 }
 
 /**
- * Stands in for what the file's opaque origin takes from it. Its
- * `localStorage` starts from `saved` and, after each change, sends the view
- * every value it holds as a `storageType` message; a change that would take
- * their JSON past `limit` throws as a full storage does and changes nothing.
- * Its `sessionStorage` lives in memory for the life of the preview. A click
- * on an https link the page left to the browser, and `window.open` with an
- * https address, go up to the view as a `linkType` message; any other address
- * stays the page's own. The file's frame runs it from its source, so it
- * reaches nothing outside itself.
+ * Stands in for what the file's opaque origin takes from it. Web storage
+ * lives in memory for the life of the preview. Where the view `persists` the
+ * file's `localStorage`, it starts from `saved` instead and, after each
+ * change, sends the view every value it holds as a `storageType` message; a
+ * change that would take their JSON past `limit` throws as a full storage
+ * does and changes nothing. A click on an https link the page left to the
+ * browser, and `window.open` with an https address, go up to the view as a
+ * `linkType` message; any other address stays the page's own. The file's
+ * frame runs it from its source, so it reaches nothing outside itself.
  */
 export function installStandIns(
   page: AgentWindow,
-  { linkType, storageType, saved, limit }: StandInOptions
+  { linkType, storageType, persists, saved, limit }: StandInOptions
 ) {
   // As the standard does, it keeps every key and value as a string. `keep`
   // sees each change before it takes effect, and refuses it by throwing.
@@ -147,9 +149,12 @@ export function installStandIns(
       )
     page.parent.postMessage({ type: storageType, items }, "*")
   }
+  const inMemory = () => memory([], () => undefined)
   Object.defineProperties(page, {
-    localStorage: { value: memory(Object.entries(saved), send) },
-    sessionStorage: { value: memory([], () => undefined) },
+    localStorage: {
+      value: persists ? memory(Object.entries(saved), send) : inMemory(),
+    },
+    sessionStorage: { value: inMemory() },
   })
   const relay = (address: unknown) => {
     let url: URL
@@ -175,14 +180,16 @@ export function installStandIns(
 }
 
 /**
- * The stand-ins as the file's frame runs them, on its own window, from the
- * file's `saved` values, with `<` escaped so that no value closes the script.
+ * The stand-ins as the file's frame runs them, on its own window, from what
+ * `storage` holds for the file, if the view keeps it, with `<` escaped so that
+ * no value closes the script.
  */
-function standInsScript(saved: SavedItems) {
+function standInsScript(storage: AgentStorage | undefined) {
   const options: StandInOptions = {
     linkType: AGENT_LINK,
     storageType: AGENT_STORAGE,
-    saved,
+    persists: storage !== undefined,
+    saved: storage?.load() ?? {},
     limit: AGENT_STORAGE_LIMIT,
   }
   return `(${installStandIns.toString()})(window, ${JSON.stringify(options).replaceAll("<", "\\u003c")})`
@@ -296,15 +303,15 @@ function expectedHost() {
 /**
  * The file's HTML with the policy as the first child of its head, so it
  * governs every script the file holds, and the zoom script and the stand-ins,
- * holding the file's `saved` values, after it, so they run before the file's
- * own.
+ * holding what `storage` saved for the file, after it, so they run before the
+ * file's own.
  */
-function withPolicy(html: string, saved: SavedItems) {
+function withPolicy(html: string, storage: AgentStorage | undefined) {
   const document = new DOMParser().parseFromString(html, "text/html")
   const meta = document.createElement("meta")
   meta.httpEquiv = "Content-Security-Policy"
   meta.content = AGENT_HTML_CSP
-  const scripts = [ZOOM_SCRIPT, standInsScript(saved)].map((source) => {
+  const scripts = [ZOOM_SCRIPT, standInsScript(storage)].map((source) => {
     const script = document.createElement("script")
     script.textContent = source
     return script
@@ -329,10 +336,7 @@ function AgentFrame({
   storage: AgentStorage | undefined
   title: string
 }) {
-  const html = useMemo(
-    () => withPolicy(text, storage?.load() ?? {}),
-    [text, storage]
-  )
+  const html = useMemo(() => withPolicy(text, storage), [text, storage])
   return (
     // Scripts without the same origin: the file runs in an opaque origin of
     // its own, so it reaches neither this view nor the page.
