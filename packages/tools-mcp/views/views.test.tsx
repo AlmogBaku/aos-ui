@@ -88,8 +88,8 @@ type FileReads = (uri: string) => Promise<ReadResourceResult>
  */
 function fakeApp(readFile: FileReads = async () => ({ contents: [] })) {
   return {
-    readServerResource: vi.fn(
-      async ({ uri }: { uri: string }): Promise<ReadResourceResult> =>
+    readServerResource: vi.fn<ViewApp["readServerResource"]>(
+      async ({ uri }): Promise<ReadResourceResult> =>
         uri.startsWith(GRAMMAR_RESOURCE_URI)
           ? grammar(
               uri,
@@ -860,6 +860,27 @@ describe("artifact view", () => {
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }))
     expect(await screen.findByText("Quarterly notes")).toBeVisible()
     expect(fileReads(view.app)).toEqual([first, second, third])
+  })
+
+  it("cancels its read once it no longer waits for it, as when it unmounts", async () => {
+    const view = props(notes, "en", () => new Promise(() => undefined))
+    const { unmount } = render(
+      <ArtifactView
+        {...view}
+        context={{
+          ...files("https://aos.test/files/notes.txt?pass=one"),
+          ...PIP,
+        }}
+      />
+    )
+    await act(() => Promise.resolve())
+    const [[, options]] = view.app.readServerResource.mock.calls as [
+      Parameters<ViewApp["readServerResource"]>,
+    ]
+    expect(options?.signal?.aborted).toBe(false)
+
+    unmount()
+    expect(options?.signal?.aborted).toBe(true)
   })
 
   it("re-reads the file once the page reports a new revision of it, and not when only its address renews", async () => {

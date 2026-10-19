@@ -223,7 +223,9 @@ export function startView<T>(
   )
   const reportSize = sizeReporter(app)
   const viewApp: ViewApp = {
-    readServerResource: rateLimited((params) => app.readServerResource(params)),
+    readServerResource: rateLimited((params, options) =>
+      app.readServerResource(params, options)
+    ),
     downloadFile: (params) => app.downloadFile(params),
     openLink: (params) => app.openLink(params),
     requestDisplayMode: (params) => app.requestDisplayMode(params),

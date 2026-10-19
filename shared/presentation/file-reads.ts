@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 /**
  * How the artifact view's file is read at its address, outside the view's
  * sandbox: the view asks its page for the address with `resources/read`, the
@@ -21,7 +23,20 @@ export const FILE_READ_LIMIT = 64 * 1024 * 1024
  * The gateway names its own refusals the same way, adding `unavailable` when
  * it cannot forward the read at all.
  */
-export type FileReadReason = "denied" | "tooLarge" | "unreachable"
+export type FileReadReason = Exclude<FileReadRefusal, "unavailable">
+
+/**
+ * Every reason a read of a file address may name by the time it reaches the
+ * browser: the `aos-ui` server's (`FileReadReason`), and the gateway's
+ * `unavailable` for a read it cannot forward.
+ */
+export const FileReadRefusalSchema = z.enum([
+  "denied",
+  "tooLarge",
+  "unreachable",
+  "unavailable",
+])
+export type FileReadRefusal = z.infer<typeof FileReadRefusalSchema>
 
 /** Why an address that answered `status`, other than a 2xx, was not read. */
 export function refusalReason(status: number): FileReadReason {

@@ -24,4 +24,14 @@ describe("rateLimited", () => {
     expect(started).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
     await expect(answers).resolves.toEqual([0, 10, 20, 30, 40, 50, 60, 70, 80])
   })
+
+  it("passes every argument on, such as a read's options", async () => {
+    const send = rateLimited(async (uri: string, options?: { tag: string }) =>
+      [uri, options?.tag].join(" ")
+    )
+
+    await expect(send("ui://a", { tag: "signal" })).resolves.toBe(
+      "ui://a signal"
+    )
+  })
 })

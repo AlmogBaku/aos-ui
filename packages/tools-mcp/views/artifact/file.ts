@@ -1,4 +1,9 @@
-import { FILE_READ_LIMIT } from "../../../../shared/presentation/file-reads"
+import { z } from "zod"
+
+import {
+  FILE_READ_LIMIT,
+  FileReadRefusalSchema,
+} from "../../../../shared/presentation/file-reads"
 import { syntaxLanguageFromFilename } from "../../../../shared/syntax-language"
 import type { ViewApp } from "../view"
 import { codeLanguage } from "./code"
@@ -178,8 +183,10 @@ function preview(kind: FileKind, type: string, blob: string): FilePreview {
   return { kind, text, ...textFormat(type) }
 }
 
-/** The reasons a read names that the view says apart; any other is none. */
-const REASONS = new Set(["unreachable", "denied", "tooLarge"])
+/** A read's JSON-RPC error that names why it failed. */
+const RefusedReadSchema = z.object({
+  data: z.object({ reason: FileReadRefusalSchema }),
+})
 
 /**
  * Why a read failed, by the `data.reason` its JSON-RPC error carries; a read
@@ -187,11 +194,7 @@ const REASONS = new Set(["unreachable", "denied", "tooLarge"])
  * one the page cannot make here.
  */
 function failure(error: unknown) {
-  const reason = (error as { data?: { reason?: unknown } } | undefined)?.data
-    ?.reason
-  return typeof reason === "string" && REASONS.has(reason)
-    ? (reason as "unreachable" | "denied" | "tooLarge")
-    : "unavailable"
+  return RefusedReadSchema.safeParse(error).data?.data.reason ?? "unavailable"
 }
 
 const NO_PREVIEW: FileState = { status: "ready", preview: { kind: "none" } }
@@ -202,18 +205,19 @@ const NO_PREVIEW: FileState = { status: "ready", preview: { kind: "none" } }
  * kind's limit. The first type that is known decides how it shows: the one the
  * Agent declared, then the file name's, then the one it was read as; a vague
  * declared text type yields to the file name's. A file known to have no
- * preview is not read at all.
+ * preview is not read at all, and `signal` cancels the read.
  */
 export async function loadFile(
   read: ViewApp["readServerResource"],
   address: string,
   file: { filename: string; mimeType?: string | undefined },
-  limits: PreviewLimits
+  limits: PreviewLimits,
+  signal: AbortSignal
 ): Promise<FileState> {
   const known = knownType(file)
   if (known !== undefined && kindOf(known) === undefined) return NO_PREVIEW
   try {
-    const [content] = (await read({ uri: address })).contents
+    const [content] = (await read({ uri: address }, { signal })).contents
     if (!content || !("blob" in content)) return { status: "unavailable" }
     const type = known ?? mediaType(content.mimeType)
     const kind = kindOf(type)

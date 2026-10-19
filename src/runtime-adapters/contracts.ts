@@ -12,6 +12,7 @@ import type {
   SessionPlatform,
 } from "@harness-gw/sdk/protocol"
 import type { PushSubscriptionManager } from "@/lib/notifications/push-subscription"
+import type { FileReadRefusal } from "@shared/presentation/file-reads"
 export type { RuntimeMode } from "@shared/runtime-modes"
 
 export type AgentStatus =
@@ -318,13 +319,12 @@ export class McpAppFilesRefusedError extends Error {
 }
 
 /**
- * A view's resource read failed for a reason the runtime names, such as the
- * `denied` or `tooLarge` of a file address, which the host hands the view as
- * the read's JSON-RPC `data.reason`; every other read failure remains an
- * ordinary Error.
+ * A view's read of a file address failed for a reason the runtime names,
+ * which the host hands the view as the read's JSON-RPC `data.reason`; every
+ * other read failure remains an ordinary Error.
  */
 export class McpAppResourceReadError extends Error {
-  constructor(readonly reason: string) {
+  constructor(readonly reason: FileReadRefusal) {
     super(`The resource could not be read: ${reason}`)
     this.name = "McpAppResourceReadError"
   }

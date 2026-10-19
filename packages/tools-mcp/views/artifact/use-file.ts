@@ -45,15 +45,18 @@ export function useFile(
 
   useEffect(() => {
     if (!request) return
-    let current = true
-    void loadFile(read, request.address, { filename, mimeType }, limits).then(
-      (next) => {
-        if (current) setOutcome({ request, state: next })
-      }
-    )
-    return () => {
-      current = false
-    }
+    // A read the view no longer waits for, as once it unmounts, is cancelled.
+    const controller = new AbortController()
+    void loadFile(
+      read,
+      request.address,
+      { filename, mimeType },
+      limits,
+      controller.signal
+    ).then((next) => {
+      if (!controller.signal.aborted) setOutcome({ request, state: next })
+    })
+    return () => controller.abort()
   }, [read, request, filename, mimeType, limits])
 
   return {
