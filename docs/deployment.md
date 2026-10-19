@@ -247,8 +247,10 @@ cookies.
 
 With a public guest lane, the stable host addresses must be publicly reachable
 too, for the same reason the sandbox address must: guests' browsers load them
-directly. Route them through the same public path as the sandbox address, sent
-to the sandbox site.
+directly, at the sandbox site. Behind Cloudflare's tunnel on its free plan, the
+sandbox name can use the tunnel but the stable hosts cannot: they need a direct
+inbound route to a server holding their certificate (see below), unless you buy
+Cloudflare's Advanced Certificate Manager.
 
 **DNS and certificate.** Every `<32hexkey>.mcp-apps.example.com` host needs DNS
 and a TLS certificate. A wildcard DNS record (`*` CNAME or A) covers all keys;
@@ -305,8 +307,8 @@ proxy must serve the sandbox name alongside the lanes' names.
 With [stable origins](#stable-origins-optional) below the sandbox's own name, a
 certificate must cover both `mcp-apps.example.com` and
 `*.mcp-apps.example.com`, because a wildcard does not cover its own apex.
-Whatever terminates TLS issues it, for example Caddy with an ACME DNS
-challenge, which is free. Behind Cloudflare's proxy or tunnel, Cloudflare's
+Whatever terminates TLS issues it, for example an external Caddy with an ACME
+DNS challenge, which is free. Behind Cloudflare's proxy or tunnel, Cloudflare's
 free edge certificate covers `mcp-apps.example.com` but not
 `*.mcp-apps.example.com`, so the stable hosts need DNS-only records pointing at
 a server that terminates TLS with its own certificate, or Cloudflare's paid
@@ -756,8 +758,10 @@ All published ports bind to `127.0.0.1` by default, and the `tools-mcp` port
 never binds anywhere else. `AOS_UI_WEB_PUBLISHED_PORT` (default `3000`) and
 `AOS_UI_GUEST_PUBLISHED_PORT` (default `3001`) set the host-side published
 ports for the operator and guest lanes, and `AOS_UI_SANDBOX_PUBLISHED_PORT`
-(default `3002`) the sandbox site's, which shares the operator lane's
-`AOS_UI_BIND_ADDRESS`. Set `AOS_UI_BIND_ADDRESS` or
+(default `3002`) the sandbox site's, which binds `AOS_UI_SANDBOX_BIND_ADDRESS`
+of its own, so a public sandbox never widens the operator lane. Widen
+`AOS_UI_SANDBOX_BIND_ADDRESS` only to make the sandbox public, and never add
+the sandbox to the gateway's origins. Set `AOS_UI_BIND_ADDRESS` or
 `AOS_UI_GUEST_BIND_ADDRESS` only when another host must connect, set the
 matching `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`, and configure the
 corresponding exact browser origin in the gateway. A wider bind requires TLS in

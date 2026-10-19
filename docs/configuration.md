@@ -127,6 +127,7 @@ published on `127.0.0.1`, whatever the operator bind address.
 | ------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------- |
 | `AOS_UI_BIND_ADDRESS`           | `127.0.0.1`                           | Host bind address for the operator lane and the sandbox site.                           |
 | `AOS_UI_WEB_PUBLISHED_PORT`     | `3000`                                | Host port for the operator lane (Caddy `:18080`).                                       |
+| `AOS_UI_SANDBOX_BIND_ADDRESS`   | `127.0.0.1`                           | Host bind address for the MCP App sandbox site, apart from both lanes'.                 |
 | `AOS_UI_SANDBOX_PUBLISHED_PORT` | `3002`                                | Host port for the MCP App sandbox site (Caddy `:18082`), which belongs to neither lane. |
 | `AOS_UI_GUEST_BIND_ADDRESS`     | `127.0.0.1`                           | Host bind address for the guest lane.                                                   |
 | `AOS_UI_GUEST_PUBLISHED_PORT`   | `3001`                                | Host port for the guest lane (Caddy `:18081`), added by a harness overlay.              |

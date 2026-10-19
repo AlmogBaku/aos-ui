@@ -100,8 +100,8 @@ remains loopback-only regardless. The public reverse proxy points only at the
 guest lane, published with `AOS_UI_GUEST_BIND_ADDRESS` and
 `AOS_UI_GUEST_PUBLISHED_PORT` (or Caddy's `127.0.0.1:18081` under
 `deploy/compose.host.yaml`), and, for the MCP App sandbox address and any
-stable hosts, at the sandbox site, published on `AOS_UI_SANDBOX_PUBLISHED_PORT`
-(or Caddy's `127.0.0.1:18082`); it never points at the operator lane, a
+stable hosts, at the sandbox site, published with `AOS_UI_SANDBOX_BIND_ADDRESS`
+and `AOS_UI_SANDBOX_PUBLISHED_PORT` (or Caddy's `127.0.0.1:18082`); it never points at the operator lane, a
 gateway or web server listener directly, or the native runtime port.
 
 ## Reverse proxy and optional Cloudflare Tunnel

@@ -117,12 +117,12 @@ setting it, confirm:
    sandbox site.
 2. **A TLS certificate** covers both `mcp-apps.example.com` and
    `*.mcp-apps.example.com`, because a wildcard does not cover its own apex.
-   Whatever terminates TLS issues it, for example Caddy with an ACME DNS
-   challenge, which is free. Behind Cloudflare's proxy or tunnel, Cloudflare's
-   free edge certificate covers `mcp-apps.example.com` but not
-   `*.mcp-apps.example.com`, so the stable hosts need DNS-only records pointing
-   at a server that terminates TLS with its own certificate, or Cloudflare's
-   paid Advanced Certificate Manager.
+   Whatever terminates TLS issues it, for example an external Caddy with an
+   ACME DNS challenge, which is free. Behind Cloudflare's proxy or tunnel,
+   Cloudflare's free edge certificate covers `mcp-apps.example.com` but not
+   `*.mcp-apps.example.com`, so the stable hosts need DNS-only records
+   pointing at a server that terminates TLS with its own certificate, or
+   Cloudflare's paid Advanced Certificate Manager.
 3. **The domain sits outside every lane, and the sandbox at it or outside
    it.** The web server refuses `AOS_UI_MCP_APP_STABLE_ORIGINS` when any lane's
    host is at or below the wildcard's domain, or the sandbox's host is below

@@ -289,6 +289,19 @@ describe("container orchestration", () => {
     }
   )
 
+  it("binds the sandbox site to its own address, never the operator lane's", () => {
+    const sandboxPort = (environment: Record<string, string>) =>
+      composeConfig(["compose.yaml"], {
+        AOS_UI_BIND_ADDRESS: "0.0.0.0",
+        ...environment,
+      }).services.caddy!.ports?.find(({ target }) => target === 18082)
+
+    expect(sandboxPort({})).toEqual(loopbackPort("3002", 18082))
+    expect(sandboxPort({ AOS_UI_SANDBOX_BIND_ADDRESS: "192.0.2.10" })).toEqual(
+      expect.objectContaining({ host_ip: "192.0.2.10", target: 18082 })
+    )
+  })
+
   it("keeps the tools MCP server on loopback whatever the bind address", () => {
     const toolsMcp = composeConfig(["compose.yaml"], {
       AOS_UI_BIND_ADDRESS: "0.0.0.0",
