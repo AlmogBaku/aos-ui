@@ -180,7 +180,13 @@ in each Hermes profile's `mcp_servers` and confirm it with
 `hermes -p PROFILE mcp test aos-ui`; a running `hermes serve` picks it up
 without a restart. The gateway reads the chart, map, and stats views from that
 URL too, but a gateway container does not share the host's loopback: its
-config sets `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp`. Install the `aos-invite-link` and `aos-agent-creator` skills
+config sets `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp`.
+For file reads, the `tools-mcp` service fetches from the gateway's file route
+server to server; Compose passes `AOS_UI_PUBLIC_ORIGIN` and
+`AOS_UI_TOOLS_MCP_LANE_UPSTREAMS` to it so it knows which origins to accept
+and how to reach Caddy from inside the container. Under host networking these
+settings are inherited from the same `.env` as the web server, and the lane
+upstreams are left empty. Install the `aos-invite-link` and `aos-agent-creator` skills
 by copying them into the profile's `skills/` directory or listing the checkout's
 `shared/` directory under `skills.external_dirs`, then restart `hermes serve`.
 Register the server with OpenClaw disabled and let the gateway enable it per

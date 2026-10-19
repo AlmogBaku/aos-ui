@@ -145,20 +145,25 @@ see [Deployment](deployment.md).
 ## Tools MCP server {#tools-mcp-server}
 
 The stateless `tools-mcp` service serves `render_chart`, `render_map`,
-`render_stats`, and `present_artifact`. These two settings control its stable
-origins behavior:
+`render_stats`, and `present_artifact`. For file reads, the artifact view calls
+`readServerResource` with the address from its host context; the server fetches
+the file from the gateway's file route, server to server. These settings govern
+that behavior and the server's stable-origins declaration:
 
-| Variable                        | Default                                                                                             | Use                                                                                                                                                                                                                                      |
-| ------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AOS_UI_MCP_APP_STABLE_ORIGINS` | unset                                                                                               | The same wildcard the web server reads. When set, the tools server declares a stable domain for the artifact view.                                                                                                                        |
-| `AOS_UI_TOOLS_MCP_URL`          | `http://tools-mcp:4110/mcp` (Hermes and OpenCode overlays); `http://127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}/mcp` (the base and OpenClaw setups); `http://127.0.0.1:4110/mcp` (host networking) | The URL the gateway dials this server at. It must match the URL the gateway uses exactly — including the `mcpApps.fallback` override if one is set — so the key computed here matches the key the gateway checks. Defaults follow each Compose shape; set it explicitly when the gateway configuration dials another URL. |
+| Variable                              | Default                                                                                             | Use                                                                                                                                                                                                                                      |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AOS_UI_PUBLIC_ORIGIN`                | (set by each Compose shape)                                                                         | Every origin the browser opens AOS UI at. The server accepts file-address reads only for addresses whose origin is in this list. Compose sets it on the `tools-mcp` service alongside the web server; set it explicitly when running outside Compose. |
+| `AOS_UI_TOOLS_MCP_LANE_UPSTREAMS`     | (set by each bridged Compose shape; empty under host networking)                                    | How the server reaches each lane when the lane's own origin is not directly reachable, such as from inside a container. Format: `<lane origin>=<base URL>`, comma-separated, e.g. `http://localhost:3000=http://caddy:18080`. Bridged Compose sets operator and guest entries mapping loopback origins to the internal Caddy addresses; host networking leaves this empty because the server can reach loopback directly. |
+| `AOS_UI_MCP_APP_STABLE_ORIGINS`       | unset                                                                                               | The same wildcard the web server reads. When set, the tools server declares a stable domain for the artifact view.                                                                                                                        |
+| `AOS_UI_TOOLS_MCP_URL`                | `http://tools-mcp:4110/mcp` (Hermes and OpenCode overlays); `http://127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}/mcp` (the base and OpenClaw setups); `http://127.0.0.1:4110/mcp` (host networking) | The URL the gateway dials this server at. It must match the URL the gateway uses exactly — including the `mcpApps.fallback` override if one is set — so the key computed here matches the key the gateway checks. Defaults follow each Compose shape; set it explicitly when the gateway configuration dials another URL. |
 
-With either `AOS_UI_MCP_APP_STABLE_ORIGINS` or `AOS_UI_TOOLS_MCP_URL` unset,
-the artifact view declares no stable domain and the server logs why on stderr.
-Under `--stdio` the server also declares none, because no gateway dials a URL
-for it. A malformed value for either setting stops the server, but only when
-both are set and it is not under `--stdio`; otherwise it declares none and says
-why on stderr.
+With `AOS_UI_PUBLIC_ORIGIN` unset, the server refuses all file reads and logs
+the reason on startup. With either `AOS_UI_MCP_APP_STABLE_ORIGINS` or
+`AOS_UI_TOOLS_MCP_URL` unset, the artifact view declares no stable domain and
+the server logs why on stderr. Under `--stdio` the server also declares none,
+because no gateway dials a URL for it. A malformed value for either setting
+stops the server, but only when both are set and it is not under `--stdio`;
+otherwise it declares none and says why on stderr.
 
 The other three views (`render_chart`, `render_map`, `render_stats`) declare no
 stable domain regardless of these settings.

@@ -217,9 +217,12 @@ the guest lane. An external TLS reverse proxy is optional.
   its component; search for both English and Hebrew variants before editing.
 - `packages/tools-mcp` is the stateless `aos-ui` MCP server every harness
   registers for `render_chart`, `render_map`, `render_stats`, and
-  `present_artifact`; it never reads files. All four are MCP Apps whose
-  single-file views live in `packages/tools-mcp/views`;
-  `present_artifact`'s view shows the file the gateway serves for that call.
+  `present_artifact`; it never reads the filesystem. For file reads it
+  fetches from the gateway's file route server to server and returns the
+  bytes as a base64 blob. All four are MCP Apps whose single-file views
+  live in `packages/tools-mcp/views`; `present_artifact`'s view reads the
+  file by calling `readServerResource` with the address the gateway grants
+  it.
   `shared/presentation` defines the tool schemas and view resources it
   serves. `shared/invite-link` and `shared/agent-creator` are
   plain skills operators install into a harness. The gateway names the four

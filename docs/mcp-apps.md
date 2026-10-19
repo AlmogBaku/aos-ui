@@ -47,9 +47,9 @@ a Content Security Policy built for the particular view the query names:
   people open AOS UI at, operator and guest alike, so only the lanes' own
   pages may frame the sandbox page. Any other page that tries to embed it is
   refused by the browser.
-- The view's declared domains (`_meta.ui.csp`) and file addresses travel in the
-  sandbox page's query; the server rebuilds the policy from them and sends it
-  with `no-store`. Every value is validated before it is written.
+- The view's declared domains (`_meta.ui.csp`) travel in the sandbox page's
+  query; the server rebuilds the policy from them and sends it with `no-store`.
+  Every value is validated before it is written.
 
 Caddy, and any reverse proxy in front of it, must pass the page's headers
 through unchanged and must not add a CSP or `X-Frame-Options` of its own.
@@ -163,8 +163,7 @@ from the built policy (a wildcard that covers them is kept). Inline scripts and
 styles are allowed, and scripts may compile WebAssembly (`'wasm-unsafe-eval'`),
 as a document renderer's decoders do; `object-src` and `form-action` are
 `'none'`. Web workers may start from the view's own `blob:` URLs, as a WebGL
-map library's do. A view given [files](#files) may also connect to each file's
-address, by its exact path and whatever pass it carries. Any
+map library's do. Any
 origin may carry a port; loopback means `127.0.0.1`, `localhost`, or `*.localhost` on the
 viewer's own machine. CSP cannot name an IPv6 literal, so `[::1]` is refused. Declared `_meta.ui.permissions`
 (camera, microphone, geolocation, clipboard write) become the frame's `allow`
@@ -207,7 +206,7 @@ Even though the Agent HTML frame is opaque, it has two capabilities:
 | Request                   | Behavior                                                                                          |
 | ------------------------- | ------------------------------------------------------------------------------------------------- |
 | `tools/call`              | Calls an app-visible tool on the view's own server; a tool with no `visibility` is visible        |
-| `resources/read`          | Reads a `ui://` resource on the view's own server                                                 |
+| `resources/read`          | Reads a `ui://` resource on the view's own server, or reads one of the view's own file addresses through that server |
 | `ui/open-link`            | Opens an `https` URL, or one of the view's own files, in a new tab                                |
 | `ui/download-file`        | Saves one of the view's own files; offered only to a view given files                             |
 | `ui/message`              | Sends a user text message into the same conversation; other content is refused                    |
@@ -234,7 +233,7 @@ The host renews the passes while the view is mounted: at half their life,
 when the page wakes or comes back online past that point, and when the
 workspace's connection recovers. A failed renewal retries with backoff until
 the gateway refuses it. The fresh addresses arrive as a host-context change, so
-a view fetches a file by the address it received last.
+a view reads a file with `readServerResource` on the address it received last.
 
 A result that carries a `fileId` beside its `filename`, as `present_artifact`'s
 does with a digest of the file's path, identifies the file across calls. The
@@ -290,8 +289,8 @@ the gateway's [`mcpApps.files.servers`](configuration.md#mcp-app-files), the vie
   the listener's login, as a view's other requests do.
 - A call that names no file gets no `files`; one the listener may not read
   gets `files` with no addresses.
-- A view reads its files only from an https origin, or from 127.0.0.1 or
-  localhost.
+- The address's origin must be listed in `AOS_UI_PUBLIC_ORIGIN`; the
+  tools server checks this before reading.
 
 A file answer:
 
@@ -312,9 +311,8 @@ A file answer:
   `Cache-Control: no-store`. Every answer but a PDF's also carries this
   policy, so no file runs as a page:
   `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox`.
-- A request with a pass gets `Access-Control-Allow-Origin: *` once the pass is
-  admitted, so the view can read the answer from its sandbox origin; no answer
-  allows credentials.
+- An admitted pass's answer carries `Access-Control-Allow-Origin: *`; no
+  answer allows credentials.
 - File reads and renewals have their own limit of about 50 requests per second
   per call, apart from the view's 10; excess requests answer 429.
 
@@ -333,8 +331,9 @@ routes sit beside a call's, under the same roots, at
   `structuredContent.value` is `{ "filename": string, "mimeType"?: string }`,
   and the text content ends with the same JSON after `Structured fallback:`
   for a view that reads text alone. No other field is promised.
-- `POST …/app/resources/read` reads a `ui://` resource of the viewer's server
-  only; any other URI answers 403. There is no `tools/call`; it answers 404.
+- `POST …/app/resources/read` reads a `ui://` resource of the viewer's server,
+  or one of the view's own file addresses through that server; any other URI
+  answers 403. There is no `tools/call`; it answers 404.
 - `POST …/app/files` renews the address, and `GET …/app/files/path` reads the
   bytes under a pass that names the attachment, so a call's pass never opens
   an attachment, nor the other way round. Reads follow the rules above, but

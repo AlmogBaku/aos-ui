@@ -395,8 +395,8 @@ offers Mute or Unmute notifications only where the runtime can store the mute.
 - **MCP Apps:** the one exception to "never run arbitrary HTML". A tool whose
   own MCP server declares a `ui://` view renders that server-authored HTML as
   an inline card in the message, inside a double iframe on the deployment's
-  one sandbox origin (each view's own CSP, built from its declared domains and
-  its call's file addresses); nothing else ever runs there, save the artifact
+  one sandbox origin (each view's own CSP, built from its declared domains);
+  nothing else ever runs there, save the artifact
   view's Agent HTML, which runs its inline scripts one frame deeper with an
   opaque origin of its own and no network, frame, or form directly — with
   in-memory storage for the preview and https links relayed through the

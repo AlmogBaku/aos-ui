@@ -147,7 +147,8 @@ bun run tools-mcp:serve -- --port 4111      # another port
 
 The Compose stack runs the same server as the `tools-mcp` service, published
 on `127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`. It serves `/mcp` (Streamable
-HTTP) and `/health`, has no authentication, and never reads files itself.
+HTTP) and `/health`, has no authentication, and never reads the filesystem.
+For file reads it fetches from the gateway's file route server to server.
 
 Register it in each profile that should use the tools. Hermes reads
 `mcp_servers` from the profile's own `config.yaml`

@@ -57,6 +57,28 @@ server under
 [`mcpApps.fallback.servers.NAME.url`](configuration.md#mcp-apps-fallback).
 Without Compose, run it with `bun run tools-mcp:serve`.
 
+For file reads, the artifact view calls `readServerResource` with the signed
+address, and the gateway relays that to the tools server, which reads the file
+from the gateway's file route server to server. Two settings control this
+path:
+
+- **`AOS_UI_PUBLIC_ORIGIN`** — the same list the web server reads. The tools
+  server accepts reads only for addresses whose origin is in this list. Every
+  Compose shape passes it to the `tools-mcp` service; set it explicitly when
+  running outside Compose.
+- **`AOS_UI_TOOLS_MCP_LANE_UPSTREAMS`** — how the server reaches each lane
+  when the lane's public origin is not directly reachable from inside the
+  container. Format: `<lane origin>=<base URL>`, comma-separated. Bridged
+  Compose shapes set operator and guest entries pointing to the internal Caddy
+  addresses (`http://caddy:18080`, `http://caddy:18081`). Under host
+  networking (`deploy/compose.host.yaml`) this is left empty, because the
+  server runs on the host network and can reach the loopback gateway directly.
+  Set it explicitly when running outside Compose in a network where the lane
+  origins are not directly reachable.
+
+With `AOS_UI_PUBLIC_ORIGIN` unset, the server refuses all file reads and logs
+the reason on startup.
+
 ```bash
 curl --fail --silent http://127.0.0.1:4110/health
 ```
