@@ -56,6 +56,7 @@ describe("Vite development server", () => {
   ] as const)(
     "lets %s reach the gateway only when it is a lane's own host",
     async (_label, host, bypass) => {
+      vi.stubEnv("AOS_UI_GATEWAY_TARGET", "http://127.0.0.1:4310")
       vi.stubEnv("AOS_UI_PUBLIC_ORIGIN", "http://localhost:3000")
       vi.stubEnv(
         "AOS_UI_MCP_APP_SANDBOX_ORIGIN",

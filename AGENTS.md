@@ -58,8 +58,9 @@ AOS_UI_GATEWAY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
 
-Vite forwards only `/api/v1` to the gateway and keeps the browser's `Origin`,
-so the gateway's `publicOrigin` (or `allowedOrigins`) must list the dev origin,
+Vite forwards only `/api/v1`, only to the gateway `AOS_UI_GATEWAY_TARGET`
+names (unset, it forwards nothing), and keeps the browser's `Origin`, so the
+gateway's `publicOrigin` (or `allowedOrigins`) must list the dev origin,
 such as `http://localhost:3000`. An SDK change is made and tested
 in harness-gw, then consumed here through the `@harness-gw/sdk` package
 (a local tarball until the first release); rerun `bun install` after
