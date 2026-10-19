@@ -28,11 +28,9 @@ The conversation reference is optional. Omit `ref` to generate a random
 URL-safe reference. The invited Session is created lazily on first Send.
 
 Require `AOS_GATEWAY_URL` to name the operator gateway URL reachable from
-the native runtime. It must name a host the gateway's listener allows, or
-exactly `localhost`, `127.0.0.1`, or `[::1]`; any other host gets 421 from the
-gateway. If it is missing, `curl` is unavailable, or the request fails, report
-setup-needed with that exact cause. Send one POST only; never retry an uncertain
-response.
+the native runtime. If it is missing, `curl` is unavailable, or the request
+fails, report setup-needed with that exact cause. Send one POST only; never
+retry an uncertain response.
 
 This is a plain HTTP call from the shell. It needs no browser, UI session, or
 cookie. Never mint an invitation through a browser tool.
