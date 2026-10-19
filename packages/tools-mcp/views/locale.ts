@@ -37,6 +37,7 @@ export type ViewLabels = {
     audio: string
     video: string
     playbackSpeed: string
+    play: (filename: string) => string
     view: (filename: string) => string
     loading: string
     unreachable: string
@@ -96,6 +97,7 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       audio: "Audio",
       video: "Video",
       playbackSpeed: "Playback speed",
+      play: (filename) => `Play ${filename}`,
       view: (filename) => `View ${filename}`,
       loading: "Loading file…",
       unreachable: "Can't reach this file.",
@@ -153,6 +155,7 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       audio: "שמע",
       video: "וידאו",
       playbackSpeed: "מהירות ניגון",
+      play: (filename) => `הפעלת ${filename}`,
       view: (filename) => `הצגת ${filename}`,
       loading: "הקובץ נטען…",
       unreachable: "לא ניתן לגשת לקובץ הזה.",

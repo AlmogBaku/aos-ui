@@ -9,6 +9,7 @@ import {
   FileVideoCamera,
   Maximize2,
   PictureInPicture2,
+  Play,
   RotateCw,
   type LucideIcon,
 } from "lucide-react"
@@ -465,11 +466,16 @@ export function ArtifactView({
   const expanded = pip || fullscreen
   const type = knownType(value)
   const kind = kindOf(type)
-  // In its message only an image or media is read, since only they show there.
   const media = kind === "audio" || kind === "video"
+  // Media is read only once asked to play, wherever it shows, and then starts
+  // at once; once it has played, a player shown afresh waits for its controls.
+  const [playback, setPlayback] = useState<"idle" | "asked" | "played">("idle")
+  // In its message only an image is read, since only it shows there whole.
   const file = useFile(
     app.readServerResource,
-    expanded || kind === "image" || media ? address : undefined,
+    (media ? playback !== "idle" : expanded || kind === "image")
+      ? address
+      : undefined,
     value.filename,
     value.mimeType,
     previewLimits,
@@ -562,8 +568,25 @@ export function ArtifactView({
       label={`${artifact[preview.kind]}: ${value.filename}`}
       speedLabel={artifact.playbackSpeed}
       fill={expanded}
+      autoPlay={playback === "asked"}
+      onPlay={() => setPlayback("played")}
     />
   )
+  // Media not yet asked to play offers to, and once asked shows its player
+  // or why it has none.
+  const mediaBody =
+    playback === "idle" ? (
+      <IconButton
+        label={artifact.play(value.filename)}
+        onClick={() => setPlayback("asked")}
+      >
+        <Play />
+      </IconButton>
+    ) : ready && isMedia(ready) ? (
+      play(ready)
+    ) : (
+      <Status>{statusLabel(file.state, artifact)}</Status>
+    )
   if (!expanded)
     return ready?.kind === "image" ? (
       <div ref={root}>
@@ -590,21 +613,19 @@ export function ArtifactView({
           ].filter((action) => action !== undefined)}
           onOpen={openPip}
         >
-          {media ? (
-            ready && isMedia(ready) ? (
-              play(ready)
-            ) : (
-              <Status>{statusLabel(file.state, artifact)}</Status>
-            )
-          ) : null}
+          {media ? mediaBody : null}
         </FileCard>
       </div>
     )
   // The page names the file above the side panel and in full screen, so the
   // view does not.
-  const actions = [refresh, download, goFullscreen, open].filter(
-    (action) => action !== undefined
-  )
+  // Media not yet read has nothing to read again.
+  const actions = [
+    media && playback === "idle" ? undefined : refresh,
+    download,
+    goFullscreen,
+    open,
+  ].filter((action) => action !== undefined)
   return (
     <div ref={root} className="flex h-dvh flex-col gap-3 p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -636,10 +657,13 @@ export function ArtifactView({
           ) : null}
         </div>
       </div>
-      {ready === undefined ? (
+      {media ? (
+        mediaBody
+      ) : ready === undefined ? (
         // Each state still loading or refused names its own label.
         <Status>{statusLabel(file.state, artifact)}</Status>
       ) : isMedia(ready) ? (
+        // A file whose type shows it is media only once it is read.
         play(ready)
       ) : (
         <div ref={box}>

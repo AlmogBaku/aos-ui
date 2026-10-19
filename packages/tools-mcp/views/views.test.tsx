@@ -614,24 +614,64 @@ describe("artifact view", () => {
     }
   )
 
-  it("plays audio whole from a data: address, read once for its message and the side panel", async () => {
+  it("reads audio only once asked to play it, then plays it whole from a data: address, and shows it in full screen without reading or starting it again", async () => {
+    const user = userEvent.setup()
+    const modes: McpUiHostContext = {
+      availableDisplayModes: ["inline", "fullscreen", "pip"],
+    }
     const { app, address, rerender } = showFile(
       { filename: "brief.mp3" },
       "ID3",
-      { displayMode: "inline" }
-    )
-    const played = `data:audio/mpeg;base64,${btoa("ID3")}`
-    expect(await screen.findByLabelText("Audio: brief.mp3")).toHaveAttribute(
-      "src",
-      played
-    )
-    rerender(PIP)
-    expect(screen.getByLabelText("Audio: brief.mp3")).toHaveAttribute(
-      "src",
-      played
+      { displayMode: "inline", ...modes }
     )
     await act(() => Promise.resolve())
+    expect(fileReads(app)).toEqual([])
+    expect(screen.queryByLabelText("Audio: brief.mp3")).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Play brief.mp3" }))
+    const player =
+      await screen.findByLabelText<HTMLAudioElement>("Audio: brief.mp3")
+    expect(player).toHaveAttribute(
+      "src",
+      `data:audio/mpeg;base64,${btoa("ID3")}`
+    )
+    expect(player.autoplay).toBe(true)
     expect(fileReads(app)).toEqual([address])
+
+    // Once it played, full screen shows it from the same read, waiting.
+    fireEvent.play(player)
+    rerender({ displayMode: "fullscreen", ...modes })
+    const shown = screen.getByLabelText<HTMLAudioElement>("Audio: brief.mp3")
+    expect(shown).not.toBe(player)
+    expect(shown.autoplay).toBe(false)
+    expect(screen.queryByRole("button", { name: "Play brief.mp3" })).toBeNull()
+    await act(() => Promise.resolve())
+    expect(fileReads(app)).toEqual([address])
+  })
+
+  it("reads media again on a new revision only once it was asked to play, in the side panel too", async () => {
+    const user = userEvent.setup()
+    const address = "https://aos.test/files/tour.mp4?pass=one"
+    const view = props({ filename: "tour.mp4" }, "en", async (uri) =>
+      fileRead(uri, "ftyp")
+    )
+    const shown = (revision: string) => (
+      <ArtifactView
+        {...view}
+        context={{ ...files(address), "aos/filesRevision": revision, ...PIP }}
+      />
+    )
+    const { rerender } = render(shown("call-1"))
+    rerender(shown("call-2"))
+    await act(() => Promise.resolve())
+    expect(fileReads(view.app)).toEqual([])
+    // Nothing is read yet, so there is nothing to read again.
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Play tour.mp4" }))
+    expect(await screen.findByLabelText("Video: tour.mp4")).toBeVisible()
+    rerender(shown("call-3"))
+    await waitFor(() => expect(fileReads(view.app)).toHaveLength(2))
   })
 
   it("says in its message why media does not play, offering Refresh only where the file could not be reached", async () => {
@@ -648,6 +688,9 @@ describe("artifact view", () => {
       />
     )
     render(shown)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Play brief.mp3" })
+    )
     expect(await screen.findByText("Can't reach this file.")).toBeVisible()
     reason = ""
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }))
@@ -657,6 +700,9 @@ describe("artifact view", () => {
 
     reason = "denied"
     render(shown)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Play brief.mp3" })
+    )
     expect(
       await screen.findByText("Showing this file isn't allowed.")
     ).toBeVisible()
