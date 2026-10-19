@@ -45,6 +45,9 @@ export type SandboxPolicyOrigins = {
  */
 const STABLE_KEY = /^[0-9a-f]{32}$/u
 
+/** The optional setting the MCP App stable origins' wildcard is read from. */
+export const MCP_APP_STABLE_ORIGINS_SETTING = "AOS_UI_MCP_APP_STABLE_ORIGINS"
+
 /** `<scheme>://*.<domain>[:port]`, as `AOS_UI_MCP_APP_STABLE_ORIGINS` names it. */
 const WILDCARD = /^(https?:)\/\/\*\.([^/?#@:]+)(:\d+)?$/u
 

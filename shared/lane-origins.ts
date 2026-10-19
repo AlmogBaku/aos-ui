@@ -1,6 +1,9 @@
 import { isMcpAppPolicyOrigin } from "@harness-gw/sdk/protocol"
 
-import { stableOriginsOf } from "./mcp-app-sandbox"
+import {
+  MCP_APP_STABLE_ORIGINS_SETTING,
+  stableOriginsOf,
+} from "./mcp-app-sandbox"
 
 /** The two lanes AOS UI serves, each on origins of its own. */
 export type Surface = "operator" | "guest"
@@ -44,9 +47,6 @@ export const PUBLIC_ORIGIN_SETTINGS = {
 
 /** The setting the deployment's one MCP App sandbox origin is read from. */
 export const MCP_APP_SANDBOX_ORIGIN_SETTING = "AOS_UI_MCP_APP_SANDBOX_ORIGIN"
-
-/** The optional setting the MCP App stable origins' wildcard is read from. */
-export const MCP_APP_STABLE_ORIGINS_SETTING = "AOS_UI_MCP_APP_STABLE_ORIGINS"
 
 type Getenv = (name: string) => string | undefined
 

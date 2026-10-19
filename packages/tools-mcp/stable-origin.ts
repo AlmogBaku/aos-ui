@@ -1,7 +1,9 @@
 import { mcpAppStableOriginKey } from "@harness-gw/sdk/node"
 
-import { MCP_APP_STABLE_ORIGINS_SETTING } from "../../shared/lane-origins"
-import { stableOriginsOf } from "../../shared/mcp-app-sandbox"
+import {
+  MCP_APP_STABLE_ORIGINS_SETTING,
+  stableOriginsOf,
+} from "../../shared/mcp-app-sandbox"
 import type { ArtifactStableOrigin } from "./server"
 
 /** The URL the gateway dials this server at, as the operator names it. */
