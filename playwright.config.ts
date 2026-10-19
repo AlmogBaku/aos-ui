@@ -7,6 +7,16 @@ const port = 3100
 const stablePort = Number(process.env.AOS_UI_E2E_STABLE_ORIGINS_PORT ?? 3917)
 const externalBaseURL = process.env.AOS_UI_E2E_BASE_URL?.replace(/\/$/, "")
 const baseURL = externalBaseURL ?? `http://127.0.0.1:${port}`
+/**
+ * Where the stable-origins spec runs: the second server below, or, beside an
+ * external preview, the one AOS_UI_E2E_STABLE_ORIGINS_BASE_URL names, which
+ * serves with stable origins on a build made with its port as
+ * AOS_UI_E2E_STABLE_ORIGINS_PORT. An external run without one leaves the spec
+ * out, since the external preview has stable origins off.
+ */
+const stableBaseURL = externalBaseURL
+  ? process.env.AOS_UI_E2E_STABLE_ORIGINS_BASE_URL?.replace(/\/$/, "")
+  : `http://127.0.0.1:${stablePort}`
 const fixtureEnvironment = {
   ...process.env,
   AOS_UI_RUNTIME_MODE: "fixture",
@@ -64,15 +74,19 @@ export default defineConfig({
         viewport: { width: 1440, height: 1000 },
       },
     },
-    {
-      name: "stable-origins-chromium",
-      testMatch: /\.stable-origins\.spec\.ts/,
-      use: {
-        ...devices["Desktop Chrome"],
-        viewport: { width: 1440, height: 1000 },
-        baseURL: externalBaseURL ?? `http://127.0.0.1:${stablePort}`,
-      },
-    },
+    ...(stableBaseURL
+      ? [
+          {
+            name: "stable-origins-chromium",
+            testMatch: /\.stable-origins\.spec\.ts/,
+            use: {
+              ...devices["Desktop Chrome"],
+              viewport: { width: 1440, height: 1000 },
+              baseURL: stableBaseURL,
+            },
+          },
+        ]
+      : []),
   ],
   // Playwright starts the servers in order, each once the last answers, so
   // the second serves the first's build and `dist` is written once.
