@@ -125,7 +125,7 @@ Compose runs three pieces behind one origin per lane: Caddy, the only
 published port; the aos-ui web server (`bun run web:serve`), which serves the
 built app, `/runtime-config.json`, and the MCP App sandbox page; and, under a
 harness overlay, the harness-gw gateway, which answers `/api/v1`. Each harness
-overlay pulls the gateway image pinned by digest; set `HARNESS_GW_IMAGE` to run
+overlay pulls the gateway image by its version tag; set `HARNESS_GW_IMAGE` to run
 another build. Runtime selection comes from `/runtime-config.json`, so operators
 can switch between the gateway and explicit fixture mode without rebuilding the
 frontend.
