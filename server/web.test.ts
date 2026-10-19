@@ -35,17 +35,22 @@ const ORIGINS: DeploymentOrigins = {
   publicOrigins: [...OPERATOR_PAGES, ...GUEST_PAGES],
   mcpAppSandboxOrigin: SANDBOX,
 }
-/** The stable origins' wildcard, and a stable host's key label under it. */
+/**
+ * The stable origins' wildcard, its domain itself on its port, and a stable
+ * host's key label under it.
+ */
 const STABLE_ORIGINS = "https://*.mcp-apps.example.test:8443"
+const STABLE_DOMAIN = "https://mcp-apps.example.test:8443"
 const KEY = "0123456789abcdef0123456789abcdef"
 const STABLE_ORIGIN = `https://${KEY}.mcp-apps.example.test:8443`
 
 /**
  * A built app with a shell, the installable files, the sandbox page and its
  * script, and a build id, whose operator file names origins of its own; its
- * lanes have the stable origins `stable` names, by default none.
+ * lanes have `ORIGINS` with what `overrides` names, by default no stable
+ * origins.
  */
-async function builtApp(stable: Partial<DeploymentOrigins> = {}) {
+async function builtApp(overrides: Partial<DeploymentOrigins> = {}) {
   const root = await mkdtemp(join(tmpdir(), "aos-web-"))
   directories.push(root)
   await writeFile(join(root, "index.html"), "<html>shell</html>")
@@ -73,13 +78,13 @@ async function builtApp(stable: Partial<DeploymentOrigins> = {}) {
       surface: "operator",
       root,
       runtimeConfigFile,
-      origins: { ...ORIGINS, ...stable },
+      origins: { ...ORIGINS, ...overrides },
     }),
     guest: createWebApp({
       surface: "guest",
       root,
       runtimeConfigFile,
-      origins: { ...ORIGINS, ...stable },
+      origins: { ...ORIGINS, ...overrides },
     }),
   }
 }
@@ -205,14 +210,17 @@ describe("web server", () => {
   )
 
   it.each(["operator", "guest"] as const)(
-    "serves exactly a stable host from the %s listener as the sandbox address, under the policy for its own origin",
+    "serves exactly a stable host from the %s listener as the sandbox address, under the policy for its own origin, beside the shared sandbox at their domain itself",
     async (surface) => {
-      const app = (await builtApp({ mcpAppStableOrigins: STABLE_ORIGINS }))[
-        surface
-      ]
+      const app = (
+        await builtApp({
+          mcpAppSandboxOrigin: STABLE_DOMAIN,
+          mcpAppStableOrigins: STABLE_ORIGINS,
+        })
+      )[surface]
       // A view may not reach its own sandbox origin; the shared one is just
       // another host to it.
-      const csp = { connectDomains: [STABLE_ORIGIN, SANDBOX] }
+      const csp = { connectDomains: [STABLE_ORIGIN, STABLE_DOMAIN] }
       const page = sandboxPageUrl(STABLE_ORIGIN, {
         allow: "",
         csp,
@@ -223,7 +231,7 @@ describe("web server", () => {
       expect(response.status).toBe(200)
       const policy = response.headers.get("content-security-policy")
       expect(directives(policy, "connect-src")).toEqual([
-        `connect-src ${SANDBOX}`,
+        `connect-src ${STABLE_DOMAIN}`,
       ])
       expect(directives(policy, "frame-ancestors")).toEqual([
         `frame-ancestors ${ORIGINS.publicOrigins.join(" ")}`,
@@ -233,6 +241,10 @@ describe("web server", () => {
       ).toBe(200)
       for (const path of ["/", "/api/v1/healthz", "/runtime-config.json"])
         expect((await get(app, path, STABLE_ORIGIN)).status).toBe(404)
+      // The domain itself is the shared sandbox there, never a near miss.
+      expect((await get(app, MCP_APP_SANDBOX_PATH, STABLE_DOMAIN)).status).toBe(
+        200
+      )
     }
   )
 
@@ -246,7 +258,7 @@ describe("web server", () => {
     ["an extra label", `https://${KEY}.extra.mcp-apps.example.test:8443`],
     ["another port", `https://${KEY}.mcp-apps.example.test:9443`],
     ["no port", `https://${KEY}.mcp-apps.example.test`],
-    ["the domain itself", "https://mcp-apps.example.test:8443"],
+    ["the domain itself", STABLE_DOMAIN],
   ])(
     "refuses every path on %s below the stable origins",
     async (_label, origin) => {
@@ -321,7 +333,7 @@ describe("web server settings", () => {
   /** The operator's loopback origins and sandbox, as Compose defaults them. */
   const OPERATOR_LANE = {
     AOS_UI_PUBLIC_ORIGIN: OPERATOR_ORIGINS.join(","),
-    AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3000",
+    AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3002",
   }
   /** Both lanes' loopback origins, as a harness overlay defaults them. */
   const BOTH_LANES = { ...OPERATOR_LANE, AOS_UI_PUBLIC_ORIGIN: LANES.join(",") }
@@ -337,7 +349,7 @@ describe("web server settings", () => {
     ])
     expect(operator.origins).toEqual({
       publicOrigins: OPERATOR_ORIGINS,
-      mcpAppSandboxOrigin: "http://sandbox.localhost:3000",
+      mcpAppSandboxOrigin: "http://sandbox.localhost:3002",
     })
     const both = readWebServerConfig(
       env({ ...BOTH_LANES, AOS_UI_GUEST_WEB_PORT: "3001" })
@@ -385,12 +397,12 @@ describe("web server settings", () => {
       const config = await get(app, "/runtime-config.json")
       expect(await config.json()).toMatchObject({
         publicOrigins: LANES,
-        mcpAppSandboxOrigin: "http://sandbox.localhost:3000",
+        mcpAppSandboxOrigin: "http://sandbox.localhost:3002",
       })
       const page = await get(
         app,
         MCP_APP_SANDBOX_PATH,
-        "http://sandbox.localhost:3000"
+        "http://sandbox.localhost:3002"
       )
       expect(
         directives(
@@ -484,10 +496,10 @@ describe("web server settings", () => {
       { AOS_UI_MCP_APP_STABLE_ORIGINS: value },
       /^AOS_UI_MCP_APP_STABLE_ORIGINS: .* is not a wildcard origin/u,
     ]),
-    // No page's host nor the sandbox's is at or below their domain.
+    // No page's host is at or below their domain, and no sandbox host below it.
     [
       { AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.localhost:3000" },
-      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN or AOS_UI_MCP_APP_SANDBOX_ORIGIN is at or below, but http:\/\/localhost:3000 is$/u,
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN is at or below, but http:\/\/localhost:3000 is$/u,
     ],
     // Every origin listed, not only the first.
     [
@@ -496,7 +508,7 @@ describe("web server settings", () => {
           "http://localhost:3000,http://guest.mcp-apps.localhost:3001",
         AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.localhost:3000",
       },
-      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN or AOS_UI_MCP_APP_SANDBOX_ORIGIN is at or below, but http:\/\/guest\.mcp-apps\.localhost:3001 is$/u,
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN is at or below, but http:\/\/guest\.mcp-apps\.localhost:3001 is$/u,
     ],
     [
       {
@@ -504,11 +516,14 @@ describe("web server settings", () => {
         AOS_UI_MCP_APP_SANDBOX_ORIGIN: "https://sandbox.example.test",
         AOS_UI_MCP_APP_STABLE_ORIGINS: "https://*.example.test:8443",
       },
-      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN or AOS_UI_MCP_APP_SANDBOX_ORIGIN is at or below, but https:\/\/aos\.example\.test is$/u,
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN is at or below, but https:\/\/aos\.example\.test is$/u,
     ],
     [
-      { AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.sandbox.localhost:3005" },
-      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN or AOS_UI_MCP_APP_SANDBOX_ORIGIN is at or below, but http:\/\/sandbox\.localhost:3000 is$/u,
+      {
+        AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.mcp-apps.localhost:3002",
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.localhost:3002",
+      },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that AOS_UI_MCP_APP_SANDBOX_ORIGIN is not below, but http:\/\/sandbox\.mcp-apps\.localhost:3002 is$/u,
     ],
     [
       {
@@ -576,6 +591,14 @@ describe("web server settings", () => {
         AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.localhost:3000",
       },
       "http://*.mcp-apps.localhost:3000",
+    ],
+    [
+      "at the sandbox's own name, on another port",
+      {
+        ...OPERATOR_LANE,
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.sandbox.localhost:3005",
+      },
+      "http://*.sandbox.localhost:3005",
     ],
     [
       "unset as empty, as Compose leaves it",

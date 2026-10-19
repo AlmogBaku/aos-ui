@@ -112,6 +112,7 @@ export function sandboxAt(
   host: string
 ): SandboxPolicyOrigins | "refused" | undefined {
   const requested = host.toLowerCase()
+  // First, since the sandbox may sit at the stable origins' domain itself.
   if (requested === new URL(origins.mcpAppSandboxOrigin).host)
     return sandboxPolicyOrigins(origins)
   const stable = stableOriginsOf(origins.mcpAppStableOrigins)

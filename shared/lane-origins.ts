@@ -122,7 +122,7 @@ function readSandboxOrigin(
   const value = getenv(setting)?.trim()
   if (!value)
     throw new Error(
-      `${setting} must name the MCP App sandbox origin, such as https://agents-sandbox.example`
+      `${setting} must name the MCP App sandbox origin, such as https://mcp-apps.example.com`
     )
   const sandbox = exactOrigin(setting, value)
   if (publicOrigins.some((origin) => hostOf(origin) === hostOf(sandbox)))
@@ -140,9 +140,10 @@ function readSandboxOrigin(
 /**
  * The stable origins' wildcard, lowercased, or `undefined` while it is unset:
  * a `<scheme>://*.<domain>[:port]` (`stableOriginsOf`) framable by every page
- * (`assertFramable`), whose domain has no page's host nor the sandbox's at or
- * below it, since every host there is a stable one or refused. Throws naming
- * the setting it refuses.
+ * (`assertFramable`), whose domain has no page's host at or below it and no
+ * sandbox host below it, since every host there is a stable one or refused.
+ * The sandbox may sit at the domain itself, as `sandboxAt` matches it first.
+ * Throws naming the setting it refuses.
  */
 function readStableOrigins(
   getenv: Getenv,
@@ -155,15 +156,20 @@ function readStableOrigins(
   const stable = stableOriginsOf(value)
   if (stable === undefined)
     throw new Error(
-      `${setting}: ${value} is not a wildcard origin, such as https://*.mcp-apps.example`
+      `${setting}: ${value} is not a wildcard origin, such as https://*.mcp-apps.example.com`
     )
-  const claimed = [...publicOrigins, sandbox].find((origin) => {
-    const { hostname } = new URL(origin)
-    return hostname === stable.domain || hostname.endsWith(`.${stable.domain}`)
-  })
+  const isBelow = (origin: string) =>
+    new URL(origin).hostname.endsWith(`.${stable.domain}`)
+  const claimed = publicOrigins.find(
+    (origin) => new URL(origin).hostname === stable.domain || isBelow(origin)
+  )
   if (claimed !== undefined)
     throw new Error(
-      `${setting} must name a domain that no origin in ${PUBLIC_ORIGIN_SETTING} or ${MCP_APP_SANDBOX_ORIGIN_SETTING} is at or below, but ${claimed} is`
+      `${setting} must name a domain that no origin in ${PUBLIC_ORIGIN_SETTING} is at or below, but ${claimed} is`
+    )
+  if (isBelow(sandbox))
+    throw new Error(
+      `${setting} must name a domain that ${MCP_APP_SANDBOX_ORIGIN_SETTING} is not below, but ${sandbox} is`
     )
   assertFramable(setting, value, publicOrigins)
   return value
