@@ -206,12 +206,14 @@ function TextPreview({
 function Preview({
   preview,
   filename,
+  fileId,
   labels,
   app,
   room,
 }: {
   preview: FilePreview
   filename: string
+  fileId: string | undefined
   labels: ArtifactLabels
   app: ViewApp
   room: Room
@@ -241,9 +243,11 @@ function Preview({
       return (
         <HtmlPreview
           text={preview.text}
+          fileId={fileId}
           height={room.height}
           labels={labels}
           read={app.readServerResource}
+          openLink={app.openLink}
         />
       )
     case "text":
@@ -622,6 +626,7 @@ export function ArtifactView({
                 <Preview
                   preview={file.state.preview}
                   filename={value.filename}
+                  fileId={value.fileId}
                   labels={artifact}
                   app={app}
                   room={room}

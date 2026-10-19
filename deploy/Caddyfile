@@ -1,8 +1,17 @@
-# One origin per lane: each site sends /api/v1 (HTTP and WebSocket) to its
+# One origin per lane: each lane site sends /api/v1 (HTTP and WebSocket) to its
 # gateway listener and everything else to its aos-ui server listener. The lane
-# is the port, never the path. The operator lane has no application
-# authentication, so this wiring is its guard; test/containers/compose.test.ts
-# checks it.
+# is the port, never the path. A lane site answers only its own names; any
+# other host, the MCP App sandbox's and each stable host included, gets 421.
+# The operator lane has no application authentication, so this wiring is its
+# guard; test/containers/compose.test.ts checks it.
+#
+# The MCP App sandbox has a site of its own, one for both lanes and neither
+# lane's: the one sandbox address reaches the aos-ui server's operator listener
+# whole there, /api/v1 included, and the server answers it with the sandbox
+# page and its script alone, so the site may be as public as a guest lane needs
+# while the gateway never serves it. So does each stable host, exactly a
+# 32-hex-digit label directly below the AOS_UI_MCP_APP_STABLE_ORIGINS
+# wildcard's domain on its port, while that is set. Any other host gets 421.
 #
 # Each site binds loopback unless AOS_UI_CADDY_BIND says otherwise: a
 # host-network deployment ignores Compose `ports:`, so the default lives here.
@@ -28,6 +37,20 @@ http://:18080 {
 		respond @foreign 421
 		reverse_proxy /api/v1/* {$AOS_UI_GATEWAY_UPSTREAM:gateway:4100}
 		reverse_proxy {$AOS_UI_WEB_UPSTREAM:web:4200}
+	}
+}
+
+# The MCP App sandbox site, which belongs to neither lane.
+http://:18082 {
+	bind {$AOS_UI_CADDY_BIND:127.0.0.1}
+	route {
+		# The sandbox origin's host and port, exactly.
+		@sandbox expression `"{$AOS_UI_MCP_APP_SANDBOX_ORIGIN}".endsWith("//" + {http.request.hostport})`
+		reverse_proxy @sandbox {$AOS_UI_WEB_UPSTREAM:web:4200}
+		# A stable host: a key label, then exactly the wildcard's "*" tail.
+		@stable expression `{http.request.hostport}.lowerAscii().matches("^[0-9a-f]{32}[.]") && "{$AOS_UI_MCP_APP_STABLE_ORIGINS}".lowerAscii().endsWith("//*" + {http.request.hostport}.lowerAscii().substring(32))`
+		reverse_proxy @stable {$AOS_UI_WEB_UPSTREAM:web:4200}
+		respond 421
 	}
 }
 

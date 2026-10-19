@@ -28,7 +28,12 @@ function contentType(path: string) {
   return (extension && contentTypes[extension]) || "application/octet-stream"
 }
 
-function safePath(root: string, pathname: string) {
+/**
+ * The file under `root` a request path names, as this handler resolves it:
+ * decoded and normalized, so every spelling of a path names one file;
+ * `undefined` for a path that cannot be decoded or leaves `root`.
+ */
+export function requestedFile(root: string, pathname: string) {
   let decoded: string
   try {
     decoded = decodeURIComponent(pathname)
@@ -120,7 +125,10 @@ async function assetResponse(
   )
 }
 
-/** The exact paths that must carry `Access-Control-Allow-Origin: null`. */
+/**
+ * The exact paths that answer any origin, as the gateway's file route does
+ * once it admits a pass: views read them from the sandbox origin.
+ */
 const FIXTURE_FILE_PATHS = new Set(FIXTURE_MCP_APP_FILE_PATHS)
 
 export function createStaticHandler(
@@ -130,7 +138,7 @@ export function createStaticHandler(
   return async (request) => {
     if (request.method !== "GET" && request.method !== "HEAD") return undefined
     const url = new URL(request.url)
-    const path = safePath(root, url.pathname)
+    const path = requestedFile(root, url.pathname)
     if (!path) return undefined
     const headers: Record<string, string> = {
       "cache-control": url.pathname.startsWith("/assets/")
@@ -138,7 +146,7 @@ export function createStaticHandler(
         : "no-cache",
     }
     if (FIXTURE_FILE_PATHS.has(url.pathname))
-      headers["access-control-allow-origin"] = "null"
+      headers["access-control-allow-origin"] = "*"
     const requested = await assetResponse(path, request, headers)
     if (requested) return requested
     if (url.pathname.startsWith("/assets/") || url.pathname.includes("."))

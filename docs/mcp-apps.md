@@ -31,20 +31,122 @@ guides document the fallback.
 
 ## Sandbox
 
-The view runs inside a double iframe. The outer frame is a static page,
-`/mcp-app-sandbox.html`, loaded sandboxed with an opaque origin and holding only
-a message relay; the inner frame holds the view. The AOS web server, on both
-the operator and guest surfaces, and Vite in development, serve that page with
-its own CSP header: the widest set of
-sources any view may be granted, framable only by the same origin. The view's
-own CSP, below, is injected into its document and narrows that ceiling. Caddy,
-and any reverse proxy in front of it, must pass the page's headers through unchanged
-and must not add a CSP or `X-Frame-Options` of its own to it. Requests the
-view makes carry `Origin: null`, so an App server must not rely on an origin
-check. This departs from the spec, which gives the outer frame
-`allow-same-origin` on a dedicated sandbox origin: AOS serves no separate
-origin, so it keeps the outer frame opaque instead, and a view cannot use cookies
-or web storage. The frame may not navigate the workspace, open pop-ups, or submit forms.
+The view runs inside a double iframe. The outer frame (`sandbox="allow-scripts
+allow-same-origin"`) loads a static relay page, `/mcp-app-sandbox.html`, from
+the deployment's one sandbox origin, `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, such as
+`https://mcp-apps.example.com`, which both lanes' views load from and which
+differs from every lane's origin, as the spec requires; see
+[MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins). The inner
+frame holds the view itself. Because the outer frame has `allow-same-origin`,
+the view runs on the sandbox origin and can use cookies and web storage.
+
+**Per-view policy.** The aos-ui web server serves `/mcp-app-sandbox.html` with
+a Content Security Policy built for the particular view the query names:
+
+- `frame-ancestors` lists every origin in `AOS_UI_PUBLIC_ORIGIN`, the origins
+  people open AOS UI at, operator and guest alike, so only the lanes' own
+  pages may frame the sandbox page. Any other page that tries to embed it is
+  refused by the browser.
+- The view's declared domains (`_meta.ui.csp`) and file addresses travel in the
+  sandbox page's query; the server rebuilds the policy from them and sends it
+  with `no-store`. Every value is validated before it is written.
+
+Caddy, and any reverse proxy in front of it, must pass the page's headers
+through unchanged and must not add a CSP or `X-Frame-Options` of its own.
+
+**Requests** the view makes carry the sandbox origin; that identifies the
+deployment, not the lane, the App, or its server. An App server that checks the
+request origin sees the sandbox address, not the calling Agent or tool.
+
+**Shared storage.** All views share the one sandbox origin — the spec's
+default. In one browser profile their stored data persists across Agents,
+Sessions, App servers, and lanes: one view can read another's storage, and,
+on the same workspace page, read its page and act as it — call its server's
+tools and use its delegated permissions such as clipboard write. With a second
+view on the page, a hostile App can reload a neighbouring sandbox page with a
+query it chose and run code there under the policy it picked; the per-view
+policy binds a view acting alone. Per-App origins (a non-goal) would close
+these paths. Across lanes, sharing is the storage within one browser profile —
+an operator and a guest each use their own browser, and views on different
+pages cannot script each other — plus the lanes' origins the sandbox page
+publishes.
+
+**Published origins.** The sandbox page's header lists every lane's origins in
+its `frame-ancestors` to whoever requests the page, so keep the operator
+lane's origins to names you are fine publishing. Each surface's
+`/runtime-config.json` carries the same list as `publicOrigins`, from which
+the workspace reports the domains a view's policy applies. With the
+sandbox reachable only through a public route, the operator's own views load
+it over that route too, and stop showing while it is down.
+
+**Lane restriction.** The workspace loads views only when its own origin is in
+the `publicOrigins` list and differs from the sandbox origin. A workspace
+opened at an address not in that list, or opened at the sandbox origin itself,
+shows views as unavailable and names `AOS_UI_PUBLIC_ORIGIN`.
+
+The view frame may not navigate the workspace, open pop-ups, or submit forms.
+
+### Stable origins (optional) {#stable-origins}
+
+An App can declare `_meta.ui.domain` to request an origin of its own, separate
+from the shared sandbox. AOS honors it only when `AOS_UI_MCP_APP_STABLE_ORIGINS`
+is set, such as `https://*.mcp-apps.example.com` right below a sandbox at
+`https://mcp-apps.example.com`; with it unset every view loads from the shared
+sandbox and no configuration is required for a new installation. Two protocol
+fixes apply regardless of that setting: `_meta.ui` is taken from the
+`resources/list` entry when the `resources/read` content item declares none,
+and a file the gateway delivers by a native path carries a `fileId` that
+matches `present_artifact`'s for the same path.
+
+**Format.** A domain AOS accepts is `<32 hex digits>.<the wildcard's domain>`,
+where the 32-digit prefix is the first 32 hex digits of a SHA-256 of the MCP
+server URL the gateway dials, computed by `mcpAppStableOriginKey` from
+`@harness-gw/sdk/node`. The gateway hashes the URL in its canonical form — the
+WHATWG URL serialization with no trailing slash — so
+`https://Example.com:443/mcp/` and `https://example.com/mcp` give the same key.
+A server declares its own `domain` by computing the key from the same URL the
+gateway dials it at; if that URL differs from what the server computed the key
+from, the gateway drops the domain and opens the view on the shared sandbox.
+Claude's ext-apps documentation published this format.
+
+**Gateway check.** On every view path — tool-call views and published-Artifact
+views alike — the gateway verifies that the domain's first label equals the key
+for the URL it dialed. A domain that passes the check is forwarded to the
+browser; one that fails is dropped and logged as `mcp_app.domain.dropped` with
+the server name and a `reason`: `"mismatch"` when the first label is a valid
+host-name part but does not equal the expected key, or `"malformed"` when the
+declared value is not a valid lowercase host name at all. The log carries no URL.
+Coverage is Hermes and OpenCode; OpenClaw's native App views and stdio servers
+carry no domain.
+
+**Browser.** A view whose `domain` is exactly one 32-hex-digit label directly
+below the configured wildcard's domain loads from that host, with the
+wildcard's scheme and port. Every other view loads from the shared sandbox.
+Lane pages' `frame-src` adds the wildcard when it is set.
+
+**Artifact view storage.** The `present_artifact` view keeps each Agent HTML
+file's `localStorage` per file across preview sessions when it runs on its
+stable origin: values are keyed by `fileId`, injected before the file's scripts
+run, and updated through a message the file's own frame sends on each write.
+Each file's share is capped at 64 Ki characters of the file's saved JSON; a
+quota error fails only that file's write and changes nothing else. Off the
+stable host — on the shared sandbox, or when no `fileId` is in the result — the
+in-memory storage has no limit. `sessionStorage` always lives in memory for the
+life of the preview. Values from one file are separate from another's; a message
+from any other frame is ignored.
+
+**Risks.** Browsers partition storage by top-level site, and Safari may clear
+it. Whatever HTML later sits at a given file path — by any Agent — can read
+what was saved there. `MEDIA:` results now carry a truncated path hash to the
+browser and to guests, as `present_artifact` results already do; a holder can
+check a guessed path. A bug in the artifact view's renderers costs more on the
+artifact origin, which holds every saved file. Turning stable origins on moves
+the artifact view to the new origin; nothing stored before carries over.
+
+See [Stable origins](deployment.md#stable-origins-optional) for DNS,
+certificate, Compose settings, and proxy rules.
+
+### Security policy and Agent HTML {#security-policy}
 
 AOS builds the view's CSP from its declared `_meta.ui.csp`:
 
@@ -55,7 +157,9 @@ AOS builds the view's CSP from its declared `_meta.ui.csp`:
 | `frameDomains`    | `https://host` or `https://*.host`                                                    |
 | `baseUriDomains`  | `https://host` or `https://*.host`                                                    |
 
-Anything else is dropped, and an empty list means none. Inline scripts and
+Anything else is dropped, and an empty list means none. Declared domains whose
+host and port match any lane's origin or the sandbox origin are also dropped
+from the built policy (a wildcard that covers them is kept). Inline scripts and
 styles are allowed, and scripts may compile WebAssembly (`'wasm-unsafe-eval'`),
 as a document renderer's decoders do; `object-src` and `form-action` are
 `'none'`. Web workers may start from the view's own `blob:` URLs, as a WebGL
@@ -69,18 +173,34 @@ attribute.
 A frame a view opens from `srcdoc` inherits the view's CSP. The `artifact`
 view shows Agent-written HTML that way, in a frame sandboxed with
 `allow-scripts` and never `allow-same-origin`, so the file's inline scripts run
-in an opaque origin of their own that reaches neither the view nor the page.
-The view also injects a policy into that document allowing only inline scripts
-and styles, `data:` fonts, and `data:` and `blob:` images and media, with
-`connect-src` and `frame-src` set to `'none'`. Its one exception is the public
-CDNs `AGENT_HTML_DOMAINS` names: Google Fonts (`fonts.googleapis.com`,
+in an opaque origin of their own that cannot reach the view or the page
+directly. The view also injects a policy into that document allowing only inline
+scripts and styles, `data:` fonts, and `data:` and `blob:` images and media,
+with `connect-src` and `frame-src` set to `'none'`. Its one exception is the
+public CDNs `AGENT_HTML_DOMAINS` names: Google Fonts (`fonts.googleapis.com`,
 `fonts.gstatic.com`) and Tailwind's Play CDN (`cdn.tailwindcss.com`), from
 which the document may load scripts, styles, and fonts. The view declares the
 same hosts as its `resourceDomains`, since the inherited view CSP would
-otherwise refuse them. Only their owners publish to these hosts and no one
-else reads who asked, so a page that loads from them signals nothing; a host
-anyone may publish to, such as an npm mirror, stays out. Because the inherited
-view CSP grants images and media `data:` only, `blob:` images stay blank.
+otherwise refuse them. Only their owners publish to these hosts and no one else
+reads who asked, so a page that loads from them signals nothing; a host anyone
+may publish to, such as an npm mirror, stays out. Because the inherited view CSP
+grants images and media `data:` only, `blob:` images stay blank.
+
+Even though the Agent HTML frame is opaque, it has two capabilities:
+
+- **Storage.** `localStorage` is kept per file on the artifact view's stable
+  origin, in memory elsewhere (see [Stable origins (optional)](#stable-origins)
+  for the cap and persistence rules). `sessionStorage` is always in memory for
+  the life of the preview. Property-style access (`localStorage.foo`) is not
+  supported; use `getItem` and `setItem`.
+- **Link relay.** A click on an `https:` link that the page did not prevent, or
+  a `window.open` call with an `https:` address, is relayed to the workspace as
+  a `ui/open-link` request. The workspace opens the URL in a new tab under the
+  same rules it applies to any other link (`https` only, `noopener noreferrer`,
+  rate-limited). `javascript:`, `data:`, and `http:` addresses are refused. An
+  Agent HTML page can therefore open an https address it chose on a click,
+  carrying whatever it stored, so treat Agent-written HTML with the same trust
+  you would give any tool-produced content.
 
 ## Host requests
 
@@ -192,8 +312,9 @@ A file answer:
   `Cache-Control: no-store`. Every answer but a PDF's also carries this
   policy, so no file runs as a page:
   `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox`.
-- A request with a pass gets `Access-Control-Allow-Origin: null`, so the
-  view's opaque origin can read the answer; no answer allows credentials.
+- A request with a pass gets `Access-Control-Allow-Origin: *` once the pass is
+  admitted, so the view can read the answer from its sandbox origin; no answer
+  allows credentials.
 - File reads and renewals have their own limit of about 50 requests per second
   per call, apart from the view's 10; excess requests answer 429.
 

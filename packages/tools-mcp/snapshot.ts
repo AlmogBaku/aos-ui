@@ -12,7 +12,11 @@ import {
   PDFJS_RESOURCE_URI,
   PDFJS_WORKER_FILE,
 } from "../../shared/presentation/views"
-import { createToolsServer, type ToolsServerFiles } from "./server"
+import {
+  toolsServerFactory,
+  type ToolsServerFiles,
+  type ToolsServerOptions,
+} from "./server"
 
 /** What an MCP client reads from the server: its tools and every view. */
 export type ToolsServerSnapshot = {
@@ -50,14 +54,15 @@ const FIXTURE_MAPLIBRE_URIS = [
 ]
 
 /**
- * Asks a real server for its `tools/list`, every view's `resources/read`, the
- * pdf.js resources and grammars the artifact view needs for the fixture
- * files, and the map view's worker.
+ * Asks a real server, built with `options`, for its `tools/list`, every view's
+ * `resources/read`, the pdf.js resources and grammars the artifact view needs
+ * for the fixture files, and the map view's worker.
  */
 export async function snapshotToolsServer(
-  files: ToolsServerFiles
+  files: ToolsServerFiles,
+  options?: ToolsServerOptions
 ): Promise<ToolsServerSnapshot> {
-  const server = createToolsServer(files)
+  const server = toolsServerFactory(files, options)()
   const client = new Client({ name: "aos-ui-fixture", version: "1.0.0" })
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()

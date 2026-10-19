@@ -92,7 +92,7 @@ and explicit `fixture` mode):
 docker run --rm -p 127.0.0.1:4100:4100 \
   -v /absolute/private/path/config.yaml:/run/harness-gw/config.yaml:ro \
   -v /absolute/private/path/hermes-token:/run/secrets/hermes-token:ro \
-  ghcr.io/almogbaku/harness-gw:0.11.0 \
+  ghcr.io/almogbaku/harness-gw:0.13.0 \
   serve --config /run/harness-gw/config.yaml
 
 # Terminal 2, in this checkout
@@ -123,12 +123,28 @@ The fixture is deterministic and cannot create or modify native Agents. Continue
 
 Compose runs three pieces behind one origin per lane: Caddy, the only
 published port; the aos-ui web server (`bun run web:serve`), which serves the
-built app and `/runtime-config.json`; and, under a harness overlay, the
-harness-gw gateway, which answers `/api/v1`. Each harness overlay pulls the
-gateway image pinned by digest; set `HARNESS_GW_IMAGE` to run another build.
-Runtime selection comes from
-`/runtime-config.json`, so operators can switch between the gateway and
-explicit fixture mode without rebuilding the frontend.
+built app, `/runtime-config.json`, and the MCP App sandbox page; and, under a
+harness overlay, the harness-gw gateway, which answers `/api/v1`. Each harness
+overlay pulls the gateway image by its version tag; set `HARNESS_GW_IMAGE` to run
+another build. Runtime selection comes from `/runtime-config.json`, so operators
+can switch between the gateway and explicit fixture mode without rebuilding the
+frontend.
+
+MCP App views load from a sandbox origin, an address whose origin differs from
+every lane's, as the MCP Apps spec requires; one serves both lanes, from a
+Caddy site of its own on `AOS_UI_SANDBOX_PUBLISHED_PORT` (default `3002`).
+Compose defaults the lanes' origins and the sandbox origin to loopback, so local
+development and fixture mode need no configuration. For a named deployment, set
+`AOS_UI_PUBLIC_ORIGIN` and `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, such as
+`https://mcp-apps.example.com`, in `.env`.
+`AOS_UI_PUBLIC_ORIGIN` lists every origin people open AOS UI at, operator and
+guest alike, all on the same side of loopback: a loopback operator lane beside
+a public guest lane is unsupported with one shared sandbox. Without a guest
+lane, add `deploy/compose.operator-only.yaml`. See
+[MCP App sandbox origins](docs/deployment.md#mcp-app-sandbox-origins). For
+Apps that need a fixed origin of their own, `AOS_UI_MCP_APP_STABLE_ORIGINS`,
+such as `https://*.mcp-apps.example.com`, is an optional opt-in; see
+[Stable origins](docs/deployment.md#stable-origins-optional).
 
 For a containerized fixture preview:
 

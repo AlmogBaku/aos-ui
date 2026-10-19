@@ -1,39 +1,30 @@
-import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
+import type { DeploymentOrigins } from "@shared/lane-origins"
 
 /**
- * MCP Apps render behind a double iframe. The outer sandbox proxy is a static
- * page (`public/mcp-app-sandbox.html`) loaded with an opaque origin and no
- * power beyond scripts; it holds only a relay, which creates the inner App
- * frame once the host hands it the view's HTML
+ * MCP Apps render behind a double iframe, as the spec's sandbox proxy does.
+ * The outer frame is a static page (`public/mcp-app-sandbox.html`) on the
+ * deployment's one sandbox origin, or on the view's own stable origin when its
+ * `domain` names one, apart from every lane's origins, under the view's own
+ * policy as its header; it holds only a relay, which creates the
+ * inner App frame once the host hands it the view's HTML
  * (`ui/notifications/sandbox-resource-ready`) and then forwards messages
- * between the host and that frame alone. Neither frame may navigate the top
- * window, open popups, or submit forms.
+ * between the host and that frame alone. The view runs on that origin, with
+ * storage of its own, and neither frame may navigate the top window, open
+ * popups, or submit forms.
  */
-export const SANDBOX_PROXY_SANDBOX = "allow-scripts"
-
-/** The sandbox proxy page, told which features the App frame may use. */
-export const sandboxProxyUrl = (allow: string) =>
-  allow
-    ? `${MCP_APP_SANDBOX_PATH}?${new URLSearchParams({ allow })}`
-    : MCP_APP_SANDBOX_PATH
+export const SANDBOX_PROXY_SANDBOX = "allow-scripts allow-same-origin"
 
 /**
- * Prepends a CSP meta so the policy governs every script the document holds;
- * `decorate` may adjust the parsed document before it is serialized.
+ * Whether views may show on a page at `pageOrigin`: one of the origins AOS UI
+ * is opened at, and never its sandbox's.
  */
-export function injectHtmlCsp(
-  html: string,
-  policy: string,
-  decorate?: (document: Document) => void
-): string {
-  const document = new DOMParser().parseFromString(html, "text/html")
-  const meta = document.createElement("meta")
-  meta.httpEquiv = "Content-Security-Policy"
-  meta.content = policy
-  document.head.prepend(meta)
-  decorate?.(document)
-  return `<!doctype html>${document.documentElement.outerHTML}`
-}
+export const showsViewsAt = (
+  origins: DeploymentOrigins | undefined,
+  pageOrigin: string
+): origins is DeploymentOrigins =>
+  origins !== undefined &&
+  origins.publicOrigins.includes(pageOrigin) &&
+  origins.mcpAppSandboxOrigin !== pageOrigin
 
 /**
  * The host sizes an inline view to its reported height, so its root never
@@ -43,23 +34,22 @@ const APP_ROOT_STYLE =
   ":root{scrollbar-width:none}:root::-webkit-scrollbar{display:none}"
 
 /**
- * The view's HTML with the sandbox policy in force, the host's scrollbar rule,
- * and the operator's language and direction on its root unless the App
- * declared its own: the host context carries a locale but no direction.
+ * The view's HTML with the host's scrollbar rule, and the operator's language
+ * and direction on its root unless the App declared its own: the host context
+ * carries a locale but no direction. The view's frame inherits its sandbox
+ * page's policy, so the document carries none of its own.
  */
 export function prepareAppDocument(
   html: string,
-  { csp, lang, dir }: { csp: string; lang: string; dir: "ltr" | "rtl" }
+  { lang, dir }: { lang: string; dir: "ltr" | "rtl" }
 ): string {
-  return injectHtmlCsp(html, csp, (document) => {
-    const root = document.documentElement
-    const style = document.createElement("style")
-    style.textContent = APP_ROOT_STYLE
-    // After the policy, before the view's own styles, which may override it.
-    document.head
-      .querySelector('meta[http-equiv="Content-Security-Policy"]')
-      ?.after(style)
-    if (!root.hasAttribute("lang")) root.setAttribute("lang", lang)
-    if (!root.hasAttribute("dir")) root.setAttribute("dir", dir)
-  })
+  const document = new DOMParser().parseFromString(html, "text/html")
+  const root = document.documentElement
+  const style = document.createElement("style")
+  style.textContent = APP_ROOT_STYLE
+  // Before the view's own styles, which may override it.
+  document.head.prepend(style)
+  if (!root.hasAttribute("lang")) root.setAttribute("lang", lang)
+  if (!root.hasAttribute("dir")) root.setAttribute("dir", dir)
+  return `<!doctype html>${root.outerHTML}`
 }

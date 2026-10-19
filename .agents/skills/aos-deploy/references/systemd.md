@@ -19,8 +19,9 @@ listens on host loopback); OpenCode then also needs
 between the harness overlay and that slot, and an optional host-owned overlay
 such as `/etc/aos-ui/compose.service.yaml` goes last. With
 `deploy/compose.host.yaml`, nothing is published: Caddy listens on
-`127.0.0.1:18080` and `127.0.0.1:18081` itself, and the gateway configuration
-must list `127.0.0.1` as both listener hosts. Set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` in
+`127.0.0.1:18080` and `127.0.0.1:18081` itself, and on `127.0.0.1:18082` for
+the MCP App sandbox site, and the gateway configuration must list `127.0.0.1`
+as both listener hosts. Set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` in
 `/etc/aos-ui/aos-ui.env` to match the host user the containers should run as; the
 runtime overlays use these to set `user:` and volume ownership.
 Bind the published lane ports to loopback or an explicitly trusted private interface.
@@ -98,8 +99,10 @@ Published ports are commonly overridden in a host overlay; the operator lane
 remains loopback-only regardless. The public reverse proxy points only at the
 guest lane, published with `AOS_UI_GUEST_BIND_ADDRESS` and
 `AOS_UI_GUEST_PUBLISHED_PORT` (or Caddy's `127.0.0.1:18081` under
-`deploy/compose.host.yaml`); it never points at the operator lane, a gateway or
-web server listener directly, or the native runtime port.
+`deploy/compose.host.yaml`), and, for the MCP App sandbox address and any
+stable hosts, at the sandbox site, published with `AOS_UI_SANDBOX_BIND_ADDRESS`
+and `AOS_UI_SANDBOX_PUBLISHED_PORT` (or Caddy's `127.0.0.1:18082`); it never points at the operator lane, a
+gateway or web server listener directly, or the native runtime port.
 
 ## Reverse proxy and optional Cloudflare Tunnel
 
@@ -111,10 +114,11 @@ answers only the lane's own `Host` names (421 otherwise). Configure a separate
 guest virtual host so an unmatched route cannot fall through to a private AOS
 or native runtime host.
 
-If the operator explicitly selected Cloudflare Tunnel, its single ingress
-hostname may point to the loopback guest lane. Do not add `/hermes`,
-`/auth`, the operator lane, or the native runtime as tunnel ingress
-services. DNS/tunnel credentials are operator-managed external state and require
+If the operator explicitly selected Cloudflare Tunnel, its ingress hostnames
+may point only to the loopback guest lane, for the guest name, and to the
+loopback sandbox site, for the MCP App sandbox name. Do not add `/hermes`,
+`/auth`, the operator lane, or the native runtime as tunnel ingress services.
+DNS/tunnel credentials are operator-managed external state and require
 confirmation before changing.
 
 Verify unauthenticated `GET /api/v1/runtime` returns `401` through the guest

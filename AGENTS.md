@@ -143,17 +143,21 @@ the guest lane. An external TLS reverse proxy is optional.
   charts, maps, tools, and Mermaid; never execute generated code or
   arbitrary HTML in the browser. The one exception is an MCP App: HTML its own
   MCP server authored as a `ui://` resource, rendered only inside the
-  opaque-origin double iframe with a CSP built from its declared domains. The
-  browser never talks to an MCP server; every App request goes through the
-  gateway, scoped to the tool call's own Session, and the card keeps its textual
-  details. Inside it, Agent HTML a file-showing view previews runs its scripts
-  in a nested `sandbox="allow-scripts"` frame: an opaque origin with no
-  same-origin access, popups, forms, or top navigation, under a policy whose
-  `connect-src`, `frame-src`, `base-uri`, and `form-action` are `'none'`, so it
-  reaches no file and no network beyond the scripts, styles, and fonts it may
-  load from the public CDNs `AGENT_HTML_DOMAINS` names (Google Fonts and
-  Tailwind's Play CDN). Add a host there only if no one but its owner
-  publishes to it and no one else can read who asked.
+  double iframe on the deployment's one sandbox origin, under each view's own
+  CSP built from its declared domains. The browser never talks to an MCP
+  server; every App request goes through the gateway, scoped to the tool
+  call's own Session, and the card keeps its textual details. Inside it,
+  Agent HTML a file-showing view previews runs its scripts in a nested
+  `sandbox="allow-scripts"` frame: an opaque origin with no same-origin
+  access, popups, forms, or top navigation, under a policy whose
+  `connect-src`, `frame-src`, `base-uri`, and `form-action` are `'none'`, so
+  it reaches no file and no network directly. It
+  gets in-memory `localStorage` and `sessionStorage` for the life of the
+  preview, and its `https:` link clicks and `window.open` calls are relayed by
+  the view to the workspace as `ui/open-link`. It may load scripts, styles, and
+  fonts from the public CDNs `AGENT_HTML_DOMAINS` names (Google Fonts and
+  Tailwind's Play CDN). Add a host there only if no one but its owner publishes
+  to it and no one else can read who asked.
 - Preserve the separation between compact, inspectable execution history and
   first-class assistant outcomes. Final prose and meaningful rich UI remain
   visible message content; follow `DESIGN.md` for the governing principles.
@@ -366,6 +370,13 @@ Additional checks by area:
   there. A second look in the other theme is earned only by a change to
   color, contrast, or theme tokens; a behavior change that happens to alter
   what renders needs no theme pass at all, its tests already cover it.
+  To run e2e against an external preview instead of the built-in server, set
+  `AOS_UI_E2E_BASE_URL` to the preview's root URL. The stable-origins spec
+  needs a second preview with stable origins on; point it there with
+  `AOS_UI_E2E_STABLE_ORIGINS_BASE_URL`, and build it with
+  `AOS_UI_E2E_STABLE_ORIGINS_PORT` set to its port, or its artifact view
+  expects no port and keeps nothing. Without that variable, an external run
+  skips the stable-origins spec.
 - Tools MCP server or shared presentation schemas: `bunx vitest run packages/tools-mcp`
   and `tsc -p tsconfig.tools-mcp.json --noEmit`; both also run inside the root
   test, test:gate, and typecheck gates.

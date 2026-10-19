@@ -15,7 +15,6 @@ const domTests = [
   "src/components/assistant-ui/elements/mermaid-sanitize.test.ts",
   "src/components/keyboard/focus-regions.test.ts",
   "src/components/keyboard/keyboard-settings.test.ts",
-  "src/components/mcp-apps/sandbox-proxy.test.ts",
   "src/components/mcp-apps/sandbox-relay.test.ts",
   "src/components/workspace/session-tab-undo.test.ts",
   "src/components/workspace/use-install-prompt.test.ts",

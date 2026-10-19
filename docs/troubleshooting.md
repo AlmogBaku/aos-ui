@@ -37,7 +37,7 @@ in the query.
 
 | Response | Where it comes from |
 | --- | --- |
-| `421 Misdirected Request` | Caddy: the request's `Host` is not `127.0.0.1`, `localhost`, or the lane's `AOS_UI_PUBLIC_HOST` / `AOS_UI_GUEST_PUBLIC_HOST`. Set the name the browser uses. |
+| `421 Misdirected Request` | Caddy: the request's `Host` is not `127.0.0.1`, `localhost`, or the lane's `AOS_UI_PUBLIC_HOST` / `AOS_UI_GUEST_PUBLIC_HOST`. Set the name the browser uses. On the sandbox site, the `Host` is neither the sandbox address nor a stable host; a sandbox or stable host sent to a lane's port gets 421 too, so route it to the sandbox site. |
 | `502 Bad Gateway` | Caddy cannot reach the web server or gateway lane. Under `compose.dev.yaml`, the guest site reaches the `web-guest` service, so check that it is running. On the guest lane's `/api/v1` with no gateway guest listener, add `deploy/compose.operator-only.yaml`; see [Run without the guest lane](deployment.md#run-without-the-guest-lane). |
 | `404` on an `/api` path | The web server answers no `/api` path, and the gateway answers nothing outside `/api/v1`; operator-only gateway routes such as invitations and push answer 404 on the guest lane. |
 | `405` | The web server accepts only GET and HEAD. |
@@ -130,6 +130,11 @@ table (52 for Tailscale) sends Docker's bridge ranges, such as
 or add an `ip rule` with a higher priority than the VPN's that looks up the
 `main` table for the Docker bridge subnets.
 
+If the host's default route is a VPN exit node, replies to connections arriving
+on the public interface leave by the VPN, and the connection times out. Add a
+source routing rule, such as
+`ip rule add from <public-interface address> lookup main`.
+
 ## The gateway container cannot reach Hermes
 
 A host service bound only to `127.0.0.1` is not reachable through Docker's host gateway, and Hermes' `Host` check rejects `host.docker.internal`, so a bridged gateway cannot use that name for a Hermes on the host. Run the host-networking shape, adding `-f deploy/compose.host.yaml` after the harness overlay, with the gateway's listeners and `runtime.baseUrl` on `127.0.0.1`; see [Deployment](deployment.md#host-networking). Otherwise bind Hermes to a trusted interface the bridge can reach under a `Host` name Hermes accepts, and update the private gateway config's `runtime.baseUrl`.
@@ -215,6 +220,109 @@ Voice requires either the relevant native runtime STT/TTS configuration or a `vo
   expose MCP tools, so the tools are not callable through AOS. This is an
   upstream limit, not a configuration error.
 
+## MCP App views show as unavailable
+
+Views display as unavailable in their card when the workspace cannot load the
+sandbox page. The card names the reason.
+
+**"Apps show only at an address `AOS_UI_PUBLIC_ORIGIN` lists, and this page is at `<origin>`."** (Hebrew: "יישומונים מוצגים רק בכתובת שמופיעה ב־`AOS_UI_PUBLIC_ORIGIN`, והדף הזה נמצא ב־`<origin>`.")
+The workspace's own origin is not in the `publicOrigins` list, or it equals
+the sandbox origin. This happens when:
+
+- `AOS_UI_PUBLIC_ORIGIN` does not list the exact origin the browser used to
+  open the page, on the operator or the guest lane. Check that the value is a
+  comma-separated list of exact origins (`https://agents.example`, not
+  `https://agents.example/`) naming every lane's addresses, and that the
+  browser's address bar shows one of them. The workspace opened at the sandbox
+  origin itself shows the same message.
+- The `/runtime-config.json` response is missing `publicOrigins` or
+  `mcpAppSandboxOrigin`. Check that the web server is running and that both
+  settings are set; `curl -s http://127.0.0.1:3000/runtime-config.json | bun -e
+  "const d=await Bun.stdin.json(); console.log(d.publicOrigins, d.mcpAppSandboxOrigin)"`.
+
+**The sandbox page does not load.** The sandbox address is unreachable, or the
+proxy is misrouting it. Verify:
+
+1. The sandbox address is routed to Caddy's sandbox site, or to the web server
+   itself, not to a lane's port or the gateway.
+   `curl -I https://mcp-apps.example.com/api/v1/healthz` must return 404, not
+   200, 421, or a gateway response.
+2. The reverse proxy keeps the original `Host` header. The web server and Caddy
+   both identify the sandbox by host and port; a proxy that rewrites `Host`
+   makes them treat the request as a lane request, which returns 404 for the
+   sandbox page.
+3. The sandbox name resolves to the right address and has a valid TLS
+   certificate; see [DNS and certificate](deployment.md#dns-and-certificate).
+4. Guests can reach it. One sandbox serves both lanes, so when views fail for
+   guests alone, the sandbox address is missing from their route: a guest lane
+   behind a tunnel needs the sandbox name in that tunnel too, sent to the
+   sandbox site. When the sandbox is reachable only through that public route,
+   the operator's views stop showing while the route is down too.
+
+**421 from the gateway for a non-browser caller.** The gateway answers 421 for
+any `Host` that is not in its allowed origins and is not exactly `localhost`,
+`127.0.0.1`, or `[::1]`. This includes container names, `host.docker.internal`,
+and sandbox addresses. A container name can never be listed: the gateway admits
+only `https:` origins, or `http:` on an exact loopback host, so
+`http://gateway:4100` always gets 421. A caller that sets `AOS_GATEWAY_URL`,
+such as `aos-invite-link`, must either:
+
+- from a container, use an `https:` name the gateway's listener lists, such as
+  the lane's own `https://agents.example`; or
+- run under [host networking](deployment.md#host-networking) and use
+  `http://127.0.0.1:4100`.
+
+Under bridged Compose the gateway's port 4100 is not published to the host
+either, so `http://127.0.0.1:4100` reaches nothing there.
+
+## A view loads from the shared sandbox instead of its stable origin
+
+The gateway drops a declared `domain` and opens the view on the shared sandbox
+when the domain's first label does not match the key it computed for the URL it
+dialed. Check the gateway log for `mcp_app.domain.dropped`:
+
+| `reason`    | Meaning                                                                   | Fix                                                                                                    |
+| ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `mismatch`  | The domain is a valid host name but its first label does not equal the expected key | Confirm `AOS_UI_TOOLS_MCP_URL` equals the URL the gateway dials — including any `mcpApps.fallback` override in the gateway config |
+| `malformed` | The declared value is not a valid lowercase host name                     | Confirm the tools server starts without error and declares a domain; check `AOS_UI_MCP_APP_STABLE_ORIGINS` |
+
+The log carries the server name but never the URL. The most common mismatch is
+`AOS_UI_TOOLS_MCP_URL` naming a different URL than `mcpApps.fallback.servers.aos-ui.url` in the gateway configuration. Under the Hermes overlay both default to `http://tools-mcp:4110/mcp`. The OpenCode overlay sets no override: the gateway dials the URL OpenCode registers, also `http://tools-mcp:4110/mcp`. Under host networking both default to `http://127.0.0.1:4110/mcp`.
+
+## A stable host returns 421 or 404
+
+A request for an exact stable host, such as `<32hexkey>.mcp-apps.example.com`,
+returns **421** through Caddy when `AOS_UI_MCP_APP_STABLE_ORIGINS` is not set:
+the sandbox site's `@stable` matcher never fires, so the host falls through to
+its closing 421. The web server returns **404** directly (past Caddy) for any
+host at or below the domain that is neither the sandbox address nor exactly a
+stable host on the wildcard's port; this is intentional.
+
+Other causes of a stable host not loading:
+
+- **Near-miss host through Caddy** (wrong label length, non-hex label, extra
+  label, wrong port): also gets the sandbox site's 421.
+- **Sent to a lane's port**: a lane site gives every stable host 421; route
+  them to the sandbox site.
+- **DNS not resolving**: the wildcard `*.mcp-apps.example.com` DNS record does
+  not point to the Caddy host.
+- **TLS not valid**: the certificate does not cover `*.mcp-apps.example.com`;
+  behind Cloudflare's proxy or tunnel, the free edge certificate does not. See
+  [DNS and certificate](deployment.md#dns-and-certificate).
+
+Check that `AOS_UI_MCP_APP_STABLE_ORIGINS` is set in the environment Compose
+reads (`.env` or the system environment) and that DNS and TLS are in place for
+the wildcard domain.
+
+## The web server refuses to start with `AOS_UI_MCP_APP_STABLE_ORIGINS`
+
+The web server logs the setting name and the reason it refused it. Common causes:
+
+- **Not a wildcard origin.** The value must be `<scheme>://*.<domain>[:port]`; omitting `*.` is the most frequent mistake.
+- **A lane host is at or below `<domain>`, or the sandbox host is below it.** For example, if `AOS_UI_PUBLIC_ORIGIN` is `https://agents.example` and `AOS_UI_MCP_APP_STABLE_ORIGINS` is `https://*.agents.example`, the lane origin `agents.example` is at `<domain>`. Choose a domain that no lane host is at or below, such as `https://*.mcp-apps.example.com`. The sandbox may be that domain itself, `https://mcp-apps.example.com`, but not a name below it.
+- **`http:` wildcard under an `https:` lane.** The wildcard must be `https:` when any lane is.
+- **Loopback mismatch.** The wildcard must be loopback exactly when the lanes are, and a loopback value must be a name below `localhost`, such as `http://*.mcp-apps.localhost:3002` on the Compose sandbox site's port.
+
 ## A published Artifact cannot load
 
 ### present_artifact file not loading
@@ -269,7 +377,7 @@ explains each listing code.
 For HTML files shown in the `present_artifact` card:
 
 - The view loads no external or relative resources; an HTML file that needs them must inline everything.
-- Inline scripts run, but in an opaque origin with no network: a script that fetches, opens a frame, submits a form, or reads storage fails in the preview.
+- Inline scripts run in an opaque origin with no network: a script that fetches, opens a frame, or submits a form fails in the preview. Web storage (`localStorage`, `sessionStorage`) is available through an in-memory stand-in for the life of the preview; property-style access (`localStorage.foo`) is not supported, use `getItem`/`setItem`. An `https:` link click or `window.open` is relayed to the workspace and opens in a new tab.
 - Images and media from `blob:` addresses stay blank; inline them as `data:` addresses.
 
 For PDFs:

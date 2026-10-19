@@ -20,6 +20,11 @@ export type PresentationView = {
  * owners publish to them, and no one else reads who asked, so a page that
  * loads from them signals nothing to anyone. A host anyone may publish to,
  * such as an npm mirror whose per-file hit counts are public, would.
+ *
+ * Agent HTML also has storage of its own (via the stand-in, which the
+ * artifact view saves per file on its stable origin) and relays `https:`
+ * links to the workspace. Loading from these CDNs signals nothing beyond what
+ * an ordinary https link click would.
  */
 export const AGENT_HTML_DOMAINS = [
   "https://fonts.googleapis.com",
@@ -58,6 +63,14 @@ export const presentationViewNames = Object.values(presentationViews).map(
 )
 
 /**
+ * The `<meta>` name under which the `aos-ui` server writes, into the artifact
+ * view's HTML, the host the view expects when it declares a stable origin: its
+ * `domain`, with the stable origins' port, if they name one. Only on that host
+ * does the view keep Agent HTML storage past the preview.
+ */
+export const ARTIFACT_VIEW_HOST_META = "aos-ui-artifact-host"
+
+/**
  * Where the artifact view reads pdf.js's own files from the `aos-ui` server:
  * its worker, character maps, standard fonts, and image decoders, each by its
  * path in the pdf.js package. The view's sandbox fetches nothing else.
@@ -90,6 +103,21 @@ export const GRAMMAR_RESOURCE_URI = "ui://aos-ui/grammars/"
  */
 export const FIXTURE_AOS_UI_MCP_PATH = "/fixture/aos-ui-mcp.json"
 
+/**
+ * The domain the fixture's stable origins sit under, as the preview that
+ * turns them on names them: `http://*.mcp-apps.localhost:<its port>`.
+ */
+export const FIXTURE_MCP_APP_STABLE_DOMAIN = "mcp-apps.localhost"
+
+/**
+ * The fixture's artifact view's `_meta.ui.domain`: the stable origin key of
+ * `http://127.0.0.1:4110/mcp`, the URL a harness on the host registers the
+ * `aos-ui` server at, below `FIXTURE_MCP_APP_STABLE_DOMAIN`. The browser
+ * computes no key, so it was computed once and pasted:
+ * `bun -e 'import { mcpAppStableOriginKey } from "@harness-gw/sdk/node"; console.log(mcpAppStableOriginKey("http://127.0.0.1:4110/mcp"))'`.
+ */
+export const FIXTURE_ARTIFACT_VIEW_DOMAIN = `7cc446137c2736c67e8c3639c0348c67.${FIXTURE_MCP_APP_STABLE_DOMAIN}`
+
 /** The path prefix for the synthetic files the fixture serves to the artifact view. */
 export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files"
 
@@ -115,9 +143,37 @@ export const FIXTURE_MCP_APP_FILES = {
 } as const
 
 /**
- * The exact URL paths that must carry `Access-Control-Allow-Origin: null`
- * so the artifact view can fetch them from its opaque-origin sandbox frame.
+ * The exact URL paths that carry `Access-Control-Allow-Origin: *`, so the
+ * artifact view can fetch them from the sandbox origin.
  */
 export const FIXTURE_MCP_APP_FILE_PATHS = Object.values(
   FIXTURE_MCP_APP_FILES
 ).map((name) => `${FIXTURE_MCP_APP_FILES_PATH}/${name}`)
+
+/**
+ * Each fixture file's `fileId` by its path, as the tools server and the
+ * gateway give one: `artifactFileId` (`@harness-gw/sdk/node`) of the path.
+ * The browser computes none, so each was computed once and pasted:
+ * `bun -e 'import { artifactFileId } from "@harness-gw/sdk/node"; console.log(artifactFileId("/fixture/mcp-app-files/report.pdf"))'`.
+ */
+export const FIXTURE_MCP_APP_FILE_IDS: ReadonlyMap<string, string> = new Map(
+  (
+    [
+      ["pdf", "83dd05ab7501dab3"],
+      ["png", "39f6f21ba2b120b9"],
+      ["html", "31f870e8fd4a5d2e"],
+      ["audio", "64791ac3ef3d8d6d"],
+      ["video", "9e3286011078f802"],
+      ["markdown", "2ac3018a4fdefe21"],
+      ["csv", "37ef13d87f7a4393"],
+      ["json", "e633aa9f35c4e001"],
+      ["code", "aa845e2768a8c3f0"],
+      ["page", "19ca46590f90e9d6"],
+    ] as const satisfies ReadonlyArray<
+      readonly [keyof typeof FIXTURE_MCP_APP_FILES, string]
+    >
+  ).map(([file, fileId]) => [
+    `${FIXTURE_MCP_APP_FILES_PATH}/${FIXTURE_MCP_APP_FILES[file]}`,
+    fileId,
+  ])
+)

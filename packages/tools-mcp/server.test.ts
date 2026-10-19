@@ -1,18 +1,20 @@
 // @vitest-environment node
 
+import { artifactFileId } from "@harness-gw/sdk/node"
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
-import { createToolsServer } from "./server"
+import { ARTIFACT_VIEW_HOST_META } from "../../shared/presentation/views"
+import { toolsServerFactory } from "./server"
 
 const client = new Client({ name: "tools-mcp-test", version: "0.0.0" })
 
 /** Stand-ins for the built documents, which `views/build.test.ts` covers. */
 const views = {
-  chart: "<!doctype html><title>chart</title>",
-  map: "<!doctype html><title>map</title>",
-  stats: "<!doctype html><title>stats</title>",
-  artifact: "<!doctype html><title>artifact</title>",
+  chart: "<!doctype html><head><title>chart</title></head>",
+  map: "<!doctype html><head><title>map</title></head>",
+  stats: "<!doctype html><head><title>stats</title></head>",
+  artifact: "<!doctype html><head><title>artifact</title></head>",
 }
 
 /** Stand-ins for pdf.js's files, which `views/build.test.ts` also covers. */
@@ -30,7 +32,7 @@ const maplibre = new Map([
 beforeAll(async () => {
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()
-  await createToolsServer({ views, pdfjs, grammars, maplibre }).connect(
+  await toolsServerFactory({ views, pdfjs, grammars, maplibre })().connect(
     serverTransport
   )
   await client.connect(clientTransport)
@@ -167,6 +169,35 @@ describe("MCP App views", () => {
       ])
     }
   )
+
+  it("declares the stable origin it is given on the artifact view alone, in its listing and its content, and names in its HTML the host it expects", async () => {
+    const domain = "0123456789abcdef0123456789abcdef.mcp-apps.example.test"
+    const host = `${domain}:8443`
+    const stable = new Client({ name: "tools-mcp-test", version: "0.0.0" })
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair()
+    await toolsServerFactory(
+      { views },
+      { artifactStableOrigin: { domain, host } }
+    )().connect(serverTransport)
+    await stable.connect(clientTransport)
+
+    const { resources } = await stable.listResources()
+    for (const [, uri, view, ui] of declared) {
+      const artifact = view === "artifact"
+      const listed = resources.find((resource) => resource.uri === uri)
+      const [content] = (await stable.readResource({ uri })).contents
+      expect(listed?._meta?.ui, uri).toEqual(artifact ? { ...ui, domain } : ui)
+      expect(content?._meta?.ui, uri).toEqual(artifact ? { ...ui, domain } : ui)
+      const text = content && "text" in content ? content.text : undefined
+      if (artifact)
+        expect(text).toContain(
+          `<meta name="${ARTIFACT_VIEW_HOST_META}" content="${host}">`
+        )
+      else expect(text, uri).toBe(views[view])
+    }
+    await stable.close()
+  })
 })
 
 describe("view files", () => {
@@ -372,7 +403,7 @@ describe("present_artifact", () => {
     }
   )
 
-  it("gives one path one id whatever its title or spelling, and another path another", async () => {
+  it("gives one path the id the gateway gives it, whatever its title or spelling, and another path another", async () => {
     const id = async (args: Record<string, unknown>) =>
       (
         (await call("present_artifact", args)).structuredContent as {
@@ -381,6 +412,7 @@ describe("present_artifact", () => {
       ).value.fileId
     const plain = await id({ path: "/workspace/out/report.pdf" })
 
+    expect(plain).toBe(artifactFileId("/workspace/out/report.pdf"))
     expect(await id({ path: "/workspace/out/report.pdf", title: "Q3" })).toBe(
       plain
     )

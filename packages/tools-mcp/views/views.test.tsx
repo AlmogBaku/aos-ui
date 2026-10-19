@@ -11,9 +11,10 @@ import {
 import userEvent from "@testing-library/user-event"
 import type { PDFDocumentProxy } from "pdfjs-dist"
 import { bundledLanguagesInfo } from "shiki/langs"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest"
 
 import { Code } from "./artifact/code"
+import { AGENT_STORAGE, agentStorage } from "./artifact/html-preview"
 import { PREVIEW_LIMITS, knownType, textFormat } from "./artifact/file"
 import { keyAction } from "./artifact/zoom"
 import { PdfPages } from "./artifact/pdf-preview"
@@ -24,7 +25,10 @@ import { MapView } from "./map-view"
 import { StatsView } from "./stats-view"
 import { presentationValue, resultValue, type ViewApp } from "./view"
 import { render_chartSchema } from "../../../shared/presentation/tools"
-import { GRAMMAR_RESOURCE_URI } from "../../../shared/presentation/views"
+import {
+  ARTIFACT_VIEW_HOST_META,
+  GRAMMAR_RESOURCE_URI,
+} from "../../../shared/presentation/views"
 
 afterEach(() => {
   cleanup()
@@ -220,7 +224,7 @@ describe("artifact view", () => {
    * unless `context` says otherwise.
    */
   function showFile(
-    file: { filename: string; mimeType?: string },
+    file: { filename: string; mimeType?: string; fileId?: string },
     body: string,
     context: McpUiHostContext = {}
   ) {
@@ -790,6 +794,60 @@ describe("artifact view", () => {
     )
     expect(document.querySelector("h1")?.textContent).toBe("Launch plan")
     expect(screen.queryByRole("heading", { name: "Launch plan" })).toBeNull()
+  })
+
+  it("starts each preview of an HTML file, before the file's own scripts, from what it saved on the host the tools server named", async () => {
+    const user = userEvent.setup()
+    const fileId = "31f870e8fd4a5d2e"
+    // The tools server names the view's stable host in its HTML; here it is
+    // the host the test's page runs on.
+    const named = document.createElement("meta")
+    named.name = ARTIFACT_VIEW_HOST_META
+    named.content = location.host
+    document.head.append(named)
+    onTestFinished(() => {
+      named.remove()
+      localStorage.clear()
+    })
+    agentStorage(window, fileId, location.host)?.save({
+      ticks: "[1]</script><script>escaped()</script>",
+    })
+    showFile(
+      { filename: "plan.html", fileId },
+      "<script>parent.postMessage('ran', '*')</script><h1>Launch plan</h1>"
+    )
+    const scripts = (frame: HTMLElement) =>
+      [
+        ...new DOMParser().parseFromString(
+          frame.getAttribute("srcdoc") ?? "",
+          "text/html"
+        ).scripts,
+      ].map((script) => script.textContent)
+
+    const frame = await screen.findByTitle("HTML preview")
+    const shown = scripts(frame)
+    const saved = shown.findIndex((text) => text.includes("[1]"))
+    expect(saved).toBeGreaterThan(-1)
+    expect(saved).toBeLessThan(shown.findIndex((text) => text.includes("ran")))
+    // A saved value never closes the script that carries it.
+    expect(shown).not.toContain("escaped()")
+
+    // The file's own frame saves what it stores; the frame keeps showing, and
+    // the next preview of the file starts from it.
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame instanceof HTMLIFrameElement ? frame.contentWindow : null,
+        data: { type: AGENT_STORAGE, items: { ticks: "[1,3]" } },
+      })
+    )
+    expect(scripts(screen.getByTitle("HTML preview"))).toEqual(shown)
+    await user.click(screen.getByRole("tab", { name: "Source" }))
+    await user.click(screen.getByRole("tab", { name: "Preview" }))
+    expect(
+      scripts(await screen.findByTitle("HTML preview")).some((text) =>
+        text.includes('"ticks":"[1,3]"')
+      )
+    ).toBe(true)
   })
 
   it("zooms an image with Ctrl and the wheel and the zoom keys, leaving a plain wheel to scroll", async () => {

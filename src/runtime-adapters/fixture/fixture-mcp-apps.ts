@@ -1,8 +1,15 @@
 import type { ReadResourceResult } from "@modelcontextprotocol/client"
+import { z } from "zod"
 
-import { viewerFileResult, type McpAppView } from "@harness-gw/sdk/protocol"
+import {
+  McpUiCspSchema,
+  McpUiDomainSchema,
+  viewerFileResult,
+  type McpAppView,
+} from "@harness-gw/sdk/protocol"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
+  FIXTURE_MCP_APP_FILE_IDS,
   FIXTURE_MCP_APP_FILES_PATH,
 } from "@shared/presentation/views"
 
@@ -45,7 +52,10 @@ function withheldFiles(args: FixturePresentationCall["args"]) {
  * A deterministic App view that speaks the MCP Apps postMessage protocol by
  * hand: it initializes, shows the tool input and result the host sends, calls
  * one app-only tool, sends one `ui/message`, asks for full screen and back,
- * shows the display mode the host reports, and reports its height.
+ * shows the display mode the host reports, and reports its height. It keeps a
+ * value in its own storage, and tries what its sandbox must refuse: a
+ * connection through its sandbox page, which shares its origin, and taking
+ * that page's frame to an address the view never declared.
  */
 const FIXTURE_APP_HTML = `<!doctype html>
 <html>
@@ -65,7 +75,10 @@ const FIXTURE_APP_HTML = `<!doctype html>
 <button id="ask" type="button">Ask for a summary</button>
 <button id="fullscreen" type="button">Fullscreen</button>
 <button id="inline" type="button">Inline view</button>
+<button id="leave" type="button">Leave the sandbox</button>
 <p id="mode">…</p>
+<p id="storage">…</p>
+<p id="network">…</p>
 <p id="status" role="status"></p>
 <script>
   let nextId = 1
@@ -120,6 +133,21 @@ const FIXTURE_APP_HTML = `<!doctype html>
     requestMode("fullscreen"))
   document.getElementById("inline").addEventListener("click",
     requestMode("inline"))
+  try {
+    localStorage.setItem("launch-board", "kept")
+    show("storage", "Storage: " + localStorage.getItem("launch-board"))
+  } catch {
+    show("storage", "Storage: refused")
+  }
+  window.parent.fetch("https://files.invalid/board").then(
+    () => show("network", "Network: reached"),
+    () => show("network", "Network: refused"))
+  // The sandbox page runs the script, so the navigation is its own.
+  document.getElementById("leave").addEventListener("click", () => {
+    const script = window.parent.document.createElement("script")
+    script.textContent = 'location.href = "https://files.invalid/"'
+    window.parent.document.body.append(script)
+  })
   document.getElementById("ask").addEventListener("click", async () => {
     const result = await request("ui/message", { role: "user",
       content: [{ type: "text", text: "Summarize the launch board" }] })
@@ -159,10 +187,31 @@ function recordedToolsServer(): () => Promise<RecordedToolsServer> {
 /** The viewer a published attachment opens in, as the gateway configures it by default. */
 const ARTIFACT_VIEWER = "ui://aos-ui/artifact"
 
+const DeclaredUiSchema = z.object({
+  csp: McpUiCspSchema.optional(),
+  domain: McpUiDomainSchema.optional(),
+})
+
+/**
+ * What a recorded view's `_meta.ui` declares that the gateway hands its host:
+ * its policy, and the stable origin it asks for, which the host applies only
+ * when its stable origins are on.
+ */
+function declaredUi(
+  content: ReadResourceResult["contents"][number]
+): Pick<McpAppView, "csp" | "domain"> {
+  const ui = DeclaredUiSchema.safeParse(content._meta?.ui).data
+  return {
+    ...(ui?.csp ? { csp: ui.csp } : {}),
+    ...(ui?.domain ? { domain: ui.domain } : {}),
+  }
+}
+
 /**
  * A published attachment's one file, at the address the preview serves it
- * from. An id the catalog lacks is gone, as a pruned attachment is; one whose
- * bytes are inline has no address the sandboxed viewer could fetch.
+ * from, and its `fileId`. An id the catalog lacks is gone, as a pruned
+ * attachment is; one whose bytes are inline has no address the sandboxed
+ * viewer could fetch.
  */
 function attachmentFile(artifactId: string) {
   const artifact = Object.values(FIXTURE_ARTIFACT_CATALOG.examples).find(
@@ -171,10 +220,12 @@ function attachmentFile(artifactId: string) {
   if (!artifact) throw new ArtifactMissingError()
   if (artifact.source.type !== "provider")
     throw new Error("Fixture attachment has no served file")
+  const { reference } = artifact.source
   return {
     artifact,
+    fileId: FIXTURE_MCP_APP_FILE_IDS.get(reference),
     addresses: {
-      path: new URL(artifact.source.reference, globalThis.location.href).href,
+      path: new URL(reference, globalThis.location.href).href,
     },
   }
 }
@@ -184,17 +235,19 @@ async function attachmentView(
   server: RecordedToolsServer,
   artifactId: string
 ): Promise<McpAppView> {
-  const { artifact, addresses } = attachmentFile(artifactId)
+  const { artifact, fileId, addresses } = attachmentFile(artifactId)
   const content = server.resources[ARTIFACT_VIEWER]?.contents[0]
   if (!content || !("text" in content))
     throw new Error("The artifact viewer is not recorded")
-  const ui = (content._meta as { ui?: { csp?: McpAppView["csp"] } } | undefined)
-    ?.ui
   return {
     html: content.text,
-    ...(ui?.csp ? { csp: ui.csp } : {}),
+    ...declaredUi(content),
     toolInput: {},
-    toolResult: viewerFileResult(artifact),
+    toolResult: viewerFileResult({
+      filename: artifact.filename,
+      mimeType: artifact.mimeType,
+      fileId,
+    }),
     files: { addresses },
   }
 }
@@ -210,12 +263,10 @@ async function presentationView(
     typeof uri === "string" ? server.resources[uri]?.contents[0] : undefined
   if (!content || !("text" in content))
     throw new Error(`${call.toolName} declares no recorded view`)
-  const ui = (content._meta as { ui?: { csp?: McpAppView["csp"] } } | undefined)
-    ?.ui
   const { toolInput, addresses } = withheldFiles(call.args)
   return {
     html: content.text,
-    ...(ui?.csp ? { csp: ui.csp } : {}),
+    ...declaredUi(content),
     toolInput,
     ...(Object.keys(addresses).length ? { files: { addresses } } : {}),
     toolResult: call.result ?? {

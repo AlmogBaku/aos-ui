@@ -1,6 +1,7 @@
 import react from "@vitejs/plugin-react"
 import { readFileSync } from "node:fs"
 import { readdir, readFile, writeFile } from "node:fs/promises"
+import type { IncomingMessage, ServerResponse } from "node:http"
 import path from "node:path"
 import { promisify } from "node:util"
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib"
@@ -17,10 +18,23 @@ import {
   resolveRuntimeConfiguration,
   serializePublicRuntimeConfiguration,
 } from "./shared/runtime-config.ts"
+import { MCP_APP_SANDBOX_PATH } from "@harness-gw/sdk/protocol"
 import {
-  MCP_APP_SANDBOX_CSP,
-  MCP_APP_SANDBOX_PATH,
-} from "@harness-gw/sdk/protocol"
+  MCP_APP_SANDBOX_ORIGIN_SETTING,
+  PUBLIC_ORIGIN_SETTING,
+  readDeploymentOrigins,
+  type DeploymentOrigins,
+} from "./shared/lane-origins.ts"
+import {
+  lanePageFrameSrc,
+  MCP_APP_SANDBOX_SCRIPT_PATH,
+  namesSandboxFile,
+  sandboxAt,
+  sandboxPagePolicy,
+  SERVICE_WORKER_HEADER,
+  stableOriginsOf,
+} from "./shared/mcp-app-sandbox.ts"
+import { requestedFile } from "./server/static.ts"
 import {
   DEFAULT_RUNTIME_MODE,
   getRuntimeEntrypoint,
@@ -28,6 +42,7 @@ import {
 import { readTitleBarColors } from "./shared/theme-color.ts"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
+  FIXTURE_ARTIFACT_VIEW_DOMAIN,
   FIXTURE_MCP_APP_FILE_PATHS,
 } from "./shared/presentation/views.ts"
 import {
@@ -49,25 +64,55 @@ function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   })
 }
 
-function runtimeConfigurationPlugin(environment: NodeJS.ProcessEnv): Plugin {
+const DEV_SERVER_PORT = 3000
+
+type DeploymentOriginsOf = (request: IncomingMessage) => DeploymentOrigins
+
+/**
+ * The deployment's origins, read as the web server reads them
+ * (`readDeploymentOrigins`): its settings, or, where they are unset, loopback
+ * names on `port`, the port a request reached, which is this server's own.
+ * A guest page that frames the sandbox Vite serves, as a harness overlay's
+ * web-guest serves it, is listed in `AOS_UI_PUBLIC_ORIGIN` with the rest.
+ */
+export function deploymentOriginsAt(environment: NodeJS.ProcessEnv) {
+  return (port: number | undefined): DeploymentOrigins => {
+    const loopback: Record<string, string> = {
+      [PUBLIC_ORIGIN_SETTING]: `http://localhost:${port},http://127.0.0.1:${port}`,
+      [MCP_APP_SANDBOX_ORIGIN_SETTING]: `http://sandbox.localhost:${port}`,
+    }
+    return readDeploymentOrigins((name) => environment[name] || loopback[name])
+  }
+}
+
+function runtimeConfigurationPlugin(
+  environment: NodeJS.ProcessEnv,
+  originsOf: DeploymentOriginsOf
+): Plugin {
   const configureRuntimeConfiguration = (
     server: PreviewServer | ViteDevServer
   ) => {
     server.middlewares.use(
       "/runtime-config.json",
-      async (_request, response) => {
+      async (request, response) => {
         response.setHeader("cache-control", "no-store")
         response.setHeader("content-type", "application/json; charset=utf-8")
         try {
           const configFile = environment.AOS_UI_RUNTIME_CONFIG_FILE
-          const body = configFile
-            ? await readFile(path.resolve(configFile), "utf8")
-            : JSON.stringify(
-                serializePublicRuntimeConfiguration(
-                  runtimeConfigurationFromEnvironment(environment)
-                )
+          const configured: unknown = configFile
+            ? JSON.parse(await readFile(path.resolve(configFile), "utf8"))
+            : serializePublicRuntimeConfiguration(
+                runtimeConfigurationFromEnvironment(environment)
               )
-          response.end(body)
+          if (
+            configured === null ||
+            typeof configured !== "object" ||
+            Array.isArray(configured)
+          )
+            throw new Error("The runtime configuration is not an object")
+          // The deployment's origins, over any the file names, as the web
+          // server writes them.
+          response.end(JSON.stringify({ ...configured, ...originsOf(request) }))
         } catch {
           response.statusCode = 500
           response.end(
@@ -154,16 +199,16 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
 }
 
 /**
- * Adds `Access-Control-Allow-Origin: null` to the synthetic fixture
- * files the artifact view fetches from an opaque-origin sandbox frame. Mirrors
- * what `server/static.ts` does in production.
+ * Adds `Access-Control-Allow-Origin: *` to the synthetic fixture files the
+ * artifact view fetches from the sandbox origin. Mirrors what
+ * `server/static.ts` does in production.
  */
 function fixtureMcpAppFilesPlugin(): Plugin {
   const paths = new Set(FIXTURE_MCP_APP_FILE_PATHS)
   const addHeader = (server: PreviewServer | ViteDevServer) => {
     server.middlewares.use((request, response, next) => {
       if (paths.has(request.url?.split("?")[0] ?? ""))
-        response.setHeader("access-control-allow-origin", "null")
+        response.setHeader("access-control-allow-origin", "*")
       next()
     })
   }
@@ -174,32 +219,97 @@ function fixtureMcpAppFilesPlugin(): Plugin {
   }
 }
 
-/** The MCP App sandbox page carries the policy the web server serves it with. */
-function mcpAppSandboxPlugin(): Plugin {
-  const secure = (server: ViteDevServer | PreviewServer) => {
+const notFound = (response: ServerResponse) => {
+  response.statusCode = 404
+  response.end()
+}
+
+/**
+ * The web server's MCP App sandbox rule (`server/web.ts`), ahead of every
+ * other answer these servers give: on the sandbox address, and exactly on each
+ * stable host, only the sandbox page, under its view's policy for that
+ * origin, and its relay script, each by the file the request names and never
+ * as a service worker's script; on any other host at or below the stable
+ * origins' domain nothing; on the lane's own addresses neither file, by that
+ * file or by any path whose last segment names one, as these servers rewrite
+ * paths to files, and pages that frame the sandbox origins alone.
+ */
+function mcpAppSandboxPlugin(originsOf: DeploymentOriginsOf): Plugin {
+  const secure = (server: ViteDevServer | PreviewServer, root: string) => {
+    const files = new Map(
+      [MCP_APP_SANDBOX_PATH, MCP_APP_SANDBOX_SCRIPT_PATH].map((file) => [
+        requestedFile(root, file),
+        file,
+      ])
+    )
     server.middlewares.use((request, response, next) => {
-      if (request.url?.split("?")[0] === MCP_APP_SANDBOX_PATH)
-        response.setHeader("Content-Security-Policy", MCP_APP_SANDBOX_CSP)
+      const origins = originsOf(request)
+      // Prefixed, not resolved, so `//name` stays a path rather than a host.
+      const url = new URL(`http://request.invalid${request.url ?? "/"}`)
+      const requested = requestedFile(root, url.pathname)
+      const file = requested === undefined ? undefined : files.get(requested)
+      const sandbox = sandboxAt(origins, request.headers.host ?? "")
+      if (sandbox === "refused") return notFound(response)
+      if (sandbox === undefined) {
+        if (file !== undefined || namesSandboxFile(url.pathname))
+          return notFound(response)
+        response.setHeader("content-security-policy", lanePageFrameSrc(origins))
+        return next()
+      }
+      if (
+        file === undefined ||
+        request.headers[SERVICE_WORKER_HEADER] !== undefined
+      )
+        return notFound(response)
+      // Served by its own path, which no fallback page answers.
+      request.url = `${file}${url.search}`
+      if (file === MCP_APP_SANDBOX_PATH) {
+        response.setHeader(
+          "content-security-policy",
+          sandboxPagePolicy(sandbox, url.searchParams)
+        )
+        response.setHeader("cache-control", "no-store")
+      }
       next()
     })
   }
   return {
     name: "aos-mcp-app-sandbox",
-    configureServer: secure,
-    configurePreviewServer: secure,
+    configureServer: (server) => secure(server, server.config.publicDir),
+    configurePreviewServer: (server) =>
+      secure(
+        server,
+        path.resolve(server.config.root, server.config.build.outDir)
+      ),
   }
 }
 
-/** The real `aos-ui` server's answers, as JSON, from views built right now. */
-async function recordToolsServer() {
+/**
+ * The real `aos-ui` server's answers, as JSON, from views built right now, its
+ * artifact view on the fixture's stable origin, which a preview with stable
+ * origins on frames it from and any other ignores. The view expects that
+ * origin on `stablePort`, the port of the preview that turns stable origins on
+ * (`AOS_UI_E2E_STABLE_ORIGINS_PORT`); without one it expects no port, which no
+ * preview has, so it keeps Agent HTML storage in memory everywhere.
+ */
+async function recordToolsServer(stablePort: string | undefined) {
   const [views, pdfjs, grammars, maplibre] = await Promise.all([
     buildViews(),
     buildPdfjs(),
     buildGrammars(),
     buildMaplibre(),
   ])
+  const domain = FIXTURE_ARTIFACT_VIEW_DOMAIN
   return JSON.stringify(
-    await snapshotToolsServer({ views, pdfjs, grammars, maplibre })
+    await snapshotToolsServer(
+      { views, pdfjs, grammars, maplibre },
+      {
+        artifactStableOrigin: {
+          domain,
+          host: stablePort ? `${domain}:${stablePort}` : domain,
+        },
+      }
+    )
   )
 }
 
@@ -210,7 +320,7 @@ async function recordToolsServer() {
  * request and again after a view or schema changes; the build writes the file
  * into `dist`, where preview and the web server serve it.
  */
-function fixtureToolsServerPlugin(): Plugin {
+function fixtureToolsServerPlugin(stablePort: string | undefined): Plugin {
   const sources = [
     path.resolve(import.meta.dirname, "packages/tools-mcp"),
     path.resolve(import.meta.dirname, "shared/presentation"),
@@ -229,7 +339,7 @@ function fixtureToolsServerPlugin(): Plugin {
         async (_request, response) => {
           response.setHeader("cache-control", "no-store")
           try {
-            recorded ??= recordToolsServer()
+            recorded ??= recordToolsServer(stablePort)
             const body = await recorded
             response.setHeader(
               "content-type",
@@ -250,7 +360,7 @@ function fixtureToolsServerPlugin(): Plugin {
       this.emitFile({
         type: "asset",
         fileName: FIXTURE_AOS_UI_MCP_PATH.slice(1),
-        source: await recordToolsServer(),
+        source: await recordToolsServer(stablePort),
       })
     },
   }
@@ -355,6 +465,14 @@ export default defineConfig(({ mode }) => {
     environment.AOS_UI_RUNTIME_MODE ??
     DEFAULT_RUNTIME_MODE
   ).replace(/[^a-zA-Z0-9_-]/g, "-")
+  const originsAt = deploymentOriginsAt(environment)
+  const originsOf: DeploymentOriginsOf = (request) =>
+    originsAt(request.socket.localPort)
+  // Read once now, so a malformed setting stops the server and names itself;
+  // the sandbox's name and the stable origins' domain, which no port changes,
+  // join the allowed hosts.
+  const origins = originsAt(DEV_SERVER_PORT)
+  const stableDomain = stableOriginsOf(origins.mcpAppStableOrigins)?.domain
   const allowedHosts = (
     environment.AOS_UI_ALLOWED_HOSTS ??
     environment.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
@@ -362,11 +480,21 @@ export default defineConfig(({ mode }) => {
     ?.split(",")
     .map((host) => host.trim())
     .filter(Boolean)
+    .concat(
+      new URL(origins.mcpAppSandboxOrigin).hostname,
+      stableDomain === undefined ? [] : `.${stableDomain}`
+    )
   const gatewayProxy = {
     "/api/v1": {
       target: environment.AOS_UI_GATEWAY_TARGET ?? "http://127.0.0.1:4100",
       changeOrigin: false,
       ws: true,
+      // No sandbox address, nor any host at or below the stable origins'
+      // domain, reaches the gateway, WebSockets included.
+      bypass: (request: IncomingMessage) =>
+        sandboxAt(originsOf(request), request.headers.host ?? "") === undefined
+          ? undefined
+          : false,
     },
   }
 
@@ -376,13 +504,14 @@ export default defineConfig(({ mode }) => {
       `node_modules/.vite-${cacheKey}`
     ),
     plugins: [
+      // First, so the sandbox address answers nothing the others serve.
+      mcpAppSandboxPlugin(originsOf),
       react(),
       reactCompiler(),
-      runtimeConfigurationPlugin(environment),
+      runtimeConfigurationPlugin(environment, originsOf),
       e2eReadinessPlugin(environment),
-      mcpAppSandboxPlugin(),
       fixtureMcpAppFilesPlugin(),
-      fixtureToolsServerPlugin(),
+      fixtureToolsServerPlugin(environment.AOS_UI_E2E_STABLE_ORIGINS_PORT),
       buildIdPlugin(),
       titleBarColorPlugin(titleBarColors),
       // Push only: `src/sw/sw.ts` is bundled as-is, with no precache manifest
@@ -452,7 +581,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host: "127.0.0.1",
-      port: 3000,
+      port: DEV_SERVER_PORT,
       allowedHosts,
       proxy: gatewayProxy,
     },

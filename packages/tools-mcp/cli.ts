@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { parseArgs } from "node:util"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server"
+import {
+  WebStandardStreamableHTTPServerTransport,
+  type McpServer,
+} from "@modelcontextprotocol/server"
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
 
 import {
@@ -10,11 +13,13 @@ import {
   presentationViewNames,
 } from "../../shared/presentation/views"
 import {
-  createToolsServer,
+  toolsServerFactory,
   type PresentationViewDocuments,
   type ToolsServerFiles,
+  type ToolsServerOptions,
   type ViewFiles,
 } from "./server"
+import { artifactStableOrigin } from "./stable-origin"
 
 const USAGE =
   "Usage: cli.ts --stdio | --http [--host 127.0.0.1] [--port 4110] [--views <dir>]"
@@ -66,10 +71,10 @@ async function loadFolder(
 
 /** One server and transport per request: the tools keep no state to share. */
 async function handleMcp(
-  files: ToolsServerFiles,
+  createServer: () => McpServer,
   request: Request
 ): Promise<Response> {
-  const server = createToolsServer(files)
+  const server = createServer()
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -82,13 +87,17 @@ async function handleMcp(
   }
 }
 
-function serveHttp(files: ToolsServerFiles, hostname: string, port: number) {
+function serveHttp(
+  createServer: () => McpServer,
+  hostname: string,
+  port: number
+) {
   const server = Bun.serve({
     hostname,
     port,
     routes: {
       "/health": { GET: () => new Response("ok") },
-      "/mcp": (request) => handleMcp(files, request),
+      "/mcp": (request) => handleMcp(createServer, request),
     },
     fetch: () => new Response("Not found", { status: 404 }),
   })
@@ -111,6 +120,19 @@ if (import.meta.main) {
     console.error(USAGE)
     process.exit(2)
   }
+  let options: ToolsServerOptions
+  try {
+    const { origin, note } = artifactStableOrigin(
+      process.env,
+      values.stdio === true
+    )
+    options = { artifactStableOrigin: origin }
+    // On stderr, since stdout carries the protocol under --stdio.
+    console.warn(note)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(2)
+  }
   const directory = path.resolve(values.views)
   const files: ToolsServerFiles = await Promise.all([
     loadViews(directory),
@@ -129,7 +151,7 @@ if (import.meta.main) {
       process.exit(1)
     }
   )
-  if (values.stdio)
-    await createToolsServer(files).connect(new StdioServerTransport())
-  else serveHttp(files, values.host, port)
+  const createServer = toolsServerFactory(files, options)
+  if (values.stdio) await createServer().connect(new StdioServerTransport())
+  else serveHttp(createServer, values.host, port)
 }

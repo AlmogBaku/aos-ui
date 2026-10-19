@@ -3,10 +3,18 @@
 <head><meta charset="utf-8"><title>Fixture file</title></head>
 <body>
 <p id="status">scripts are off</p>
+<p id="visits">no visit counted</p>
 <p id="network">network not tried</p>
+<a href="https://example.invalid/report" target="_blank">Open the report</a>
 <button id="script-away" type="button">Leave by script</button>
 <button id="refresh-away" type="button">Leave by refresh</button>
 <script>
+// The file reads its storage on load, as a page that keeps its state does;
+// were storage to throw, no line below would run. It counts each time it
+// runs, from what it stored before its script started.
+const visits = Number(localStorage.getItem("visits")) + 1;
+localStorage.setItem("visits", String(visits));
+document.getElementById("visits").textContent = `Visit ${visits}`;
 document.getElementById("status").textContent = "scripts are on";
 const network = document.getElementById("network");
 document.addEventListener("securitypolicyviolation", (event) => {

@@ -5,9 +5,14 @@ const ready = (page: import("./test").Page) =>
     page.getByRole("complementary", { name: "Agent details" })
   ).toBeVisible()
 
-test("an MCP App renders through the double frame, talks to the host, and enters full screen and returns inline three ways", async ({
+test("an MCP App renders through the double frame on its sandbox origin, talks to the host, enters full screen and returns inline three ways, and cannot leave its sandbox", async ({
   page,
 }) => {
+  const reached: string[] = []
+  page.on("request", (request) => {
+    if (new URL(request.url()).hostname === "files.invalid")
+      reached.push(request.url())
+  })
   await page.goto("/en")
   await ready(page)
   await page
@@ -15,12 +20,17 @@ test("an MCP App renders through the double frame, talks to the host, and enters
     .fill("Show me the mcp app")
   await page.getByRole("button", { name: "Send message" }).click()
   // The sandbox proxy is the outer frame; the App document is its only child.
+  const sandbox = page.locator('iframe[aria-label="show_launch_board app"]')
   const app = page
     .frameLocator('iframe[aria-label="show_launch_board app"]')
     .frameLocator("iframe")
   const close = page.getByRole("button", { name: "Exit full screen" })
 
   await expect(app.getByRole("heading", { name: "Launch board" })).toBeVisible()
+  // On the sandbox origin the view keeps its own storage, and the sandbox page
+  // it shares that origin with reaches no host the view never declared.
+  await expect(app.getByText("Storage: kept")).toBeVisible()
+  await expect(app.getByText("Network: refused")).toBeVisible()
   await expect(app.getByText('{"board":"launch"}')).toBeVisible()
   await expect(app.getByText("3 of 5 launch tasks are done.")).toBeVisible()
   await expect(app.getByText("Display mode: inline")).toBeVisible()
@@ -55,6 +65,17 @@ test("an MCP App renders through the double frame, talks to the host, and enters
   await expect(
     page.getByText("Summarize the launch board", { exact: true })
   ).toBeVisible()
+
+  // The page frames only its sandbox origin, so taking the sandbox frame to
+  // another address is refused, and the view, its page gone, is dropped.
+  const refused = page.waitForEvent("console", (message) =>
+    message.text().startsWith("Framing 'https://files.invalid/' violates")
+  )
+  await app.getByRole("button", { name: "Leave the sandbox" }).click()
+  await refused
+  await expect(page.getByText("The app could not be shown.")).toBeVisible()
+  await expect(sandbox).toHaveCount(0)
+  expect(reached).toEqual([])
 })
 
 /** Sends a message and waits for its run to finish. */
@@ -172,7 +193,7 @@ test("the artifact view shows preview.png alone in its message", async ({
   )
 })
 
-test("the artifact view runs test.html sandboxed, refusing its fetch and its navigation", async ({
+test("the artifact view runs test.html sandboxed with storage, opening its link in a new tab and refusing its fetch and its navigation", async ({
   page,
 }) => {
   await page.goto("/en")
@@ -191,9 +212,17 @@ test("the artifact view runs test.html sandboxed, refusing its fetch and its nav
     .click()
   const htmlView = panelView(page, "test.html")
   const htmlInner = htmlView.frameLocator('iframe[title="HTML preview"]')
+  // The file reads its storage before it says its scripts are on.
   await expect(htmlInner.getByText("scripts are on")).toBeVisible()
   await expect(htmlInner.getByText("fetch blocked")).toBeVisible()
   await expect(htmlInner.getByText("fetch allowed")).toBeHidden()
+  // Its https link opens in a new tab, kept off the network here.
+  await page
+    .context()
+    .route("https://example.invalid/**", (route) => route.fulfill())
+  const opened = page.waitForEvent("popup")
+  await htmlInner.getByRole("link", { name: "Open the report" }).click()
+  await expect(await opened).toHaveURL("https://example.invalid/report")
   // The file may try to take its frame to another page, by script or by a
   // refresh; the view's frame-src refuses the load, the page stays where it
   // was, and the Preview tab shows the file again.

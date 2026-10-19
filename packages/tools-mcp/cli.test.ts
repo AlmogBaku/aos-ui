@@ -12,12 +12,26 @@ import {
 } from "@modelcontextprotocol/client"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
-import { presentationViewNames } from "../../shared/presentation/views"
+import {
+  ARTIFACT_VIEW_HOST_META,
+  FIXTURE_ARTIFACT_VIEW_DOMAIN,
+  presentationViewNames,
+} from "../../shared/presentation/views"
+import { artifactStableOrigin } from "./stable-origin"
 
 let child: ChildProcess
 let origin: string
 /** Stand-in documents, so the test never reads a stale build. */
 const views = mkdtempSync(join(tmpdir(), "aos-ui-views-"))
+
+/**
+ * The fixture's stable origins, and the URL a harness on the host registers
+ * the server at, whose key `FIXTURE_ARTIFACT_VIEW_DOMAIN` carries.
+ */
+const STABLE = {
+  AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.localhost:3917",
+  AOS_UI_TOOLS_MCP_URL: "http://127.0.0.1:4110/mcp",
+}
 
 function start(directory: string) {
   return spawn(
@@ -31,13 +45,16 @@ function start(directory: string) {
       "--views",
       directory,
     ],
-    { stdio: ["ignore", "pipe", "pipe"] }
+    { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...STABLE } }
   )
 }
 
 function writeViews(directory: string) {
   for (const name of presentationViewNames)
-    writeFileSync(join(directory, `${name}.html`), `<title>${name}</title>`)
+    writeFileSync(
+      join(directory, `${name}.html`),
+      `<head><title>${name}</title></head>`
+    )
 }
 
 function writePdfjs(directory: string) {
@@ -95,12 +112,25 @@ describe("tools-mcp HTTP entry", () => {
     const { contents } = await client.readResource({
       uri: "ui://aos-ui/map",
     })
+    const artifact = await client.readResource({
+      uri: "ui://aos-ui/artifact",
+    })
     const decoder = await client.readResource({
       uri: "ui://aos-ui/pdfjs/wasm/jbig2.wasm",
     })
     await client.close()
 
-    expect(contents[0]).toMatchObject({ text: "<title>map</title>" })
+    expect(contents[0]).toMatchObject({
+      text: "<head><title>map</title></head>",
+    })
+    // Started with both stable-origin settings, the artifact view declares
+    // its stable origin and names the host it expects.
+    expect(artifact.contents[0]).toMatchObject({
+      text: expect.stringContaining(
+        `<meta name="${ARTIFACT_VIEW_HOST_META}" content="${FIXTURE_ARTIFACT_VIEW_DOMAIN}:3917">`
+      ),
+      _meta: { ui: { domain: FIXTURE_ARTIFACT_VIEW_DOMAIN } },
+    })
     expect(decoder.contents[0]).toMatchObject({ blob: "AGE=" })
     expect(tools).toHaveLength(4)
     expect(result.structuredContent).toMatchObject({
@@ -137,5 +167,65 @@ describe("tools-mcp HTTP entry", () => {
 
     expect(code).toBe(1)
     expect(stderr).toContain("bun run tools-mcp:build")
+  })
+})
+
+describe("the artifact view's stable origin", () => {
+  it.each([
+    [
+      "with the wildcard's port",
+      STABLE,
+      `${FIXTURE_ARTIFACT_VIEW_DOMAIN}:3917`,
+    ],
+    [
+      "without a port, the wildcard written in capitals",
+      {
+        ...STABLE,
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "HTTP://*.MCP-Apps.localhost",
+      },
+      FIXTURE_ARTIFACT_VIEW_DOMAIN,
+    ],
+  ])(
+    "declares the key of the URL the gateway dials below the wildcard's domain, and expects it %s",
+    (_case, environment, host) => {
+      expect(artifactStableOrigin(environment, false).origin).toEqual({
+        domain: FIXTURE_ARTIFACT_VIEW_DOMAIN,
+        host,
+      })
+    }
+  )
+
+  it.each([
+    [
+      "AOS_UI_MCP_APP_STABLE_ORIGINS is unset",
+      { AOS_UI_TOOLS_MCP_URL: STABLE.AOS_UI_TOOLS_MCP_URL },
+      false,
+    ],
+    [
+      "AOS_UI_TOOLS_MCP_URL is unset",
+      { ...STABLE, AOS_UI_TOOLS_MCP_URL: "" },
+      false,
+    ],
+    ["under --stdio", STABLE, true],
+  ])("declares none, and says why, when %s", (reason, environment, stdio) => {
+    const { origin, note } = artifactStableOrigin(environment, stdio)
+
+    expect(origin).toBeUndefined()
+    expect(note).toContain(reason)
+  })
+
+  it.each([
+    [
+      "a stable origins value that is no wildcard",
+      { ...STABLE, AOS_UI_MCP_APP_STABLE_ORIGINS: "http://mcp-apps.localhost" },
+      /AOS_UI_MCP_APP_STABLE_ORIGINS: http:\/\/mcp-apps\.localhost is not a wildcard origin/u,
+    ],
+    [
+      "a dial URL that is no URL",
+      { ...STABLE, AOS_UI_TOOLS_MCP_URL: "/mcp" },
+      /AOS_UI_TOOLS_MCP_URL: \/mcp is not a URL/u,
+    ],
+  ])("refuses %s", (_case, environment, message) => {
+    expect(() => artifactStableOrigin(environment, false)).toThrow(message)
   })
 })

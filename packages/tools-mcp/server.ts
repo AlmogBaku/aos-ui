@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto"
 import { posix } from "node:path"
+import { artifactFileId } from "@harness-gw/sdk/node"
 import {
   registerAppResource,
   registerAppTool,
@@ -20,6 +20,7 @@ import {
   type PresentationToolName,
 } from "../../shared/presentation/tools"
 import {
+  ARTIFACT_VIEW_HOST_META,
   GRAMMAR_RESOURCE_URI,
   MAPLIBRE_RESOURCE_URI,
   PDFJS_RESOURCE_URI,
@@ -45,6 +46,19 @@ export type ToolsServerFiles = {
   pdfjs?: ViewFiles
   grammars?: ViewFiles
   maplibre?: ViewFiles
+}
+
+/**
+ * The artifact view's stable origin: the `domain` its resource declares, and
+ * the host its HTML expects to run on, that domain with the stable origins'
+ * port, if they name one.
+ */
+export type ArtifactStableOrigin = { domain: string; host: string }
+
+/** What the server declares about its views beyond their files. */
+export type ToolsServerOptions = {
+  /** Declared by the artifact view alone, and only when set. */
+  artifactStableOrigin?: ArtifactStableOrigin
 }
 
 const SAFE_OUTPUT =
@@ -106,19 +120,6 @@ function displayFilename(path: string, title: string | undefined) {
 }
 
 /**
- * The file's identity across calls: a digest of its normalized path, so every
- * call for one path names the same Artifact whatever its title, while a
- * result still carries no path. Sixteen hex digits keep it apart from any
- * other file in a Session and short in the text the model reads back.
- */
-function fileId(path: string) {
-  return createHash("sha256")
-    .update(posix.normalize(path))
-    .digest("hex")
-    .slice(0, 16)
-}
-
-/**
  * A tool's result: its value as structured content, and again as the JSON the
  * text ends with, for a harness that forwards only text.
  */
@@ -138,10 +139,32 @@ function presentationResult(
   }
 }
 
-function registerView(server: McpServer, view: PresentationView, html: string) {
+const HEAD = "<head>"
+
+/**
+ * The view's HTML with the host it expects to run on as the first child of its
+ * head, where the view reads it before it keeps anything in storage. A host
+ * name and port need no escaping.
+ */
+function withExpectedHost(html: string, host: string) {
+  if (!html.includes(HEAD))
+    throw new Error("A view with a stable origin needs a <head> to name it in")
+  return html.replace(
+    HEAD,
+    () => `${HEAD}<meta name="${ARTIFACT_VIEW_HOST_META}" content="${host}">`
+  )
+}
+
+function registerView(
+  server: McpServer,
+  view: PresentationView,
+  text: string,
+  domain: string | undefined
+) {
   const ui = {
     csp: view.csp,
     ...(view.permissions ? { permissions: view.permissions } : {}),
+    ...(domain ? { domain } : {}),
   }
   registerAppResource(
     server,
@@ -153,7 +176,7 @@ function registerView(server: McpServer, view: PresentationView, html: string) {
         {
           uri: view.resourceUri,
           mimeType: PRESENTATION_VIEW_MIME_TYPE,
-          text: html,
+          text,
           _meta: { ui },
         },
       ],
@@ -206,23 +229,51 @@ function registerFiles(
 }
 
 /**
+ * Makes the stateless AOS UI tool server, one for each call of the function it
+ * returns, from `files` and `options`. The artifact view's HTML names the host
+ * it expects once, here, for every server made.
+ */
+export function toolsServerFactory(
+  files: ToolsServerFiles,
+  { artifactStableOrigin }: ToolsServerOptions = {}
+): () => McpServer {
+  if (artifactStableOrigin === undefined)
+    return () => createToolsServer(files, undefined)
+  const { domain, host } = artifactStableOrigin
+  const views = {
+    ...files.views,
+    artifact: withExpectedHost(files.views.artifact, host),
+  }
+  return () => createToolsServer({ ...files, views }, domain)
+}
+
+/**
  * The stateless AOS UI tool server. The SDK parses every call against the
  * tool's Zod schema, refinements included, and reports a failed parse as a
  * tool error, so handlers only ever see validated input. Each tool declares
  * the MCP App view that draws it, and the server serves that view's HTML as a
- * `ui://aos-ui/<view>` resource. `present_artifact` opens no file: its view
- * reads the file through the address the page hands it.
+ * `ui://aos-ui/<view>` resource, the artifact view's declaring
+ * `artifactDomain`, when it has one. `present_artifact` opens no file: its
+ * view reads the file through the address the page hands it.
  */
-export function createToolsServer({
-  views,
-  pdfjs = new Map(),
-  grammars = new Map(),
-  maplibre = new Map(),
-}: ToolsServerFiles): McpServer {
+function createToolsServer(
+  {
+    views,
+    pdfjs = new Map(),
+    grammars = new Map(),
+    maplibre = new Map(),
+  }: ToolsServerFiles,
+  artifactDomain: string | undefined
+): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
   for (const view of Object.values(presentationViews))
-    registerView(server, view, views[view.name])
+    registerView(
+      server,
+      view,
+      views[view.name],
+      view.name === "artifact" ? artifactDomain : undefined
+    )
   // pdf.js's worker is script text; every other pdf.js file is bytes.
   registerFiles(server, "pdf.js file", PDFJS_RESOURCE_URI, pdfjs, (path) =>
     path === PDFJS_WORKER_FILE ? "text/javascript" : undefined
@@ -278,7 +329,9 @@ export function createToolsServer({
     ({ path, title, mimeType }) => {
       const file: PresentArtifactResult = {
         filename: displayFilename(path, title),
-        fileId: fileId(path),
+        // One file has one id however it is shown: the gateway gives a file
+        // it delivers by path the same one.
+        fileId: artifactFileId(path),
         ...(mimeType ? { mimeType } : {}),
       }
       return presentationResult("present_artifact", file.filename, file)

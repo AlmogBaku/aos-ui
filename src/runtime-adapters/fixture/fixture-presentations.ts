@@ -4,6 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/client"
 import { viewerFileResult } from "@harness-gw/sdk/protocol"
 import type { AosUiToolName } from "@shared/presentation/tools"
 import {
+  FIXTURE_MCP_APP_FILE_IDS,
   FIXTURE_MCP_APP_FILES,
   FIXTURE_MCP_APP_FILES_PATH,
 } from "@shared/presentation/views"
@@ -35,22 +36,19 @@ function artifactCall(
   mimeType: string
 ): FixturePresentationCall {
   const filename = FIXTURE_MCP_APP_FILES[key]
-  const result = viewerFileResult({ filename, mimeType })
+  const path = `${FIXTURE_MCP_APP_FILES_PATH}/${filename}`
+  const fileId = FIXTURE_MCP_APP_FILE_IDS.get(path)
+  const result = viewerFileResult({ filename, mimeType, fileId })
   return {
     toolName: "present_artifact",
-    args: {
-      path: `${FIXTURE_MCP_APP_FILES_PATH}/${filename}`,
-      title: filename,
-    },
+    args: { path, title: filename },
     result: {
       ...result,
       structuredContent: {
         ok: true,
         type: "aos.presentation",
         kind: "present_artifact",
-        // The tools server names a file by a digest of its path; a fixture
-        // file's name is as unique.
-        value: { filename, mimeType, fileId: filename },
+        value: { filename, mimeType, fileId },
       },
     },
   }

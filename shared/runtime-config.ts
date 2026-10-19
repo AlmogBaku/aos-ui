@@ -1,5 +1,8 @@
+import { isMcpAppPolicyOrigin } from "@harness-gw/sdk/protocol"
 import { z } from "zod"
 
+import type { DeploymentOrigins } from "./lane-origins"
+import { stableOriginsOf } from "./mcp-app-sandbox"
 import { DEFAULT_RUNTIME_MODE } from "./runtime-modes"
 
 export type RuntimeUnavailableReason =
@@ -19,6 +22,8 @@ export const DEFAULT_COMPOSER_FEATURE_CONFIG: ComposerFeatureConfig = {
 type ReadyRuntimeConfiguration = {
   status: "ready"
   composerFeatures: ComposerFeatureConfig
+  /** The origins the web server adds, which views need to show. */
+  origins?: DeploymentOrigins
 }
 
 export type RuntimeConfiguration =
@@ -37,6 +42,7 @@ export type PublicRuntimeConfiguration =
 export type GuestSurfaceConfiguration = {
   status: "ready"
   surface: "guest"
+  origins?: DeploymentOrigins
 }
 
 export type ApplicationConfiguration =
@@ -106,6 +112,42 @@ export function serializePublicRuntimeConfiguration(
  */
 const buildIdField = { buildId: z.string().optional() }
 
+const policyOrigin = z.string().refine(isMcpAppPolicyOrigin)
+
+/** The deployment's origins, which the web server writes over any set. */
+const originFields = {
+  publicOrigins: z.array(policyOrigin).min(1).optional(),
+  mcpAppSandboxOrigin: policyOrigin.optional(),
+  mcpAppStableOrigins: z
+    .string()
+    .refine((wildcard) => stableOriginsOf(wildcard) !== undefined)
+    .optional(),
+}
+
+/**
+ * Both of the deployment's origin fields, and the stable origins' wildcard
+ * when it is set, or nothing when either is missing.
+ */
+function deploymentOrigins({
+  publicOrigins,
+  mcpAppSandboxOrigin,
+  mcpAppStableOrigins,
+}: {
+  publicOrigins?: string[] | undefined
+  mcpAppSandboxOrigin?: string | undefined
+  mcpAppStableOrigins?: string | undefined
+}): { origins?: DeploymentOrigins } {
+  return publicOrigins && mcpAppSandboxOrigin
+    ? {
+        origins: {
+          publicOrigins,
+          mcpAppSandboxOrigin,
+          ...(mcpAppStableOrigins ? { mcpAppStableOrigins } : {}),
+        },
+      }
+    : {}
+}
+
 const publicComposerFeatureFields = {
   composerModelSelectorEnabled: z.boolean().optional(),
   composerContextEnabled: z.boolean().optional(),
@@ -115,6 +157,7 @@ const publicConfigurationSchema = z
   .object({
     mode: z.enum(["aos", "fixture"]),
     ...publicComposerFeatureFields,
+    ...originFields,
     ...buildIdField,
   })
   .strict()
@@ -127,17 +170,24 @@ export function parsePublicRuntimeConfiguration(
   if (!parsed.success)
     return { status: "unavailable", reason: "invalid-public-config" }
   const config = parsed.data
-  return resolveRuntimeConfiguration({
+  const resolved = resolveRuntimeConfiguration({
     AOS_UI_RUNTIME_MODE: config.mode,
     AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED:
       config.composerModelSelectorEnabled === false ? "false" : undefined,
     AOS_UI_COMPOSER_CONTEXT_ENABLED:
       config.composerContextEnabled === false ? "false" : undefined,
   })
+  return resolved.status === "ready"
+    ? { ...resolved, ...deploymentOrigins(config) }
+    : resolved
 }
 
 const guestSurfaceSchema = z
-  .object({ surface: z.literal("guest"), ...buildIdField })
+  .object({
+    surface: z.literal("guest"),
+    ...originFields,
+    ...buildIdField,
+  })
   .strict()
 
 /** Selects the guest surface before runtime parsing; guest code never selects a provider. */
@@ -145,6 +195,11 @@ export function parsePublicApplicationConfiguration(
   input: unknown
 ): ApplicationConfiguration {
   const guest = guestSurfaceSchema.safeParse(input)
-  if (guest.success) return { status: "ready", surface: guest.data.surface }
+  if (guest.success)
+    return {
+      status: "ready",
+      surface: guest.data.surface,
+      ...deploymentOrigins(guest.data),
+    }
   return parsePublicRuntimeConfiguration(input)
 }

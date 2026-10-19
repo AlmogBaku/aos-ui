@@ -222,7 +222,47 @@
         ]
       }
     },
-    // A later override replaces the rule's options, so this repeats the browser ban.
+    // A later override replaces the rule's options, so this and the next
+    // repeat the browser ban. Tests may check a literal against the server-only
+    // helpers; browser code may not import them.
+    {
+      "files": [
+        "src/**/*.{ts,tsx}"
+      ],
+      "excludeFiles": [
+        "src/**/*.test.{ts,tsx}"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@harness-gw/sdk/node",
+                "message": "Browser code never computes a stable origin key or a fileId: @harness-gw/sdk/node is server-only, and the browser takes both from what the server sends."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "packages/tools-mcp",
+                  "packages/tools-mcp/**",
+                  "../**/tools-mcp",
+                  "../**/tools-mcp/**",
+                  "node:*",
+                  "**/node:*/**",
+                  "scripts/**",
+                  "../**/scripts/**",
+                  "@assistant-ui/*/dist/**",
+                  "@assistant-ui/*/src/**"
+                ],
+                "message": "Browser code must not import native implementations or private Assistant UI internals."
+              }
+            ]
+          }
+        ]
+      }
+    },
     {
       "files": [
         "src/runtime-adapters/aos/acp/**/*.{ts,tsx}"
@@ -234,6 +274,12 @@
         "no-restricted-imports": [
           "error",
           {
+            "paths": [
+              {
+                "name": "@harness-gw/sdk/node",
+                "message": "Browser code never computes a stable origin key or a fileId: @harness-gw/sdk/node is server-only, and the browser takes both from what the server sends."
+              }
+            ],
             "patterns": [
               {
                 "group": [
@@ -295,6 +341,40 @@
         "no-restricted-imports": [
           "error",
           {
+            "patterns": [
+              {
+                "group": [
+                  "@/**",
+                  "src/**",
+                  "../**/src/**"
+                ],
+                "message": "The tools MCP server and its views depend only on shared contracts, never on browser code."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    // The views run in the browser: this repeats the ban above and adds the
+    // server-only helpers.
+    {
+      "files": [
+        "packages/tools-mcp/views/**/*.{ts,tsx}"
+      ],
+      "excludeFiles": [
+        "packages/tools-mcp/views/build.ts",
+        "packages/tools-mcp/views/**/*.test.{ts,tsx}"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@harness-gw/sdk/node",
+                "message": "Browser code never computes a stable origin key or a fileId: @harness-gw/sdk/node is server-only, and the browser takes both from what the server sends."
+              }
+            ],
             "patterns": [
               {
                 "group": [

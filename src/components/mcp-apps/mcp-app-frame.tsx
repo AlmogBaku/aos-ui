@@ -16,6 +16,7 @@ import { useTheme } from "next-themes"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import {
+  appliedMcpAppCsp,
   McpAppResourceReadRequestSchema,
   McpAppToolCallRequestSchema,
   type McpAppView,
@@ -23,13 +24,16 @@ import {
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 import { cn } from "@/lib/utils"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
+import type { DeploymentOrigins } from "@shared/lane-origins"
+import { sandboxPageUrl, sandboxPolicyOrigins } from "@shared/mcp-app-sandbox"
 
-import { appliedMcpAppCsp, buildMcpAppCsp } from "./csp"
+import { AppUnavailable } from "./app-unavailable"
 import {
   appMessageText,
   createRateLimiter,
   createResourceCache,
   fileArgument,
+  fileLocation,
   grantDisplayMode,
   offeredDisplayModes,
   openAppLink,
@@ -41,7 +45,7 @@ import { mcpAppTargetKey } from "./mcp-app-host"
 import {
   SANDBOX_PROXY_SANDBOX,
   prepareAppDocument,
-  sandboxProxyUrl,
+  showsViewsAt,
 } from "./sandbox-proxy"
 import { useAppFiles, type AppConnectionStatus } from "./use-app-files"
 import { ViewHeader } from "./view-header"
@@ -132,6 +136,8 @@ export type McpAppFrameProps = {
   onMove?: (placement: AppPlacement) => void
   target: McpAppTarget
   adapter: McpAppAdapter
+  /** The deployment's origins; without them, or off them, no view shows. */
+  origins: DeploymentOrigins | undefined
   /** The view's name: its frame's, and its header's in full screen. */
   title: string
   /** The type of the file the view shows, under its name in full screen. */
@@ -161,6 +167,7 @@ export default function McpAppFrame({
   toolName,
   target,
   adapter,
+  origins,
   title,
   detail,
   filesRevision,
@@ -193,15 +200,35 @@ export default function McpAppFrame({
     (forcedTheme !== "light" && resolvedTheme === "dark")
       ? "dark"
       : "light"
-  // A renewal changes only the passes, which the policy leaves out, so the
-  // view keeps running.
-  const csp = useMemo(
-    () => buildMcpAppCsp(view.csp, view.files),
-    [view.csp, view.files]
-  )
   const allow = useMemo(
     () => buildAllowAttribute(view.permissions),
     [view.permissions]
+  )
+  // Views show only on a page AOS UI is opened at, one the sandbox page's
+  // policy names among those that may frame it.
+  const pageOrigin = window.location.origin
+  const atPublicOrigin = showsViewsAt(origins, pageOrigin)
+  // The view's own stable origin when its domain names one, else the shared
+  // sandbox, by the rule the server serves that page's policy by.
+  const policyOrigins = useMemo(
+    () =>
+      atPublicOrigin ? sandboxPolicyOrigins(origins, view.domain) : undefined,
+    [atPublicOrigin, origins, view.domain]
+  )
+  // A renewal changes only the passes, which the address leaves out, so the
+  // view keeps running.
+  const sandboxUrl = useMemo(
+    () =>
+      policyOrigins
+        ? sandboxPageUrl(policyOrigins.sandboxOrigin, {
+            allow,
+            csp: view.csp,
+            fileLocations: Object.values(view.files?.addresses ?? {}).flatMap(
+              (address) => fileLocation(address) ?? []
+            ),
+          })
+        : undefined,
+    [allow, policyOrigins, view.csp, view.files]
   )
   const { files, renew } = useAppFiles({
     files: view.files,
@@ -380,10 +407,11 @@ export default function McpAppFrame({
   }, [fullscreen])
 
   useEffect(() => {
-    const proxy = frame.current?.contentWindow
-    if (!proxy) return
+    const element = frame.current
+    const proxy = element?.contentWindow
+    if (!element || !proxy || !policyOrigins) return
     const admit = createRateLimiter()
-    const appliedCsp = appliedMcpAppCsp(view.csp)
+    const appliedCsp = appliedMcpAppCsp({ ...policyOrigins, csp: view.csp })
     const bridge = new AppBridge(
       null,
       HOST_INFO,
@@ -492,13 +520,24 @@ export default function McpAppFrame({
     const readyTimeout = setTimeout(() => {
       if (active && !handedOff) context.current.onUnavailable?.()
     }, SANDBOX_READY_TIMEOUT_MS)
+    // The sandbox page loads once. The view shares its origin and may send
+    // the frame elsewhere, so a second load ends the view rather than talk
+    // to whatever the frame holds now; the blank document a frame holds
+    // before its address is set does not count.
+    let loaded = false
+    const onLoad = () => {
+      if (!element.hasAttribute("src")) return
+      if (loaded) context.current.onUnavailable?.()
+      loaded = true
+    }
+    element.addEventListener("load", onLoad)
     bridge.addEventListener("sandboxready", () => {
       if (handedOff) return
       handedOff = true
       clearTimeout(readyTimeout)
       const { locale: lang, direction: dir } = context.current
       void bridge.sendSandboxResourceReady({
-        html: prepareAppDocument(view.html, { csp, lang, dir }),
+        html: prepareAppDocument(view.html, { lang, dir }),
       })
     })
     // Nothing reaches the view before it reports `initialized`; the context
@@ -530,6 +569,7 @@ export default function McpAppFrame({
     return () => {
       active = false
       clearTimeout(readyTimeout)
+      element.removeEventListener("load", onLoad)
       bridgeRef.current = undefined
       setConnected(false)
       setInitialized(false)
@@ -538,7 +578,7 @@ export default function McpAppFrame({
       if (viewInitialized) bridge.teardownResource({}).catch(() => {})
       void bridge.close()
     }
-  }, [adapter, csp, target, view])
+  }, [adapter, policyOrigins, target, view])
 
   useEffect(() => {
     const bridge = bridgeRef.current
@@ -568,6 +608,17 @@ export default function McpAppFrame({
     )
     return () => cancelAnimationFrame(frameId)
   }, [initialized, displayMode, locale, size, theme, toolName])
+
+  if (sandboxUrl === undefined)
+    return (
+      <AppUnavailable
+        detail={
+          atPublicOrigin
+            ? undefined
+            : labels.mcpApp.notAtPublicOrigin(pageOrigin)
+        }
+      />
+    )
 
   return (
     <div
@@ -603,7 +654,7 @@ export default function McpAppFrame({
         sandbox={SANDBOX_PROXY_SANDBOX}
         allow={allow || undefined}
         referrerPolicy="no-referrer"
-        src={connected ? sandboxProxyUrl(allow) : undefined}
+        src={connected ? sandboxUrl : undefined}
         className={cn(
           "block w-full max-w-full border-0 bg-transparent",
           inline

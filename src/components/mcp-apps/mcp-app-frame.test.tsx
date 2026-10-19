@@ -1,13 +1,28 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps/app-bridge"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import type { McpUiCsp } from "@harness-gw/sdk/protocol"
 import { ToolUiLocaleProvider } from "@/components/tool-ui"
 import {
   McpAppFilesRefusedError,
   type McpAppAdapter,
 } from "@/runtime-adapters/contracts"
+
+import {
+  sandboxAt,
+  sandboxPagePolicy,
+  sandboxPageUrl,
+  sandboxPolicyOrigins,
+} from "@shared/mcp-app-sandbox"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
 import McpAppFrame, { type McpAppFrameProps } from "./mcp-app-frame"
@@ -29,7 +44,7 @@ const { FakeBridge, bridges } = vi.hoisted(() => {
     constructor(
       _client: unknown,
       _info: unknown,
-      _capabilities: unknown,
+      readonly capabilities: { sandbox?: { csp?: McpUiCsp } },
       options: { hostContext: McpUiHostContext }
     ) {
       this.contexts.push(options.hostContext)
@@ -94,6 +109,14 @@ const target = {
   sessionId: "session-1",
   toolCallId: "t1",
 }
+const SANDBOX = "http://sandbox.localhost:3000"
+/** The origins the test page is opened at. */
+const LANE = {
+  origins: {
+    publicOrigins: [window.location.origin],
+    mcpAppSandboxOrigin: SANDBOX,
+  },
+} as const satisfies Pick<McpAppFrameProps, "origins">
 
 function renderFrame(
   locale: "en" | "he" = "en",
@@ -102,6 +125,7 @@ function renderFrame(
   render(
     <ToolUiLocaleProvider locale={locale}>
       <McpAppFrame
+        {...LANE}
         view={{ html: "<p>app</p>" }}
         openedAt={0}
         target={target}
@@ -255,6 +279,7 @@ describe("MCP App tool data", () => {
     return (
       <ToolUiLocaleProvider locale="en">
         <McpAppFrame
+          {...LANE}
           view={view}
           openedAt={0}
           target={target}
@@ -337,6 +362,7 @@ describe("MCP App lifecycle", () => {
   const frame = (
     <ToolUiLocaleProvider locale="en">
       <McpAppFrame
+        {...LANE}
         view={view}
         openedAt={0}
         target={target}
@@ -383,6 +409,7 @@ describe("MCP App lifecycle", () => {
       render(
         <ToolUiLocaleProvider locale="en">
           <McpAppFrame
+            {...LANE}
             view={view}
             openedAt={0}
             target={target}
@@ -408,6 +435,7 @@ describe("MCP App lifecycle", () => {
       render(
         <ToolUiLocaleProvider locale="en">
           <McpAppFrame
+            {...LANE}
             view={view}
             openedAt={0}
             target={target}
@@ -423,6 +451,223 @@ describe("MCP App lifecycle", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("MCP App sandbox", () => {
+  const frame = (
+    props: Partial<McpAppFrameProps> = {},
+    locale: "en" | "he" = "en"
+  ) => (
+    <ToolUiLocaleProvider locale={locale}>
+      <McpAppFrame
+        {...LANE}
+        view={{ html: "<p>app</p>" }}
+        openedAt={0}
+        target={target}
+        adapter={adapter}
+        title="show_board app"
+        {...props}
+      />
+    </ToolUiLocaleProvider>
+  )
+
+  it("loads the sandbox page from the sandbox origin, with the view's declared lists and no pass", async () => {
+    render(
+      frame({
+        view: {
+          html: "<p>app</p>",
+          csp: { connectDomains: ["https://api.example.test"] },
+          files: {
+            addresses: {
+              path: `${window.location.origin}/files/report.pdf?pass=secret`,
+            },
+          },
+        },
+      })
+    )
+    const sandbox = screen.getByLabelText("show_board app", {
+      selector: "iframe",
+    })
+    expect(sandbox).toHaveAttribute(
+      "sandbox",
+      "allow-scripts allow-same-origin"
+    )
+    await waitFor(() =>
+      expect(sandbox).toHaveAttribute(
+        "src",
+        `${SANDBOX}/mcp-app-sandbox.html?${new URLSearchParams([
+          ["connectDomains", "https://api.example.test"],
+          ["file", `${window.location.origin}/files/report.pdf`],
+        ])}`
+      )
+    )
+  })
+
+  it.each([
+    [
+      "an address AOS_UI_PUBLIC_ORIGIN does not list",
+      {
+        publicOrigins: ["https://aos.example.test"],
+        mcpAppSandboxOrigin: SANDBOX,
+      },
+    ],
+    [
+      "the sandbox origin",
+      {
+        publicOrigins: [window.location.origin],
+        mcpAppSandboxOrigin: window.location.origin,
+      },
+    ],
+    ["any address, with no origins", undefined],
+  ] as const)(
+    "loads no frame on a page at %s, and names the setting",
+    (_label, origins) => {
+      render(frame({ origins }))
+      expect(screen.queryByLabelText("show_board app")).toBeNull()
+      expect(bridges).toEqual([])
+      expect(screen.getByText("The app could not be shown.")).toBeVisible()
+      expect(
+        screen.getByText(
+          `Apps show only at an address AOS_UI_PUBLIC_ORIGIN lists, and this page is at ${window.location.origin}.`
+        )
+      ).toBeVisible()
+    }
+  )
+
+  it("reports the domains its sandbox page's policy applies, without one naming another page AOS UI is opened at", () => {
+    const origins = {
+      publicOrigins: [window.location.origin, "https://aos.example.test"],
+      mcpAppSandboxOrigin: SANDBOX,
+    }
+    const csp = {
+      connectDomains: ["https://aos.example.test", "https://api.example.test"],
+    }
+    render(frame({ origins, view: { html: "<p>app</p>", csp } }))
+
+    const reported = bridges.at(-1)?.capabilities.sandbox?.csp
+    expect(reported).toEqual({ connectDomains: ["https://api.example.test"] })
+    // The server's header for the same view connects to exactly those.
+    const query = new URL(
+      sandboxPageUrl(SANDBOX, { allow: "", csp, fileLocations: [] }) ?? ""
+    ).searchParams
+    const policy = sandboxPagePolicy(sandboxPolicyOrigins(origins), query)
+    expect(policy).toContain(
+      `connect-src ${reported?.connectDomains?.join(" ")};`
+    )
+  })
+
+  /** A stable host's key label, and the wildcard the lane frames them by. */
+  const KEY = "0123456789abcdef0123456789abcdef"
+  const STABLE_ORIGINS = "http://*.mcp-apps.localhost:3000"
+  const stableLane = (mcpAppStableOrigins?: string) => ({
+    ...LANE.origins,
+    ...(mcpAppStableOrigins ? { mcpAppStableOrigins } : {}),
+  })
+
+  it.each([
+    [
+      "from its stable origin, by the wildcard's scheme and port, when its domain names one",
+      STABLE_ORIGINS,
+      `${KEY}.mcp-apps.localhost`,
+      `http://${KEY}.mcp-apps.localhost:3000`,
+    ],
+    [
+      "from the shared sandbox while the stable origins are unset",
+      undefined,
+      `${KEY}.mcp-apps.localhost`,
+      SANDBOX,
+    ],
+  ] as const)(
+    "loads a view %s",
+    async (_label, stableOrigins, domain, origin) => {
+      render(
+        frame({
+          origins: stableLane(stableOrigins),
+          view: { html: "<p>app</p>", domain },
+        })
+      )
+      const sandbox = screen.getByLabelText("show_board app", {
+        selector: "iframe",
+      })
+      await waitFor(() =>
+        expect(sandbox).toHaveAttribute("src", `${origin}/mcp-app-sandbox.html`)
+      )
+    }
+  )
+
+  it("reports the domains its stable page's policy applies, as the server serves that page by its host", async () => {
+    const origins = stableLane(STABLE_ORIGINS)
+    const stable = `http://${KEY}.mcp-apps.localhost:3000`
+    const csp = {
+      connectDomains: [stable, SANDBOX, "https://api.example.test"],
+    }
+    render(
+      frame({
+        origins,
+        view: { html: "<p>app</p>", csp, domain: `${KEY}.mcp-apps.localhost` },
+      })
+    )
+    const sandbox = screen.getByLabelText("show_board app", {
+      selector: "iframe",
+    })
+    await waitFor(() => expect(sandbox).toHaveAttribute("src"))
+
+    // The view may not reach its own origin; the shared sandbox is another.
+    const reported = bridges.at(-1)?.capabilities.sandbox?.csp
+    expect(reported).toEqual({
+      connectDomains: [SANDBOX, "https://api.example.test"],
+    })
+    const page = new URL(sandbox.getAttribute("src") ?? "")
+    const served = sandboxAt(origins, page.host)
+    if (served === undefined || served === "refused")
+      throw new Error(`${page.host} is no sandbox`)
+    expect(sandboxPagePolicy(served, page.searchParams)).toContain(
+      `connect-src ${reported?.connectDomains?.join(" ")};`
+    )
+  })
+
+  it("names the setting in Hebrew", () => {
+    render(frame({ origins: undefined }, "he"))
+    expect(
+      screen.getByText(
+        `יישומונים מוצגים רק בכתובת שמופיעה ב־AOS_UI_PUBLIC_ORIGIN, והדף הזה נמצא ב־${window.location.origin}.`
+      )
+    ).toBeVisible()
+  })
+
+  it("loads no frame for a view whose lists outgrow the sandbox page's address", () => {
+    render(
+      frame({
+        view: {
+          html: "<p>app</p>",
+          csp: {
+            connectDomains: Array.from(
+              { length: 400 },
+              (_, index) => `https://api-${index}.example.test`
+            ),
+          },
+        },
+      })
+    )
+    expect(screen.queryByLabelText("show_board app")).toBeNull()
+    expect(screen.getByText("The app could not be shown.")).toBeVisible()
+  })
+
+  it("drops the view once its sandbox frame loads a second time", async () => {
+    const onUnavailable = vi.fn()
+    render(frame({ onUnavailable }))
+    const sandbox = screen.getByLabelText("show_board app", {
+      selector: "iframe",
+    })
+    // The blank document before the address is set is not the sandbox page.
+    fireEvent.load(sandbox)
+    await waitFor(() => expect(sandbox).toHaveAttribute("src"))
+    fireEvent.load(sandbox)
+    expect(onUnavailable).not.toHaveBeenCalled()
+
+    fireEvent.load(sandbox)
+    expect(onUnavailable).toHaveBeenCalledOnce()
   })
 })
 
@@ -454,6 +699,7 @@ describe("MCP App files", () => {
     const frame = (status?: AppConnectionStatus) => (
       <ToolUiLocaleProvider locale="en">
         <McpAppFrame
+          {...LANE}
           view={view}
           openedAt={0}
           connectionStatus={status}
@@ -482,6 +728,7 @@ describe("MCP App files", () => {
     const frame = (revision: string) => (
       <ToolUiLocaleProvider locale="en">
         <McpAppFrame
+          {...LANE}
           view={view}
           openedAt={0}
           target={target}
@@ -675,6 +922,7 @@ describe("MCP App files", () => {
       render(
         <ToolUiLocaleProvider locale="en">
           <McpAppFrame
+            {...LANE}
             view={{ html: "<p>app</p>" }}
             openedAt={0}
             target={{ ...target, toolCallId }}

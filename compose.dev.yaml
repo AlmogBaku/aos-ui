@@ -1,7 +1,9 @@
 # Runs the Vite dev server in place of the web server, behind the same Caddy
-# site. Vite serves the operator surface only, so the guest site, which a
-# harness overlay opens, is served by `web-guest`: the production web server
-# built from this checkout, without hot reload.
+# sites: the operator site and the MCP App sandbox site, whose sandbox page and
+# stable hosts Vite serves as the web server would. Vite serves the operator
+# surface only, so the guest site, which a harness overlay opens, is served by
+# `web-guest`: the production web server built from this checkout, without
+# hot reload.
 services:
   web:
     build:
@@ -46,6 +48,12 @@ services:
       AOS_UI_GUEST_WEB_HOST: 0.0.0.0
       AOS_UI_GUEST_WEB_PORT: "4201"
       AOS_UI_WEB_EXPOSURE: private-container
+      # Every origin people open AOS UI at, the one sandbox origin, and the
+      # optional stable origins, as the web service reads them; the origins
+      # default to both lanes' loopback ones.
+      AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001},http://127.0.0.1:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}}
+      AOS_UI_MCP_APP_SANDBOX_ORIGIN: ${AOS_UI_MCP_APP_SANDBOX_ORIGIN:-http://sandbox.localhost:${AOS_UI_SANDBOX_PUBLISHED_PORT:-3002}}
+      AOS_UI_MCP_APP_STABLE_ORIGINS: ${AOS_UI_MCP_APP_STABLE_ORIGINS:-}
     expose:
       - "4201"
     configs:

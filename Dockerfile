@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b AS dependencies
+FROM oven/bun:1.4.3-debian AS dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache \
@@ -18,7 +18,7 @@ RUN bun run build
 FROM dependencies AS tools-mcp
 COPY --chown=bun:bun packages/tools-mcp ./packages/tools-mcp
 COPY --chown=bun:bun shared/presentation ./shared/presentation
-COPY --chown=bun:bun shared/syntax-language.ts shared/playback-rate.ts ./shared/
+COPY --chown=bun:bun shared/syntax-language.ts shared/playback-rate.ts shared/mcp-app-sandbox.ts ./shared/
 RUN bun run tools-mcp:build
 USER bun
 EXPOSE 4110

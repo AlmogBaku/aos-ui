@@ -1,6 +1,7 @@
 # The guest lane, beside the operator site in ../Caddyfile and under the same
 # rules: its own names only, /api/v1 to the gateway's guest listener, and
-# everything else to the aos-ui server's guest listener.
+# everything else to the aos-ui server's guest listener. The MCP App sandbox
+# and the stable hosts have a site of their own there, so here they get 421.
 http://:18081 {
 	bind {$AOS_UI_CADDY_BIND:127.0.0.1}
 	route {
