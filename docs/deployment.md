@@ -208,57 +208,67 @@ sandbox's is at or below `<domain>`; when the wildcard is `http:` under an
 `https:` lane; or when loopback status does not match the lanes.
 
 A view that asks for a stable domain gets its sandbox page from
-`https://<32hexkey>.mcp-apps.agents.example`, with the wildcard's scheme and
-port, when the domain the gateway forwarded is exactly one 32-hex-digit key
-label below the wildcard's domain. Any other host at or below that domain —
-a label that is 31 or 33 hex digits, a label that is not hex, an extra label,
-or the wrong port — returns 404 from the web server. Nothing at or below the
-domain bypasses the web server through Caddy; the gateway never sees a stable
-host.
+`https://<32hexkey>.agents-apps.example`, with the wildcard's scheme and port,
+when the domain the gateway forwarded is exactly one 32-hex-digit key label
+below the wildcard's domain. Any other host at or below that domain — a label
+that is 31 or 33 hex digits, a label that is not hex, an extra label, or the
+wrong port — is foreign and gets **421** from Caddy; the web server itself
+returns 404 for such names when reached directly, past Caddy. Nothing at or
+below the domain bypasses the web server through Caddy; the gateway never sees a
+stable host.
 
-**DNS and certificate.** Every `<32hexkey>.mcp-apps.agents.example` host needs
-DNS and a TLS certificate. A wildcard DNS record (`*` CNAME or A) covers all
-keys. The certificate must cover `*.mcp-apps.agents.example`; add it as a SAN
-to the lane's certificate, use a wildcard certificate for that subdomain, or
-obtain a separate certificate for it. With Caddy, an ACME DNS challenge issues
-a wildcard certificate without a separate listener per key. A Cloudflare-proxied
-name must sit exactly one level below the zone — for example
-`*.mcp-apps.agents.example` in the `agents.example` zone — for Cloudflare's
-free certificate to cover it. A proxied wildcard one level deeper, such as
-`*.mcp-apps.example` in the `example` zone (i.e. two levels below the zone),
-needs Cloudflare's paid certificate or a separate DNS zone.
+Stable hosts follow the same same-site and cookie rules as the sandbox address;
+see [Choosing a sandbox address](#choosing-a-sandbox-address) for the trade-offs
+of a registrable domain of its own versus a name under the lane's site.
+
+With a public guest lane, the stable host addresses must be publicly reachable
+too, for the same reason the sandbox address must: guests' browsers load them
+directly. Route them through the same public path as the sandbox address, sent
+to the guest Caddy site.
+
+**DNS and certificate.** Every `<32hexkey>.agents-apps.example` host needs DNS
+and a TLS certificate. A wildcard DNS record (`*` CNAME or A) covers all keys.
+The certificate must cover `*.agents-apps.example`; whatever terminates TLS
+issues it, for example an external Caddy using an ACME DNS challenge. A
+Cloudflare-proxied wildcard is covered by the free certificate only when the
+wildcard sits one level below the zone apex — for example `*.agents-apps.example`
+in a zone whose apex is `agents-apps.example`. A `<domain>` that is itself a
+subdomain of another zone, such as `mcp-apps.agents.example` in
+`agents.example`, puts the wildcard two levels below the apex and requires
+Cloudflare's paid certificate or a separate DNS zone for `mcp-apps.agents.example`.
 
 **Caddy routing.** Both Caddy sites already match each stable host, using the
 same `@stable` expression, and send it to the web server's own listener.
 No manual Caddyfile change is needed; setting the variable is enough. Verify:
 
 ```bash
-# A stable host returns the sandbox page, not a gateway route:
-curl -I https://<32hexkey>.mcp-apps.agents.example/api/v1/healthz  # expect 404
-curl -I https://<32hexkey>.mcp-apps.agents.example/mcp-app-sandbox.html  # expect 200
+# A stable host reaches the web server, not the gateway:
+curl -I https://<32hexkey>.agents-apps.example/api/v1/healthz   # expect 404 from the web server
+curl -I https://<32hexkey>.agents-apps.example/mcp-app-sandbox.html  # expect 200
 
-# A near-miss (hex label with the wrong length) returns 404:
-curl -I https://<31digits>.mcp-apps.agents.example/mcp-app-sandbox.html  # expect 404
+# A near-miss (wrong label length) goes through Caddy's @foreign rule:
+curl -I https://<31digits>.agents-apps.example/mcp-app-sandbox.html  # expect 421 through Caddy
 ```
 
 **Proxy rules.** Send only exact stable hosts — a 32-hex-digit label directly
 below the wildcard's domain, on the wildcard's port — to the web server, the
 same way the sandbox address is routed. The gateway must never receive a stable
-host request. Any other name at or below the domain returns 404 from the web
-server; do not let a wildcard DNS catch-all route non-stable names to the
-gateway.
+host request. Any other name at or below the domain is foreign and gets 421 from
+Caddy; do not let a wildcard DNS catch-all route non-stable names to the gateway.
 
 **Tools server.** The tools server declares a stable domain for the artifact
 view when both `AOS_UI_MCP_APP_STABLE_ORIGINS` and `AOS_UI_TOOLS_MCP_URL` are
 set. `AOS_UI_TOOLS_MCP_URL` must equal exactly the URL the gateway dials the
 tools server at, so the key the tools server computes matches the one the
-gateway checks. Under the Hermes and OpenCode harness overlays, both default to
-`http://tools-mcp:4110/mcp`, which the gateway's own `mcpApps.fallback`
-override also names. Under host networking and in fixture mode, both default to
-`http://127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}/mcp`. Set
-`AOS_UI_TOOLS_MCP_URL` explicitly when the gateway's configuration dials
-another URL. See [Tools MCP server configuration](configuration.md#tools-mcp-server)
-for the full rules.
+gateway checks. Under the Hermes overlay, both default to
+`http://tools-mcp:4110/mcp`; the gateway's `mcpApps.fallback` override names
+that same URL. Under the OpenCode overlay, OpenCode registers the tools server
+at `http://tools-mcp:4110/mcp` directly, so no gateway override is needed and
+both default to that URL. Under host networking, both default to
+`http://127.0.0.1:4110/mcp`. Set `AOS_UI_TOOLS_MCP_URL` explicitly when the
+gateway's configuration dials another URL. See
+[Tools MCP server configuration](configuration.md#tools-mcp-server) for the
+full rules.
 
 **Lockstep deploy.** The gateway (0.13.0) and this aos-ui build use a strict
 view schema. An older aos-ui that has not consumed the 0.13.0 SDK refuses a

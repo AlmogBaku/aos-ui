@@ -110,12 +110,16 @@ standard deployment. Set it only when an App needs a fixed origin of its own
 (OAuth callback, CORS or API-key allowlist, persistent `localStorage`). Before
 setting it, confirm:
 
-1. **A wildcard DNS record** (`*.mcp-apps.agents.example` CNAME or A) points to
+1. **A wildcard DNS record** (`*.agents-apps.example` CNAME or A) points to
    the Caddy host for every stable key the operator expects.
-2. **A wildcard TLS certificate** (`*.mcp-apps.agents.example`) is in place.
-   Caddy's ACME DNS challenge issues one without a separate listener. A
-   Cloudflare-proxied wildcard must sit one level below the zone; a wildcard
-   two levels deep requires Cloudflare's paid certificate or a separate zone.
+2. **A wildcard TLS certificate** (`*.agents-apps.example`) is in place.
+   Whatever terminates TLS issues it, for example an external Caddy with an
+   ACME DNS challenge. A Cloudflare-proxied wildcard is covered by the free
+   certificate only when the wildcard sits one level below the zone apex — for
+   example `*.agents-apps.example` in a `agents-apps.example` zone of its own.
+   A `<domain>` that is a subdomain of another zone, such as
+   `mcp-apps.agents.example` in `agents.example`, needs Cloudflare's paid
+   certificate or a separate DNS zone.
 3. **The domain sits outside every lane and sandbox.** The web server refuses
    `AOS_UI_MCP_APP_STABLE_ORIGINS` when any lane's or the sandbox's host is at
    or below the wildcard's domain.
@@ -123,7 +127,7 @@ setting it, confirm:
 Set both variables in `/etc/aos-ui/aos-ui.env` (or `.env`):
 
 ```bash
-AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.mcp-apps.agents.example
+AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.agents-apps.example
 AOS_UI_TOOLS_MCP_URL=http://tools-mcp:4110/mcp   # the URL the gateway dials
 ```
 
@@ -133,13 +137,13 @@ configuration. Under the Hermes and OpenCode overlays it defaults to
 `http://tools-mcp:4110/mcp`; under host networking it defaults to
 `http://127.0.0.1:4110/mcp`.
 
-After setting them, verify:
+After setting them, check the tools server's stderr on start: it logs one line
+naming the stable domain it declared, or why it declared none. Then verify:
 
 ```bash
-# The web server reports a stable domain in its startup log.
 # A stable host serves the sandbox page, not a gateway route:
-curl -I https://<32hexkey>.mcp-apps.agents.example/api/v1/healthz  # 404
-curl -I https://<32hexkey>.mcp-apps.agents.example/mcp-app-sandbox.html  # 200
+curl -I https://<32hexkey>.agents-apps.example/api/v1/healthz  # 404
+curl -I https://<32hexkey>.agents-apps.example/mcp-app-sandbox.html  # 200
 ```
 
 Deploy and roll back the gateway and aos-ui together: the strict view schema

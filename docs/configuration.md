@@ -153,12 +153,14 @@ origins behavior:
 | Variable                        | Default                                                                                             | Use                                                                                                                                                                                                                                      |
 | ------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `AOS_UI_MCP_APP_STABLE_ORIGINS` | unset                                                                                               | The same wildcard the web server reads. When set, the tools server declares a stable domain for the artifact view.                                                                                                                        |
-| `AOS_UI_TOOLS_MCP_URL`          | `http://tools-mcp:4110/mcp` (Hermes and OpenCode overlays); `http://127.0.0.1:<port>/mcp` (others) | The URL the gateway dials this server at. It must match the URL the gateway uses exactly — including the `mcpApps.fallback` override if one is set — so the key computed here matches the key the gateway checks. Defaults follow each Compose shape; set it explicitly when the gateway configuration dials another URL. |
+| `AOS_UI_TOOLS_MCP_URL`          | `http://tools-mcp:4110/mcp` (Hermes and OpenCode overlays); `http://127.0.0.1:4110/mcp` (host networking) | The URL the gateway dials this server at. It must match the URL the gateway uses exactly — including the `mcpApps.fallback` override if one is set — so the key computed here matches the key the gateway checks. Defaults follow each Compose shape; set it explicitly when the gateway configuration dials another URL. |
 
 With either `AOS_UI_MCP_APP_STABLE_ORIGINS` or `AOS_UI_TOOLS_MCP_URL` unset,
-the artifact view declares no stable domain and the server logs why. Under
-`--stdio` the server also declares none, because no gateway dials a URL for it.
-A malformed value for either setting stops the server at startup.
+the artifact view declares no stable domain and the server logs why on stderr.
+Under `--stdio` the server also declares none, because no gateway dials a URL
+for it. A malformed `AOS_UI_MCP_APP_STABLE_ORIGINS` stops the server when it is
+set. A malformed `AOS_UI_TOOLS_MCP_URL` stops it when both settings are set and
+the server is not under `--stdio`.
 
 The other three views (`render_chart`, `render_map`, `render_stats`) declare no
 stable domain regardless of these settings.
@@ -175,9 +177,14 @@ server listener. The lane is the port, never the path.
   to its own web server listener, so whichever site receives it serves it.
   This matcher runs before the `/api/v1` route, so the gateway never receives a
   sandbox request.
-- Each site answers only `127.0.0.1`, `localhost`, the sandbox address, and the
-  optional `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other name
-  gets 421. Setting either `PUBLIC_HOST` variable to a loopback name is
+- When `AOS_UI_MCP_APP_STABLE_ORIGINS` is set, each site also matches exactly
+  each stable host — a 32-hex-digit label directly below the wildcard's domain,
+  on its port — and routes the request to the web server's own listener, the
+  same way the sandbox matcher does. Any other host at or below that domain is
+  foreign and gets 421 from the catch-all matcher below.
+- Each site answers only `127.0.0.1`, `localhost`, the sandbox address, stable
+  hosts, and the optional `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`;
+  any other name gets 421. Setting either `PUBLIC_HOST` variable to a loopback name is
   harmless. Compose maps an empty value to `localhost`; run outside Compose,
   Caddy refuses to start with either variable set but empty.
 - `AOS_UI_CADDY_BIND` sets the bind address (default `127.0.0.1`; Compose sets

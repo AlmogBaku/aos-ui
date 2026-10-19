@@ -370,6 +370,11 @@ Additional checks by area:
   there. A second look in the other theme is earned only by a change to
   color, contrast, or theme tokens; a behavior change that happens to alter
   what renders needs no theme pass at all, its tests already cover it.
+  To run e2e against an external preview instead of the built-in server, set
+  `AOS_UI_E2E_BASE_URL` to the preview's root URL. The stable-origins spec
+  needs a second preview with stable origins on; point it there with
+  `AOS_UI_E2E_STABLE_ORIGINS_BASE_URL`. Without that variable, an external run
+  skips the stable-origins spec.
 - Tools MCP server or shared presentation schemas: `bunx vitest run packages/tools-mcp`
   and `tsc -p tsconfig.tools-mcp.json --noEmit`; both also run inside the root
   test, test:gate, and typecheck gates.

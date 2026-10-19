@@ -112,8 +112,9 @@ Claude's ext-apps documentation published this format.
 views alike — the gateway verifies that the domain's first label equals the key
 for the URL it dialed. A domain that passes the check is forwarded to the
 browser; one that fails is dropped and logged as `mcp_app.domain.dropped` with
-the server name and `reason: "mismatch"` (first label present but wrong) or
-`reason: "malformed"` (no parseable first label). The log carries no URL.
+the server name and a `reason`: `"mismatch"` when the first label is a valid
+host-name part but does not equal the expected key, or `"malformed"` when the
+declared value is not a valid lowercase host name at all. The log carries no URL.
 Coverage is Hermes and OpenCode; OpenClaw's native App views and stdio servers
 carry no domain.
 
@@ -126,11 +127,12 @@ Lane pages' `frame-src` adds the wildcard when it is set.
 file's `localStorage` per file across preview sessions when it runs on its
 stable origin: values are keyed by `fileId`, injected before the file's scripts
 run, and updated through a message the file's own frame sends on each write.
-Each file's share is capped at 64 KiB of JSON. A quota error fails only that
-file's write and changes nothing else. `sessionStorage` always lives in memory
-for the life of the preview. Values from one file are separate from another's;
-a message from any other frame is ignored. On any other origin (shared sandbox,
-or no `fileId` in the result), all storage lives in memory.
+Each file's share is capped at 64 Ki characters of the file's saved JSON; a
+quota error fails only that file's write and changes nothing else. Off the
+stable host — on the shared sandbox, or when no `fileId` is in the result — the
+in-memory storage has no limit. `sessionStorage` always lives in memory for the
+life of the preview. Values from one file are separate from another's; a message
+from any other frame is ignored.
 
 **Risks.** Browsers partition storage by top-level site, and Safari may clear
 it. Whatever HTML later sits at a given file path — by any Agent — can read
@@ -142,6 +144,8 @@ the artifact view to the new origin; nothing stored before carries over.
 
 See [Stable origins](deployment.md#stable-origins-optional) for DNS,
 certificate, Compose settings, and proxy rules.
+
+### Security policy and Agent HTML {#security-policy}
 
 AOS builds the view's CSP from its declared `_meta.ui.csp`:
 
@@ -183,10 +187,11 @@ grants images and media `data:` only, `blob:` images stay blank.
 
 Even though the Agent HTML frame is opaque, it has two capabilities:
 
-- **In-memory storage.** `localStorage` and `sessionStorage` are available for
-  the life of the preview, stored in memory and lost when the preview closes.
-  Property-style access (`localStorage.foo`) is not supported; use `getItem`
-  and `setItem`.
+- **Storage.** `localStorage` is kept per file on the artifact view's stable
+  origin, in memory elsewhere (see [Stable origins (optional)](#stable-origins)
+  for the cap and persistence rules). `sessionStorage` is always in memory for
+  the life of the preview. Property-style access (`localStorage.foo`) is not
+  supported; use `getItem` and `setItem`.
 - **Link relay.** A click on an `https:` link that the page did not prevent, or
   a `window.open` call with an `https:` address, is relayed to the workspace as
   a `ui/open-link` request. The workspace opens the URL in a new tab under the

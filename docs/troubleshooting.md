@@ -277,34 +277,39 @@ dialed. Check the gateway log for `mcp_app.domain.dropped`:
 
 | `reason`    | Meaning                                                                   | Fix                                                                                                    |
 | ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `mismatch`  | The declared label is present but does not equal the expected key         | Confirm `AOS_UI_TOOLS_MCP_URL` equals the URL the gateway dials — including any `mcpApps.fallback` override in the gateway config |
-| `malformed` | The domain has no parseable 32-hex-digit first label                      | Confirm the tools server starts without error and declares a domain; check `AOS_UI_MCP_APP_STABLE_ORIGINS` |
+| `mismatch`  | The domain is a valid host name but its first label does not equal the expected key | Confirm `AOS_UI_TOOLS_MCP_URL` equals the URL the gateway dials — including any `mcpApps.fallback` override in the gateway config |
+| `malformed` | The declared value is not a valid lowercase host name                     | Confirm the tools server starts without error and declares a domain; check `AOS_UI_MCP_APP_STABLE_ORIGINS` |
 
 The log carries the server name but never the URL. The most common mismatch is
-`AOS_UI_TOOLS_MCP_URL` naming a different URL than `mcpApps.fallback.servers.aos-ui.url` in the gateway configuration. Under the Hermes and OpenCode overlays both default to `http://tools-mcp:4110/mcp`; under host networking both default to `http://127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}/mcp`.
+`AOS_UI_TOOLS_MCP_URL` naming a different URL than `mcpApps.fallback.servers.aos-ui.url` in the gateway configuration. Under the Hermes and OpenCode overlays both default to `http://tools-mcp:4110/mcp`; under host networking both default to `http://127.0.0.1:4110/mcp`.
 
-## A stable host returns 404
+## A stable host returns 421 or 404
 
-A request for a stable host, such as `<32hexkey>.mcp-apps.agents.example`,
-returns 404 when any of these is true:
+A request for an exact stable host, such as `<32hexkey>.agents-apps.example`,
+returns **421** through Caddy when `AOS_UI_MCP_APP_STABLE_ORIGINS` is not set:
+Caddy's `@stable` matcher never fires, so the host falls through to the
+`@foreign` catch-all. The web server returns **404** directly (past Caddy) for
+any host at or below the domain that is not exactly a stable host on the
+wildcard's port; this is intentional.
 
-- `AOS_UI_MCP_APP_STABLE_ORIGINS` is not set in the Compose environment or
-  `.env`; Caddy's `@stable` matcher then never matches.
-- The host is a near miss: the label is fewer or more than 32 hex digits, is
-  not all hex, has an extra label, or uses the wrong port.
-- DNS for the wildcard `*.mcp-apps.agents.example` does not resolve to the
-  Caddy host, or TLS for it is not valid.
+Other causes of a stable host not loading:
 
-The web server returns 404 to any host at or below the stable origins' domain
-that is not exactly a 32-hex-digit label on the wildcard's port. This is
-intentional: near-miss names get nothing.
+- **Near-miss host through Caddy** (wrong label length, non-hex label, extra
+  label, wrong port): also gets 421 from the `@foreign` catch-all.
+- **DNS not resolving**: the wildcard `*.agents-apps.example` DNS record does
+  not point to the Caddy host.
+- **TLS not valid**: the certificate does not cover `*.agents-apps.example`.
+
+Check that `AOS_UI_MCP_APP_STABLE_ORIGINS` is set in the environment Compose
+reads (`.env` or the system environment) and that DNS and TLS are in place for
+the wildcard domain.
 
 ## The web server refuses to start with `AOS_UI_MCP_APP_STABLE_ORIGINS`
 
 The web server logs the setting name and the reason it refused it. Common causes:
 
 - **Not a wildcard origin.** The value must be `<scheme>://*.<domain>[:port]`; omitting `*.` is the most frequent mistake.
-- **A lane or sandbox host is at or below `<domain>`.** For example, if `AOS_UI_PUBLIC_ORIGIN` is `https://agents.example` and `AOS_UI_MCP_APP_STABLE_ORIGINS` is `https://*.agents.example`, the lane origin `agents.example` is at `<domain>`. Choose a distinct domain such as `mcp-apps.agents.example`.
+- **A lane or sandbox host is at or below `<domain>`.** For example, if `AOS_UI_PUBLIC_ORIGIN` is `https://agents.example` and `AOS_UI_MCP_APP_STABLE_ORIGINS` is `https://*.agents.example`, the lane origin `agents.example` is at `<domain>`. Choose a distinct domain that no lane or sandbox host is at or below, such as `https://*.agents-apps.example`.
 - **`http:` wildcard under an `https:` lane.** The wildcard must be `https:` when any lane is.
 - **Loopback mismatch.** The wildcard must be loopback exactly when the lanes are, and a loopback value must be a name below `localhost`, such as `http://*.mcp-apps.localhost:3000`.
 
