@@ -24,11 +24,7 @@ import {
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 import { cn } from "@/lib/utils"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
-import {
-  PUBLIC_ORIGIN_SETTINGS,
-  type LaneOrigins,
-  type Surface,
-} from "@shared/lane-origins"
+import type { LaneOrigins } from "@shared/lane-origins"
 import { sandboxPageUrl, sandboxPolicyOrigins } from "@shared/mcp-app-sandbox"
 
 import { AppUnavailable } from "./app-unavailable"
@@ -140,8 +136,6 @@ export type McpAppFrameProps = {
   onMove?: (placement: AppPlacement) => void
   target: McpAppTarget
   adapter: McpAppAdapter
-  /** The lane the view shows on, whose setting its notice names. */
-  surface: Surface
   /** The lane's origins; without them, or off them, the view cannot show. */
   origins: LaneOrigins | undefined
   /** The view's name: its frame's, and its header's in full screen. */
@@ -173,7 +167,6 @@ export default function McpAppFrame({
   toolName,
   target,
   adapter,
-  surface,
   origins,
   title,
   detail,
@@ -620,12 +613,7 @@ export default function McpAppFrame({
     return (
       <AppUnavailable
         detail={
-          atLaneOrigin
-            ? undefined
-            : labels.mcpApp.notAtLaneOrigin(
-                pageOrigin,
-                PUBLIC_ORIGIN_SETTINGS[surface]
-              )
+          atLaneOrigin ? undefined : labels.mcpApp.notAtPublicOrigin(pageOrigin)
         }
       />
     )

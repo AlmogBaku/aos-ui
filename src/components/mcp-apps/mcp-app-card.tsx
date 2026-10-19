@@ -218,7 +218,6 @@ function HostedMcpApp({
           toolName={toolName}
           target={target}
           adapter={adapter}
-          surface={host.surface}
           origins={host.origins}
           title={viewTitle(labels, { file, toolName, target })}
           detail={file?.mimeType}
@@ -385,7 +384,6 @@ function PipPanel({
             toolName={pip.toolName}
             target={pip.target}
             adapter={adapter}
-            surface={host.surface}
             origins={host.origins}
             title={title}
             detail={pip.file?.mimeType}

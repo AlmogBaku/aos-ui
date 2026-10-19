@@ -110,15 +110,14 @@ const target = {
   toolCallId: "t1",
 }
 const SANDBOX = "http://sandbox.localhost:3000"
-/** The operator lane the test page is opened at. */
+/** The origins the test page is opened at. */
 const LANE = {
-  surface: "operator",
   origins: {
     publicOrigins: [window.location.origin],
     mcpAppSandboxOrigin: SANDBOX,
     mcpAppFrameAncestors: [window.location.origin],
   },
-} as const satisfies Pick<McpAppFrameProps, "surface" | "origins">
+} as const satisfies Pick<McpAppFrameProps, "origins">
 
 function renderFrame(
   locale: "en" | "he" = "en",
@@ -508,39 +507,34 @@ describe("MCP App sandbox", () => {
 
   it.each([
     [
-      "an address its lane does not list",
-      "operator",
+      "an address AOS_UI_PUBLIC_ORIGIN does not list",
       {
         publicOrigins: ["https://aos.example.test"],
         mcpAppSandboxOrigin: SANDBOX,
         mcpAppFrameAncestors: ["https://aos.example.test"],
       },
-      `Apps show only at an address AOS_UI_PUBLIC_ORIGIN lists, and this page is at ${window.location.origin}.`,
     ],
     [
       "the sandbox origin",
-      "guest",
       {
         publicOrigins: [window.location.origin],
         mcpAppSandboxOrigin: window.location.origin,
         mcpAppFrameAncestors: [window.location.origin],
       },
-      `Apps show only at an address AOS_UI_GUEST_PUBLIC_ORIGIN lists, and this page is at ${window.location.origin}.`,
     ],
-    [
-      "a lane with no origins",
-      "operator",
-      undefined,
-      `Apps show only at an address AOS_UI_PUBLIC_ORIGIN lists, and this page is at ${window.location.origin}.`,
-    ],
+    ["any address, with no origins", undefined],
   ] as const)(
     "loads no frame on a page at %s, and names the setting",
-    (_label, surface, origins, reason) => {
-      render(frame({ surface, origins }))
+    (_label, origins) => {
+      render(frame({ origins }))
       expect(screen.queryByLabelText("show_board app")).toBeNull()
       expect(bridges).toEqual([])
       expect(screen.getByText("The app could not be shown.")).toBeVisible()
-      expect(screen.getByText(reason)).toBeVisible()
+      expect(
+        screen.getByText(
+          `Apps show only at an address AOS_UI_PUBLIC_ORIGIN lists, and this page is at ${window.location.origin}.`
+        )
+      ).toBeVisible()
     }
   )
 
@@ -556,9 +550,7 @@ describe("MCP App sandbox", () => {
     const csp = {
       connectDomains: ["https://aos.example.test", "https://api.example.test"],
     }
-    render(
-      frame({ surface: "guest", origins, view: { html: "<p>app</p>", csp } })
-    )
+    render(frame({ origins, view: { html: "<p>app</p>", csp } }))
 
     const reported = bridges.at(-1)?.capabilities.sandbox?.csp
     expect(reported).toEqual({ connectDomains: ["https://api.example.test"] })

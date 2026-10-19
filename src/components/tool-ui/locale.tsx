@@ -207,8 +207,8 @@ export type ToolUiLocaleLabels = {
   mcpApp: {
     loading: string
     unavailable: string
-    /** Why no view shows on a page whose address its lane does not list. */
-    notAtLaneOrigin: (pageOrigin: string, setting: string) => string
+    /** Why no view shows on a page AOS_UI_PUBLIC_ORIGIN does not list. */
+    notAtPublicOrigin: (pageOrigin: string) => string
     frameTitle: (toolName: string) => string
     exitFullscreen: string
     returnToMessage: string
@@ -405,8 +405,8 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
   mcpApp: {
     loading: "Loading the app…",
     unavailable: "The app could not be shown.",
-    notAtLaneOrigin: (pageOrigin, setting) =>
-      `Apps show only at an address ${setting} lists, and this page is at ${pageOrigin}.`,
+    notAtPublicOrigin: (pageOrigin) =>
+      `Apps show only at an address AOS_UI_PUBLIC_ORIGIN lists, and this page is at ${pageOrigin}.`,
     frameTitle: (toolName) => `${toolName} app`,
     exitFullscreen: "Exit full screen",
     returnToMessage: "Return to the message",
@@ -637,8 +637,8 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
   mcpApp: {
     loading: "היישומון נטען…",
     unavailable: "לא ניתן להציג את היישומון.",
-    notAtLaneOrigin: (pageOrigin, setting) =>
-      `יישומונים מוצגים רק בכתובת שמופיעה ב־${setting}, והדף הזה נמצא ב־${pageOrigin}.`,
+    notAtPublicOrigin: (pageOrigin) =>
+      `יישומונים מוצגים רק בכתובת שמופיעה ב־AOS_UI_PUBLIC_ORIGIN, והדף הזה נמצא ב־${pageOrigin}.`,
     frameTitle: (toolName) => `יישומון ${toolName}`,
     exitFullscreen: "יציאה ממסך מלא",
     returnToMessage: "החזרה להודעה",

@@ -19,7 +19,7 @@ import {
   type ShownFile,
 } from "@/artifacts/artifacts"
 import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
-import type { LaneOrigins, Surface } from "@shared/lane-origins"
+import type { LaneOrigins } from "@shared/lane-origins"
 
 import type { AppConnectionStatus } from "./use-app-files"
 
@@ -74,8 +74,6 @@ export type McpAppHost = {
   adapter: McpAppAdapter
   agentId: string
   sessionId: string
-  /** The lane the views show on, whose settings their notices name. */
-  surface: Surface
   /** The lane's origins, from its runtime configuration; none shows without. */
   origins: LaneOrigins | undefined
   /** The runtime connection's state, which the views' files follow. */
@@ -148,7 +146,6 @@ export function McpAppHostProvider({
   adapter,
   agentId,
   sessionId,
-  surface = "operator",
   origins,
   connectionStatus,
   messages = NO_MESSAGES,
@@ -157,7 +154,6 @@ export function McpAppHostProvider({
   adapter?: McpAppAdapter
   agentId?: string
   sessionId?: string
-  surface?: Surface
   origins?: LaneOrigins
   connectionStatus?: AppConnectionStatus
   /** The Session's conversation, which says what each file's latest call is. */
@@ -230,7 +226,6 @@ export function McpAppHostProvider({
             adapter,
             agentId,
             sessionId,
-            surface,
             origins,
             connectionStatus,
             pip: shown,
@@ -250,7 +245,6 @@ export function McpAppHostProvider({
       sessionId,
       showInPip,
       shown,
-      surface,
       updatePip,
     ]
   )

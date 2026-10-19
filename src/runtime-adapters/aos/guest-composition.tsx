@@ -219,7 +219,6 @@ function GuestArtifactShell({
         adapter={mcpApps}
         agentId={agentId}
         sessionId={sessionId}
-        surface="guest"
         origins={mcpAppOrigins}
         connectionStatus={connectionStatus}
         messages={messages}
