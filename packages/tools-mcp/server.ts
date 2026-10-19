@@ -30,6 +30,7 @@ import {
   type PresentationView,
   type PresentationViewName,
 } from "../../shared/presentation/views"
+import { registerFileReads, type FileReadOptions } from "./file-reads"
 
 /** Each presentation view's built, self-contained HTML document. */
 export type PresentationViewDocuments = Record<PresentationViewName, string>
@@ -59,6 +60,8 @@ export type ArtifactStableOrigin = { domain: string; host: string }
 export type ToolsServerOptions = {
   /** Declared by the artifact view alone, and only when set. */
   artifactStableOrigin?: ArtifactStableOrigin
+  /** Where the artifact view's file reads are answered; by default, nowhere. */
+  fileReads?: FileReadOptions
 }
 
 const SAFE_OUTPUT =
@@ -235,16 +238,16 @@ function registerFiles(
  */
 export function toolsServerFactory(
   files: ToolsServerFiles,
-  { artifactStableOrigin }: ToolsServerOptions = {}
+  { artifactStableOrigin, fileReads = { origins: [] } }: ToolsServerOptions = {}
 ): () => McpServer {
   if (artifactStableOrigin === undefined)
-    return () => createToolsServer(files, undefined)
+    return () => createToolsServer(files, undefined, fileReads)
   const { domain, host } = artifactStableOrigin
   const views = {
     ...files.views,
     artifact: withExpectedHost(files.views.artifact, host),
   }
-  return () => createToolsServer({ ...files, views }, domain)
+  return () => createToolsServer({ ...files, views }, domain, fileReads)
 }
 
 /**
@@ -254,7 +257,8 @@ export function toolsServerFactory(
  * the MCP App view that draws it, and the server serves that view's HTML as a
  * `ui://aos-ui/<view>` resource, the artifact view's declaring
  * `artifactDomain`, when it has one. `present_artifact` opens no file: its
- * view reads the file through the address the page hands it.
+ * view reads the file at the address the page hands it, which the server
+ * answers by `fileReads` alone.
  */
 function createToolsServer(
   {
@@ -263,7 +267,8 @@ function createToolsServer(
     grammars = new Map(),
     maplibre = new Map(),
   }: ToolsServerFiles,
-  artifactDomain: string | undefined
+  artifactDomain: string | undefined,
+  fileReads: FileReadOptions
 ): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
@@ -292,6 +297,8 @@ function createToolsServer(
     maplibre,
     () => "text/javascript"
   )
+  // Last, so it sees only the URIs no resource above answers.
+  registerFileReads(server, fileReads)
 
   for (const [name, definition] of Object.entries(
     presentationToolDefinitions

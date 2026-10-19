@@ -61,12 +61,13 @@ function exactOrigin(name: string, value: string) {
 }
 
 /**
- * Every origin people open AOS UI at, from its comma-separated setting, each
- * an exact origin (`isMcpAppPolicyOrigin`). Throws naming the setting.
+ * The origins `AOS_UI_PUBLIC_ORIGIN` lists, comma-separated, each once and an
+ * exact origin (`isMcpAppPolicyOrigin`); none while it is unset. Throws naming
+ * the setting.
  */
-function readPublicOrigins(getenv: Getenv): string[] {
+export function listedPublicOrigins(getenv: Getenv): string[] {
   const setting = PUBLIC_ORIGIN_SETTING
-  const publicOrigins = [
+  return [
     ...new Set(
       (getenv(setting) ?? "")
         .split(",")
@@ -74,6 +75,15 @@ function readPublicOrigins(getenv: Getenv): string[] {
         .filter(Boolean)
     ),
   ].map((value) => exactOrigin(setting, value))
+}
+
+/**
+ * Every origin people open AOS UI at, from its comma-separated setting, each
+ * an exact origin (`isMcpAppPolicyOrigin`). Throws naming the setting.
+ */
+function readPublicOrigins(getenv: Getenv): string[] {
+  const setting = PUBLIC_ORIGIN_SETTING
+  const publicOrigins = listedPublicOrigins(getenv)
   if (publicOrigins.length === 0)
     throw new Error(
       `${setting} must list every origin AOS UI is opened at, operator and guest alike, ${EXAMPLE}`

@@ -19,6 +19,7 @@ import {
   type ToolsServerOptions,
   type ViewFiles,
 } from "./server"
+import { fileReadSettings } from "./file-reads"
 import { artifactStableOrigin } from "./stable-origin"
 
 const USAGE =
@@ -95,6 +96,9 @@ function serveHttp(
   const server = Bun.serve({
     hostname,
     port,
+    // Longer than a file read may take, in seconds: Bun closes a connection
+    // that sends nothing for this long, even while its handler still works.
+    idleTimeout: 60,
     routes: {
       "/health": { GET: () => new Response("ok") },
       "/mcp": (request) => handleMcp(createServer, request),
@@ -126,9 +130,11 @@ if (import.meta.main) {
       process.env,
       values.stdio === true
     )
-    options = { artifactStableOrigin: origin }
+    const fileReads = fileReadSettings(process.env)
+    options = { artifactStableOrigin: origin, fileReads: fileReads.options }
     // On stderr, since stdout carries the protocol under --stdio.
     console.warn(note)
+    console.warn(fileReads.note)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(2)
