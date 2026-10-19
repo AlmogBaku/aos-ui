@@ -27,27 +27,25 @@ file.
 Unknown fields are rejected. Published HTML Artifacts load no external assets
 in preview.
 
-The aos-ui web server serves the operator's file with four fields always
+The aos-ui web server serves the operator's file with three fields always
 added, overriding any with those names the file contains:
 
 - `buildId` — the served build, read from `dist/build-id`; the browser reloads once when it differs from the build it is running.
-- `publicOrigins` — the comma-separated value of `AOS_UI_PUBLIC_ORIGIN`, parsed into an array.
+- `publicOrigins` — the comma-separated value of `AOS_UI_PUBLIC_ORIGIN`, parsed
+  into an array: every origin people open AOS UI at, operator and guest alike,
+  which are also the pages the sandbox page's header lets frame it.
 - `mcpAppSandboxOrigin` — the value of `AOS_UI_MCP_APP_SANDBOX_ORIGIN`.
-- `mcpAppFrameAncestors` — every lane's origins, the pages the sandbox page's
-  header lets frame it: `AOS_UI_PUBLIC_ORIGIN`'s, and
-  `AOS_UI_GUEST_PUBLIC_ORIGIN`'s with the guest surface on.
 
 The browser uses `publicOrigins` and `mcpAppSandboxOrigin` to decide whether
 to show MCP App views: it shows views only when its own origin is in
 `publicOrigins` and the sandbox origin differs from that. A workspace opened at
 an address not in `publicOrigins`, or opened at the sandbox origin itself, shows
 views as unavailable and names the setting. It reports the domains a view's
-policy applies against `mcpAppFrameAncestors`, as the server builds that
-policy.
+policy applies against `publicOrigins`, as the server builds that policy.
 
 The guest surface needs no file: it answers a generated `{ "surface": "guest"
-}` with `buildId`, `publicOrigins` from the guest lane's setting, and the same
-`mcpAppSandboxOrigin` and `mcpAppFrameAncestors` the operator surface carries. The browser refetches the
+}` with `buildId` and the same `publicOrigins` and `mcpAppSandboxOrigin` the
+operator surface carries. The browser refetches the
 configuration on reconnect and when the tab regains focus, and reloads once
 when the served `buildId` differs from the build it is running.
 
@@ -60,7 +58,7 @@ Vite derives the same public shape when no configuration file is supplied.
 | `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                                              | Public runtime JSON file. Also read by the web server; required in every non-fixture setup. |
 | `AOS_UI_RUNTIME_MODE`                    | `aos`                                              | `aos` or explicit `fixture`.                                                                |
 | `AOS_UI_GATEWAY_TARGET`                  | `http://127.0.0.1:4100`                            | Gateway that Vite forwards `/api/v1` (HTTP and WebSocket) to.                               |
-| `AOS_UI_PUBLIC_ORIGIN`                   | `http://localhost:<port>,http://127.0.0.1:<port>`  | Comma-separated lane origins. Vite defaults to the port it serves on; set this when Vite is behind a named address such as a tailnet name. |
+| `AOS_UI_PUBLIC_ORIGIN`                   | `http://localhost:<port>,http://127.0.0.1:<port>`  | Every origin people open AOS UI at, comma-separated, a guest page that frames Vite's sandbox included. Vite defaults to the port it serves on; set this when Vite is behind a named address such as a tailnet name. |
 | `AOS_UI_MCP_APP_SANDBOX_ORIGIN`          | `http://sandbox.localhost:<port>`                  | MCP App sandbox origin. Vite defaults to the same port; set this to match when `AOS_UI_PUBLIC_ORIGIN` is set. |
 | `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                                             | Set `false` to hide model selection.                                                        |
 | `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                                             | Set `false` to hide context usage.                                                          |
@@ -85,11 +83,10 @@ the gateway answers `/api/v1` beside it.
 | ------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `AOS_UI_WEB_HOST`                    | `127.0.0.1`                                                                    | Operator surface bind address: `127.0.0.1`, `::1`, or a wildcard with `AOS_UI_WEB_EXPOSURE`.                                                                 |
 | `AOS_UI_WEB_PORT`                    | `3000`                                                                         | Operator surface port. Compose uses `4200`.                                                                                                                  |
-| `AOS_UI_PUBLIC_ORIGIN`               | required; Compose defaults to `http://localhost:<port>,http://127.0.0.1:<port>` | The exact origins the browser opens the operator lane at, comma-separated. Must be [exact origins](#exact-origins). Served in `/runtime-config.json` as `publicOrigins`. |
-| `AOS_UI_MCP_APP_SANDBOX_ORIGIN`      | required; Compose defaults to `http://sandbox.localhost:<port>`, the operator lane's port | The one sandbox origin both lanes' MCP App views load from. Must be an exact origin differing in host and port from every lane origin (`AOS_UI_PUBLIC_ORIGIN`, and `AOS_UI_GUEST_PUBLIC_ORIGIN` with the guest surface on), `https:` when any of them is, and loopback exactly when they are, then a `*.localhost` name. Served in both surfaces' `/runtime-config.json` as `mcpAppSandboxOrigin`. |
+| `AOS_UI_PUBLIC_ORIGIN`               | required; Compose defaults to `http://localhost:<port>,http://127.0.0.1:<port>` on the operator lane's port, and a harness overlay adds the same on the guest lane's | Every exact origin the browser opens AOS UI at, operator and guest alike, comma-separated. Must be [exact origins](#exact-origins). Served in both surfaces' `/runtime-config.json` as `publicOrigins`. |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN`      | required; Compose defaults to `http://sandbox.localhost:<port>`, the operator lane's port | The one sandbox origin both lanes' MCP App views load from. Must be an exact origin differing in host and port from every origin in `AOS_UI_PUBLIC_ORIGIN`, `https:` when any of them is, and loopback exactly when they are, then a `*.localhost` name. Served in both surfaces' `/runtime-config.json` as `mcpAppSandboxOrigin`. |
 | `AOS_UI_GUEST_WEB_PORT`              | unset                                                                          | Guest surface port; the guest surface runs only when it is set. Compose's harness overlays use `4201`.                                                        |
 | `AOS_UI_GUEST_WEB_HOST`              | `127.0.0.1`                                                                    | Guest surface bind address, under the same rule as `AOS_UI_WEB_HOST`.                                                                                        |
-| `AOS_UI_GUEST_PUBLIC_ORIGIN`         | required with `AOS_UI_GUEST_WEB_PORT`; Compose defaults to loopback on `AOS_UI_GUEST_PUBLISHED_PORT` | Guest-lane public origins, comma-separated. Same rules as `AOS_UI_PUBLIC_ORIGIN`. Must not overlap the operator lane's origins. |
 | `AOS_UI_WEB_EXPOSURE`                | unset                                                                          | `private-container` allows a wildcard bind (`0.0.0.0` or `::`) inside a private container network.                                                           |
 | `AOS_UI_MCP_APP_STABLE_ORIGINS`      | unset                                                                          | Optional MCP App stable origins wildcard: `<scheme>://*.<domain>[:port]`. Off while unset; a view that asks for a stable domain loads from that origin instead of the shared sandbox. The web server refuses to start when the value is set but malformed, when any lane's or the sandbox's host is at or below `<domain>`, when the wildcard is `http:` under an `https:` lane, or when loopback status does not match. See [Stable origins](deployment.md#stable-origins-optional). |
 | `AOS_UI_STATIC_ROOT`                 | `/app/dist`                                                                    | The built app, holding `build-id` beside the assets.                                                                                                         |
@@ -98,14 +95,13 @@ the gateway answers `/api/v1` beside it.
 The sandbox address answers 404 to service-worker script requests
 (`Service-Worker:` header) so nothing installs a worker there.
 
-The web server refuses to start when any required origin setting is missing
-or not an [exact origin](#exact-origins); when the sandbox shares a host and
-port with a lane origin, is loopback while a lane origin is not or the
-reverse, is `http:` under an `https:` lane, or is loopback but not a
-`*.localhost` name; or when one origin is in both lanes' lists. Both lanes
-share the one sandbox. The guest origin setting is required only when
-`AOS_UI_GUEST_WEB_PORT` is set. See [MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins) for
-naming and proxy guidance.
+The web server refuses to start when a required origin setting is missing or
+not an [exact origin](#exact-origins), or when the sandbox shares a host and port
+with an origin in `AOS_UI_PUBLIC_ORIGIN`, is loopback while one of them is not
+or the reverse, is `http:` under an `https:` one, or is loopback but not a
+`*.localhost` name. Both lanes share the one sandbox. See
+[MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins) for naming and
+proxy guidance.
 
 The guest surface never serves `/auth`, `/sw.js`, or `/manifest.webmanifest`.
 

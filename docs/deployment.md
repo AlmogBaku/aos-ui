@@ -113,28 +113,33 @@ each view's own Content Security Policy, which only the lanes' own pages may
 frame. Any separate name, or a lane's name on another port, differs from the
 lanes' origins. Both lanes' views load from it.
 
-Three settings hold the addresses. The web server refuses to start without
+Two settings hold the addresses. The web server refuses to start without
 them, naming each one it rejects:
 
 | Setting | Form | Description |
 | --- | --- | --- |
-| `AOS_UI_PUBLIC_ORIGIN` | Comma-separated exact origins | The origins the browser opens the operator lane at |
-| `AOS_UI_GUEST_PUBLIC_ORIGIN` | Comma-separated exact origins | The origins the browser opens the guest lane at; required with the guest lane on |
-| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | Single exact origin | The one address every lane's views load from; its host and port differ from every lane origin's, it is `https:` when any of them is, and loopback exactly when they are |
+| `AOS_UI_PUBLIC_ORIGIN` | Comma-separated exact origins | Every origin people open AOS UI at, operator and guest alike |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | Single exact origin | The one address every lane's views load from; its host and port differ from every origin in `AOS_UI_PUBLIC_ORIGIN`, it is `https:` when any of them is, and loopback exactly when they are |
 
 Each value is an [exact origin](configuration.md#exact-origins):
-`https://agents.example` is exact; `https://agents.example/` is not. No origin
-may be in both lanes' lists.
+`https://agents.example` is exact; `https://agents.example/` is not. List the
+guest lane's origins in `AOS_UI_PUBLIC_ORIGIN` beside the operator's, such as
+`https://agents.example,https://guests.agents.example`.
 
-Compose defaults all three to loopback, so local development and containerized
+Compose defaults both to loopback, so local development and containerized
 fixture mode need no extra configuration. The sandbox takes the operator lane's
-published port, and the guest lane frames that same address:
+published port, and the guest lane frames that same address. A harness
+overlay, which opens the guest lane, lists both lanes' loopback origins:
 
 | Variable | Compose default (ports 3000 and 3001) | Under [host networking](#host-networking) |
 | --- | --- | --- |
-| `AOS_UI_PUBLIC_ORIGIN` | `http://localhost:3000,http://127.0.0.1:3000` | `http://127.0.0.1:18080,http://localhost:18080` |
-| `AOS_UI_GUEST_PUBLIC_ORIGIN` | `http://localhost:3001,http://127.0.0.1:3001` | `http://127.0.0.1:18081,http://localhost:18081` |
+| `AOS_UI_PUBLIC_ORIGIN` | `http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001` | `http://127.0.0.1:18080,http://localhost:18080,http://127.0.0.1:18081,http://localhost:18081` |
 | `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | `http://sandbox.localhost:3000` | `http://sandbox.localhost:18080` |
+
+Without a harness overlay, or with
+[`deploy/compose.operator-only.yaml`](#run-without-the-guest-lane),
+`AOS_UI_PUBLIC_ORIGIN` defaults to the operator lane's two loopback origins
+alone.
 
 ### Choosing a sandbox address
 
@@ -172,16 +177,17 @@ mismatched setting.
 Whichever lane receives a request for the sandbox address serves it. Each Caddy
 site matches the same `AOS_UI_MCP_APP_SANDBOX_ORIGIN` and sends the request to
 its own web listener, and every listener answers with the sandbox page whose
-`frame-ancestors` names every lane's origins: the operator's, and the guest's
-when the guest listener is on. Both surfaces' `/runtime-config.json` carry the
-same `mcpAppSandboxOrigin`, and both pages' `frame-src` name it.
+`frame-ancestors` names every origin in `AOS_UI_PUBLIC_ORIGIN`. Both surfaces'
+`/runtime-config.json` carry the same `publicOrigins` and
+`mcpAppSandboxOrigin`, and both pages' `frame-src` name the sandbox.
 
 Sharing one origin across lanes shares two things. One is what the origin
 stores, its web storage and cookies, which a browser keeps per profile: an
 operator and a guest on their own devices never meet there, and views on
 different pages cannot script each other. The other is the sandbox page's
-header, whose `frame-ancestors` lists every lane's origins to whoever requests
-the page: keep the operator lane's origins to names you are fine publishing.
+header, whose `frame-ancestors` lists every origin in `AOS_UI_PUBLIC_ORIGIN` to
+whoever requests the page: keep the operator lane's origins to names you are
+fine publishing.
 
 With a public guest lane, the sandbox address must be publicly reachable too,
 since guests' browsers load it. Route that public address to the guest Caddy
@@ -292,7 +298,7 @@ The operator lane's address must be consistent in three places:
 3. **Gateway's `allowedOrigins`** — the origins the gateway accepts WebSocket upgrades from.
 
 The guest lane's address agrees the same way, in `AOS_UI_GUEST_PUBLIC_HOST`,
-`AOS_UI_GUEST_PUBLIC_ORIGIN`, and the gateway's guest listener. The sandbox
+the same `AOS_UI_PUBLIC_ORIGIN` list, and the gateway's guest listener. The sandbox
 address is one value, `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, which Caddy's sites
 match and the web server serves the sandbox page for.
 
@@ -356,14 +362,14 @@ check stands for it.
 
 ### Guest lane
 
-A harness overlay turns the guest lane on, so `AOS_UI_GUEST_PUBLIC_ORIGIN` is
-required there: set it to the origins guests open the lane at. The overlays
-default it to loopback on `AOS_UI_GUEST_PUBLISHED_PORT`. The guest lane's views
-load from the same sandbox, so its origins fall under the sandbox's rules too,
-and they must sit on the same side of loopback as the operator lane's. A
-loopback operator lane beside a public guest lane is therefore unsupported with
-one shared sandbox, and so is a named operator lane beside the overlays'
-loopback guest default; without a guest lane, add
+A harness overlay turns the guest lane on: list the origins guests open the
+lane at in `AOS_UI_PUBLIC_ORIGIN`, beside the operator's. The overlays default
+that list to both lanes' loopback origins, on `AOS_UI_WEB_PUBLISHED_PORT` and
+`AOS_UI_GUEST_PUBLISHED_PORT`. The guest lane's views load from the same
+sandbox, so its origins fall under the sandbox's rules too, and they must sit
+on the same side of loopback as the operator lane's. A loopback operator lane
+beside a public guest lane is therefore unsupported with one shared sandbox;
+without a guest lane, add
 [`deploy/compose.operator-only.yaml`](#run-without-the-guest-lane).
 
 Apply the same DNS, certificate, and reverse-proxy rules to the guest lane's
@@ -487,8 +493,12 @@ answers 502. For an operator-only deployment:
 1. Remove the `guest` block from the gateway configuration.
 2. Add `-f deploy/compose.operator-only.yaml` after the harness overlay. It
    mounts the Caddyfile without the guest site, so Caddy does not listen on
-   the guest lane at all, and turns off the web server's guest listener, so
-   the overlay's loopback guest origins never meet a named operator lane.
+   the guest lane at all, turns off the web server's guest listener, and
+   defaults `AOS_UI_PUBLIC_ORIGIN` back to the operator lane's loopback
+   origins. Under [host networking](#host-networking),
+   `deploy/compose.host.yaml` comes after it and sets its own default, which
+   lists the guest port too; set `AOS_UI_PUBLIC_ORIGIN` to the operator's
+   origins alone there.
 3. Keep `AOS_UI_GUEST_BIND_ADDRESS` at its loopback default and route no
    ingress to the guest port.
 

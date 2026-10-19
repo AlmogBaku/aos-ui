@@ -221,14 +221,15 @@ Views display as unavailable in their card when the workspace cannot load the
 sandbox page. The card names the reason.
 
 **"Apps show only at an address `AOS_UI_PUBLIC_ORIGIN` lists, and this page is at `<origin>`."** (Hebrew: "יישומונים מוצגים רק בכתובת שמופיעה ב־`AOS_UI_PUBLIC_ORIGIN`, והדף הזה נמצא ב־`<origin>`.")
-The workspace's own origin is not in the lane's `publicOrigins` list, or it
-equals the sandbox origin. This happens when:
+The workspace's own origin is not in the `publicOrigins` list, or it equals
+the sandbox origin. This happens when:
 
-- `AOS_UI_PUBLIC_ORIGIN` (or `AOS_UI_GUEST_PUBLIC_ORIGIN` for the guest lane)
-  does not list the exact origin the browser used to open the page. Check that
-  the value is a comma-separated list of exact origins (`https://agents.example`,
-  not `https://agents.example/`) and that the browser's address bar shows one of
-  them. The workspace opened at the sandbox origin itself shows the same message.
+- `AOS_UI_PUBLIC_ORIGIN` does not list the exact origin the browser used to
+  open the page, on the operator or the guest lane. Check that the value is a
+  comma-separated list of exact origins (`https://agents.example`, not
+  `https://agents.example/`) naming every lane's addresses, and that the
+  browser's address bar shows one of them. The workspace opened at the sandbox
+  origin itself shows the same message.
 - The `/runtime-config.json` response is missing `publicOrigins` or
   `mcpAppSandboxOrigin`. Check that the web server is running and that both
   settings are set; `curl -s http://127.0.0.1:3000/runtime-config.json | bun -e

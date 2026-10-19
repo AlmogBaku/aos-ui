@@ -43,10 +43,10 @@ the view runs on the sandbox origin and can use cookies and web storage.
 **Per-view policy.** The aos-ui web server serves `/mcp-app-sandbox.html` with
 a Content Security Policy built for the particular view the query names:
 
-- `frame-ancestors` lists every lane's public origins (`AOS_UI_PUBLIC_ORIGIN`,
-  and `AOS_UI_GUEST_PUBLIC_ORIGIN` with the guest lane on), so only the lanes'
-  own pages may frame the sandbox page. Any other page that tries to embed it
-  is refused by the browser.
+- `frame-ancestors` lists every origin in `AOS_UI_PUBLIC_ORIGIN`, the origins
+  people open AOS UI at, operator and guest alike, so only the lanes' own
+  pages may frame the sandbox page. Any other page that tries to embed it is
+  refused by the browser.
 - The view's declared domains (`_meta.ui.csp`) and file addresses travel in the
   sandbox page's query; the server rebuilds the policy from them and sends it
   with `no-store`. Every value is validated before it is written.
@@ -74,15 +74,15 @@ publishes.
 **Published origins.** The sandbox page's header lists every lane's origins in
 its `frame-ancestors` to whoever requests the page, so keep the operator
 lane's origins to names you are fine publishing. Each surface's
-`/runtime-config.json` carries the same list as `mcpAppFrameAncestors`, from
-which the workspace reports the domains a view's policy applies. With the
+`/runtime-config.json` carries the same list as `publicOrigins`, from which
+the workspace reports the domains a view's policy applies. With the
 sandbox reachable only through a public route, the operator's own views load
 it over that route too, and stop showing while it is down.
 
 **Lane restriction.** The workspace loads views only when its own origin is in
-the lane's `publicOrigins` list and differs from the sandbox origin. A workspace
+the `publicOrigins` list and differs from the sandbox origin. A workspace
 opened at an address not in that list, or opened at the sandbox origin itself,
-shows views as unavailable with the name of the setting to set.
+shows views as unavailable and names `AOS_UI_PUBLIC_ORIGIN`.
 
 The view frame may not navigate the workspace, open pop-ups, or submit forms.
 
