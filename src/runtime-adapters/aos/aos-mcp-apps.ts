@@ -1,7 +1,4 @@
-import { z } from "zod"
-
 import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
-import { FileReadRefusalSchema } from "@shared/presentation/file-reads"
 
 import {
   McpAppFilesRefusedError,
@@ -11,6 +8,7 @@ import {
 } from "../contracts"
 import {
   HgwClientError,
+  McpAppFileReadError,
   type HgwRemoteClient,
   type McpAppSubject,
 } from "@harness-gw/sdk"
@@ -30,13 +28,6 @@ function refusal(error: unknown): error is HgwClientError {
     error.status !== 429
   )
 }
-
-/**
- * A gateway refusal of a read that names its reason. The SDK release that
- * types it follows harness-gw's; until this repository takes it, the reason
- * is read by its shape.
- */
-const RefusedReadSchema = z.object({ reason: FileReadRefusalSchema })
 
 /** The part of a target the gateway's path names under its Session. */
 function subjectOf(target: McpAppTarget): McpAppSubject {
@@ -80,9 +71,10 @@ export class AosMcpAppAdapter implements McpAppAdapter {
         uri: input.uri,
       })
       .catch((error: unknown) => {
-        // The gateway names why it or the view's server refused a read.
-        const refused = RefusedReadSchema.safeParse(error).data
-        throw refused ? new McpAppResourceReadError(refused.reason) : error
+        // The gateway names why it or the view's server refused a file read.
+        throw error instanceof McpAppFileReadError
+          ? new McpAppResourceReadError(error.reason)
+          : error
       })
 
   renewFiles: McpAppAdapter["renewFiles"] = (target) =>

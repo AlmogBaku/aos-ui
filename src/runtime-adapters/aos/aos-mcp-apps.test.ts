@@ -1,21 +1,24 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { HgwClientError } from "@harness-gw/sdk"
+import { HgwClientError, McpAppFileReadError } from "@harness-gw/sdk"
 
 import { McpAppResourceReadError } from "../contracts"
 import { AosMcpAppAdapter } from "./aos-mcp-apps"
 
 describe("AOS MCP App adapter", () => {
-  it("names the reason the gateway gives for refusing a read, and passes any other failure, or a reason it does not know, on as it came", async () => {
-    // The SDK that types the reason is not released yet; its error carries it
-    // as this one does.
-    const refused = Object.assign(
-      new HgwClientError("gateway-failure", "Refused", undefined, 403),
-      { reason: "denied" }
+  it("names the reason the gateway gives for refusing a file read, and passes any other failure on as it came", async () => {
+    const refused = new McpAppFileReadError(
+      "denied",
+      "gateway-failure",
+      "Refused",
+      "forbidden",
+      403
     )
     const offline = new HgwClientError("connection-interrupted")
+    // Only the SDK's file-read error names a reason; another error that
+    // happens to carry one is no refusal of a file read.
     const unknown = Object.assign(new HgwClientError("gateway-failure"), {
-      reason: "quota",
+      reason: "denied",
     })
     const readMcpAppResource = vi
       .fn()

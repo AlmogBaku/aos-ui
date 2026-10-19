@@ -1,4 +1,8 @@
-import { HGW_API_PREFIX, isMcpAppPolicyOrigin } from "@harness-gw/sdk/protocol"
+import {
+  HGW_API_PREFIX,
+  MAX_MCP_APP_FILE_BYTES,
+  isMcpAppPolicyOrigin,
+} from "@harness-gw/sdk/protocol"
 import {
   ProtocolError,
   ProtocolErrorCode,
@@ -10,7 +14,6 @@ import {
 
 import { listedPublicOrigins } from "../../shared/lane-origins"
 import {
-  FILE_READ_LIMIT,
   refusalReason,
   type FileReadReason,
 } from "../../shared/presentation/file-reads"
@@ -258,7 +261,7 @@ export type FileReader = (uri: URL) => Promise<ReadResourceResult>
 export function fileReader({
   origins,
   upstreams = new Map(),
-  limit = FILE_READ_LIMIT,
+  limit = MAX_MCP_APP_FILE_BYTES,
   timeoutMs = FILE_READ_TIMEOUT_MS,
   concurrency = FILE_READ_CONCURRENCY,
   queue = FILE_READ_QUEUE,

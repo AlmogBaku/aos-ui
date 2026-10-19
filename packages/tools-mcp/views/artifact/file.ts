@@ -1,9 +1,9 @@
+import {
+  MAX_MCP_APP_FILE_BYTES,
+  McpAppFileReadErrorDataSchema,
+} from "@harness-gw/sdk/protocol"
 import { z } from "zod"
 
-import {
-  FILE_READ_LIMIT,
-  FileReadRefusalSchema,
-} from "../../../../shared/presentation/file-reads"
 import { syntaxLanguageFromFilename } from "../../../../shared/syntax-language"
 import type { ViewApp } from "../view"
 import { codeLanguage } from "./code"
@@ -43,14 +43,14 @@ const MIB = 1024 * 1024
 
 /**
  * The largest file of each kind, in bytes, the view previews; a larger one is
- * only offered. Every read stops at `FILE_READ_LIMIT`, and the view lays text
+ * only offered. Every read stops at `MAX_MCP_APP_FILE_BYTES`, and the view lays text
  * out itself, so text gets the least.
  */
 export const PREVIEW_LIMITS: PreviewLimits = {
-  pdf: FILE_READ_LIMIT,
-  image: FILE_READ_LIMIT,
-  audio: FILE_READ_LIMIT,
-  video: FILE_READ_LIMIT,
+  pdf: MAX_MCP_APP_FILE_BYTES,
+  image: MAX_MCP_APP_FILE_BYTES,
+  audio: MAX_MCP_APP_FILE_BYTES,
+  video: MAX_MCP_APP_FILE_BYTES,
   html: 25 * MIB,
   text: 2 * MIB,
 }
@@ -184,9 +184,7 @@ function preview(kind: FileKind, type: string, blob: string): FilePreview {
 }
 
 /** A read's JSON-RPC error that names why it failed. */
-const RefusedReadSchema = z.object({
-  data: z.object({ reason: FileReadRefusalSchema }),
-})
+const RefusedReadSchema = z.object({ data: McpAppFileReadErrorDataSchema })
 
 /**
  * Why a read failed, by the `data.reason` its JSON-RPC error carries; a read

@@ -7,12 +7,12 @@ import type {
   ReadResourceResult,
 } from "@modelcontextprotocol/client"
 import type {
+  McpAppFileReadFailure,
   McpAppFiles,
   McpAppView,
   SessionPlatform,
 } from "@harness-gw/sdk/protocol"
 import type { PushSubscriptionManager } from "@/lib/notifications/push-subscription"
-import type { FileReadRefusal } from "@shared/presentation/file-reads"
 export type { RuntimeMode } from "@shared/runtime-modes"
 
 export type AgentStatus =
@@ -324,7 +324,7 @@ export class McpAppFilesRefusedError extends Error {
  * other read failure remains an ordinary Error.
  */
 export class McpAppResourceReadError extends Error {
-  constructor(readonly reason: FileReadRefusal) {
+  constructor(readonly reason: McpAppFileReadFailure) {
     super(`The resource could not be read: ${reason}`)
     this.name = "McpAppResourceReadError"
   }

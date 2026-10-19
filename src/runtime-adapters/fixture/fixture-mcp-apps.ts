@@ -2,12 +2,13 @@ import type { ReadResourceResult } from "@modelcontextprotocol/client"
 import { z } from "zod"
 
 import {
+  MAX_MCP_APP_FILE_BYTES,
   McpUiCspSchema,
   McpUiDomainSchema,
   viewerFileResult,
   type McpAppView,
 } from "@harness-gw/sdk/protocol"
-import { FILE_READ_LIMIT, refusalReason } from "@shared/presentation/file-reads"
+import { refusalReason } from "@shared/presentation/file-reads"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
   FIXTURE_MCP_APP_FILE_IDS,
@@ -223,7 +224,7 @@ async function readFixtureFile(uri: string): Promise<ReadResourceResult> {
   if (!response.ok)
     throw new McpAppResourceReadError(refusalReason(response.status))
   const bytes = new Uint8Array(await response.arrayBuffer())
-  if (bytes.length > FILE_READ_LIMIT)
+  if (bytes.length > MAX_MCP_APP_FILE_BYTES)
     throw new McpAppResourceReadError("tooLarge")
   return {
     contents: [
