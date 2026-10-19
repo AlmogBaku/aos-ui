@@ -19,10 +19,7 @@ async function previewConfig() {
 
 describe("Vite development server", () => {
   it("allows explicitly configured preview and development hostnames", async () => {
-    vi.stubEnv(
-      "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS",
-      "anakin.tail33f954.ts.net"
-    )
+    vi.stubEnv("__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS", "preview.example.test")
     vi.stubEnv(
       "AOS_UI_MCP_APP_STABLE_ORIGINS",
       "http://*.mcp-apps.localhost:3000"
@@ -32,7 +29,7 @@ describe("Vite development server", () => {
     // The MCP App sandbox's name and the stable origins' domain, with every
     // name below it, join the hosts an operator lists.
     const allowed = [
-      "anakin.tail33f954.ts.net",
+      "preview.example.test",
       "sandbox.localhost",
       ".mcp-apps.localhost",
     ]

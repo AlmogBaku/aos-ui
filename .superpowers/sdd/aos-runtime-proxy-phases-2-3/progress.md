@@ -45,7 +45,7 @@ Updated: 2026-09-15
 
 ## Identity
 
-- Integration worktree: `/home/anakin/projects/aos-ui/.worktrees/aos-runtime-proxy-hermes`
+- Integration worktree: `/home/example/projects/aos-ui/.worktrees/aos-runtime-proxy-hermes`
 - Integration branch: `codex/aos-runtime-proxy-hermes`
 - Approved plan: `docs/superpowers/plans/2026-09-14-aos-runtime-proxy-phases-2-3.md`
 - Dirty repository root `main` is user-owned and must remain untouched.
