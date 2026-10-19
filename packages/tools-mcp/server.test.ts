@@ -5,7 +5,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { ARTIFACT_VIEW_HOST_META } from "../../shared/presentation/views"
-import { createToolsServer } from "./server"
+import { toolsServerFactory } from "./server"
 
 const client = new Client({ name: "tools-mcp-test", version: "0.0.0" })
 
@@ -32,7 +32,7 @@ const maplibre = new Map([
 beforeAll(async () => {
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()
-  await createToolsServer({ views, pdfjs, grammars, maplibre }).connect(
+  await toolsServerFactory({ views, pdfjs, grammars, maplibre })().connect(
     serverTransport
   )
   await client.connect(clientTransport)
@@ -176,10 +176,10 @@ describe("MCP App views", () => {
     const stable = new Client({ name: "tools-mcp-test", version: "0.0.0" })
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair()
-    await createToolsServer(
+    await toolsServerFactory(
       { views },
       { artifactStableOrigin: { domain, host } }
-    ).connect(serverTransport)
+    )().connect(serverTransport)
     await stable.connect(clientTransport)
 
     const { resources } = await stable.listResources()

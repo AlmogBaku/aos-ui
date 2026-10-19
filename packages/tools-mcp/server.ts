@@ -158,15 +158,14 @@ function withExpectedHost(html: string, host: string) {
 function registerView(
   server: McpServer,
   view: PresentationView,
-  html: string,
-  stable: ArtifactStableOrigin | undefined
+  text: string,
+  domain: string | undefined
 ) {
   const ui = {
     csp: view.csp,
     ...(view.permissions ? { permissions: view.permissions } : {}),
-    ...(stable ? { domain: stable.domain } : {}),
+    ...(domain ? { domain } : {}),
   }
-  const text = stable ? withExpectedHost(html, stable.host) : html
   registerAppResource(
     server,
     `aos-ui ${view.name} view`,
@@ -230,21 +229,41 @@ function registerFiles(
 }
 
 /**
+ * Makes the stateless AOS UI tool server, one for each call of the function it
+ * returns, from `files` and `options`. The artifact view's HTML names the host
+ * it expects once, here, for every server made.
+ */
+export function toolsServerFactory(
+  files: ToolsServerFiles,
+  { artifactStableOrigin }: ToolsServerOptions = {}
+): () => McpServer {
+  if (artifactStableOrigin === undefined)
+    return () => createToolsServer(files, undefined)
+  const { domain, host } = artifactStableOrigin
+  const views = {
+    ...files.views,
+    artifact: withExpectedHost(files.views.artifact, host),
+  }
+  return () => createToolsServer({ ...files, views }, domain)
+}
+
+/**
  * The stateless AOS UI tool server. The SDK parses every call against the
  * tool's Zod schema, refinements included, and reports a failed parse as a
  * tool error, so handlers only ever see validated input. Each tool declares
  * the MCP App view that draws it, and the server serves that view's HTML as a
- * `ui://aos-ui/<view>` resource. `present_artifact` opens no file: its view
- * reads the file through the address the page hands it.
+ * `ui://aos-ui/<view>` resource, the artifact view's declaring
+ * `artifactDomain`, when it has one. `present_artifact` opens no file: its
+ * view reads the file through the address the page hands it.
  */
-export function createToolsServer(
+function createToolsServer(
   {
     views,
     pdfjs = new Map(),
     grammars = new Map(),
     maplibre = new Map(),
   }: ToolsServerFiles,
-  { artifactStableOrigin }: ToolsServerOptions = {}
+  artifactDomain: string | undefined
 ): McpServer {
   const server = new McpServer({ name: "aos-ui", version: "0.0.1" })
 
@@ -253,7 +272,7 @@ export function createToolsServer(
       server,
       view,
       views[view.name],
-      view.name === "artifact" ? artifactStableOrigin : undefined
+      view.name === "artifact" ? artifactDomain : undefined
     )
   // pdf.js's worker is script text; every other pdf.js file is bytes.
   registerFiles(server, "pdf.js file", PDFJS_RESOURCE_URI, pdfjs, (path) =>

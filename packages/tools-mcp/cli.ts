@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { parseArgs } from "node:util"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server"
+import {
+  WebStandardStreamableHTTPServerTransport,
+  type McpServer,
+} from "@modelcontextprotocol/server"
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
 
 import {
@@ -10,7 +13,7 @@ import {
   presentationViewNames,
 } from "../../shared/presentation/views"
 import {
-  createToolsServer,
+  toolsServerFactory,
   type PresentationViewDocuments,
   type ToolsServerFiles,
   type ToolsServerOptions,
@@ -68,11 +71,10 @@ async function loadFolder(
 
 /** One server and transport per request: the tools keep no state to share. */
 async function handleMcp(
-  files: ToolsServerFiles,
-  options: ToolsServerOptions,
+  createServer: () => McpServer,
   request: Request
 ): Promise<Response> {
-  const server = createToolsServer(files, options)
+  const server = createServer()
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -86,8 +88,7 @@ async function handleMcp(
 }
 
 function serveHttp(
-  files: ToolsServerFiles,
-  options: ToolsServerOptions,
+  createServer: () => McpServer,
   hostname: string,
   port: number
 ) {
@@ -96,7 +97,7 @@ function serveHttp(
     port,
     routes: {
       "/health": { GET: () => new Response("ok") },
-      "/mcp": (request) => handleMcp(files, options, request),
+      "/mcp": (request) => handleMcp(createServer, request),
     },
     fetch: () => new Response("Not found", { status: 404 }),
   })
@@ -150,7 +151,7 @@ if (import.meta.main) {
       process.exit(1)
     }
   )
-  if (values.stdio)
-    await createToolsServer(files, options).connect(new StdioServerTransport())
-  else serveHttp(files, options, values.host, port)
+  const createServer = toolsServerFactory(files, options)
+  if (values.stdio) await createServer().connect(new StdioServerTransport())
+  else serveHttp(createServer, values.host, port)
 }

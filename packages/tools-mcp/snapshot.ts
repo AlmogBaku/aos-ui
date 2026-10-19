@@ -13,7 +13,7 @@ import {
   PDFJS_WORKER_FILE,
 } from "../../shared/presentation/views"
 import {
-  createToolsServer,
+  toolsServerFactory,
   type ToolsServerFiles,
   type ToolsServerOptions,
 } from "./server"
@@ -62,7 +62,7 @@ export async function snapshotToolsServer(
   files: ToolsServerFiles,
   options?: ToolsServerOptions
 ): Promise<ToolsServerSnapshot> {
-  const server = createToolsServer(files, options)
+  const server = toolsServerFactory(files, options)()
   const client = new Client({ name: "aos-ui-fixture", version: "1.0.0" })
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()
