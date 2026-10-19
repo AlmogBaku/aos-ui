@@ -1,5 +1,10 @@
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps"
 import {
+  ProtocolError,
+  ProtocolErrorCode,
+  type ReadResourceResult,
+} from "@modelcontextprotocol/client"
+import {
   act,
   cleanup,
   fireEvent,
@@ -74,13 +79,23 @@ async function grammar(uri: string, name: string) {
   return { contents: [{ uri, mimeType: "application/json", text }] }
 }
 
-/** A page that grants every request a view sends it, grammars included. */
-function fakeApp() {
+/** How the page answers the view's read of a file address. */
+type FileReads = (uri: string) => Promise<ReadResourceResult>
+
+/**
+ * A page that grants every request a view sends it, grammars included, and
+ * answers its reads of file addresses with `readFile`.
+ */
+function fakeApp(readFile: FileReads = async () => ({ contents: [] })) {
   return {
-    readServerResource: vi.fn(async ({ uri }: { uri: string }) =>
-      uri.startsWith(GRAMMAR_RESOURCE_URI)
-        ? grammar(uri, uri.slice(GRAMMAR_RESOURCE_URI.length, -".json".length))
-        : { contents: [] }
+    readServerResource: vi.fn<ViewApp["readServerResource"]>(
+      async ({ uri }): Promise<ReadResourceResult> =>
+        uri.startsWith(GRAMMAR_RESOURCE_URI)
+          ? grammar(
+              uri,
+              uri.slice(GRAMMAR_RESOURCE_URI.length, -".json".length)
+            )
+          : readFile(uri)
     ),
     downloadFile: vi.fn(async () => ({})),
     openLink: vi.fn(async () => ({})),
@@ -89,9 +104,35 @@ function fakeApp() {
   } satisfies ViewApp
 }
 
-function props<T>(value: T, locale: ViewLocale = "en") {
-  return { value, locale, labels: VIEW_LABELS[locale], app: fakeApp() }
+function props<T>(value: T, locale: ViewLocale = "en", readFile?: FileReads) {
+  return { value, locale, labels: VIEW_LABELS[locale], app: fakeApp(readFile) }
 }
+
+/** The file at `uri` as the `aos-ui` server answers its read: base64 bytes. */
+function fileRead(
+  uri: string,
+  body: string,
+  mimeType = "application/octet-stream"
+): ReadResourceResult {
+  return {
+    contents: [{ uri, mimeType, blob: Buffer.from(body).toString("base64") }],
+  }
+}
+
+/** A read the server, the gateway, or the page refused, naming `reason`. */
+function refusedRead(reason?: string) {
+  return new ProtocolError(
+    ProtocolErrorCode.InternalError,
+    "The file could not be read",
+    reason === undefined ? undefined : { reason }
+  )
+}
+
+/** The file addresses a view read, in order, without its grammars. */
+const fileReads = (app: ReturnType<typeof fakeApp>) =>
+  app.readServerResource.mock.calls
+    .map(([{ uri }]) => uri)
+    .filter((uri) => !uri.startsWith(GRAMMAR_RESOURCE_URI))
 
 describe("the value a view draws", () => {
   const parsedChart = render_chartSchema.parse(chart)
@@ -220,20 +261,18 @@ describe("artifact view", () => {
   const OFFERED: McpUiHostContext = { availableDisplayModes: ["inline", "pip"] }
 
   /**
-   * Shows one file the page grants, served with `body`, in the side panel
-   * unless `context` says otherwise.
+   * Shows one file the page grants, read as `body`, in the side panel unless
+   * `context` says otherwise.
    */
   function showFile(
     file: { filename: string; mimeType?: string; fileId?: string },
     body: string,
     context: McpUiHostContext = {}
   ) {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(body))
-    )
-    const view = props(file)
     const address = `https://aos.test/files/${file.filename}?pass=one`
+    const view = props(file, "en", async (uri) =>
+      uri === address ? fileRead(uri, body) : { contents: [] }
+    )
     const shown = (next: McpUiHostContext) => (
       <ArtifactView
         {...view}
@@ -356,7 +395,8 @@ describe("artifact view", () => {
     expect(panel).toHaveTextContent(html)
     expect(screen.queryByTitle("HTML preview")).toBeNull()
     await waitFor(() => expect(panel.querySelector("span")).not.toBeNull())
-    expect(app.readServerResource.mock.calls[0]?.[0].uri).toBe(
+    // After the file itself, the first read is its grammar.
+    expect(app.readServerResource.mock.calls[1]?.[0].uri).toBe(
       `${GRAMMAR_RESOURCE_URI}html.json`
     )
     await user.click(within(panel).getByRole("button", { name: "Copy" }))
@@ -390,9 +430,9 @@ describe("artifact view", () => {
       const { app } = showFile(file, body)
       const region = await screen.findByRole("region", { name: file.filename })
       await waitFor(() => expect(region.querySelector("span")).not.toBeNull())
-      expect(app.readServerResource.mock.calls.map(([{ uri }]) => uri)).toEqual(
-        names.map((name) => `${GRAMMAR_RESOURCE_URI}${name}.json`)
-      )
+      expect(
+        app.readServerResource.mock.calls.map(([{ uri }]) => uri).slice(1)
+      ).toEqual(names.map((name) => `${GRAMMAR_RESOURCE_URI}${name}.json`))
     }
   )
 
@@ -493,7 +533,7 @@ describe("artifact view", () => {
     expect(app.requestDisplayMode.mock.calls).toEqual([[{ mode: "pip" }]])
     expect(screen.queryByText("Quarterly notes")).toBeNull()
     expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
-    expect(fetch).not.toHaveBeenCalled()
+    expect(fileReads(app)).toEqual([])
 
     rerender({ ...PIP, ...OFFERED })
     expect(await screen.findByText("Quarterly notes")).toBeVisible()
@@ -574,21 +614,100 @@ describe("artifact view", () => {
     }
   )
 
-  it("plays audio straight from the file's address, never reading it", async () => {
-    const { address, rerender } = showFile({ filename: "brief.mp3" }, "", {
-      displayMode: "inline",
-    })
-    expect(screen.getByLabelText("Audio: brief.mp3")).toHaveAttribute(
-      "src",
-      address
-    )
-    rerender(PIP)
-    expect(screen.getByLabelText("Audio: brief.mp3")).toHaveAttribute(
-      "src",
-      address
+  it("reads audio only once asked to play it, then plays it whole from a data: address, and shows it in full screen without reading or starting it again", async () => {
+    const user = userEvent.setup()
+    const modes: McpUiHostContext = {
+      availableDisplayModes: ["inline", "fullscreen", "pip"],
+    }
+    const { app, address, rerender } = showFile(
+      { filename: "brief.mp3" },
+      "ID3",
+      { displayMode: "inline", ...modes }
     )
     await act(() => Promise.resolve())
-    expect(fetch).not.toHaveBeenCalled()
+    expect(fileReads(app)).toEqual([])
+    expect(screen.queryByLabelText("Audio: brief.mp3")).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Play brief.mp3" }))
+    const player =
+      await screen.findByLabelText<HTMLAudioElement>("Audio: brief.mp3")
+    expect(player).toHaveAttribute(
+      "src",
+      `data:audio/mpeg;base64,${btoa("ID3")}`
+    )
+    expect(player.autoplay).toBe(true)
+    expect(fileReads(app)).toEqual([address])
+
+    // Once it played, full screen shows it from the same read, waiting.
+    fireEvent.play(player)
+    rerender({ displayMode: "fullscreen", ...modes })
+    const shown = screen.getByLabelText<HTMLAudioElement>("Audio: brief.mp3")
+    expect(shown).not.toBe(player)
+    expect(shown.autoplay).toBe(false)
+    expect(screen.queryByRole("button", { name: "Play brief.mp3" })).toBeNull()
+    await act(() => Promise.resolve())
+    expect(fileReads(app)).toEqual([address])
+  })
+
+  it("reads media again on a new revision only once it was asked to play, in the side panel too", async () => {
+    const user = userEvent.setup()
+    const address = "https://aos.test/files/tour.mp4?pass=one"
+    const view = props({ filename: "tour.mp4" }, "en", async (uri) =>
+      fileRead(uri, "ftyp")
+    )
+    const shown = (revision: string) => (
+      <ArtifactView
+        {...view}
+        context={{ ...files(address), "aos/filesRevision": revision, ...PIP }}
+      />
+    )
+    const { rerender } = render(shown("call-1"))
+    rerender(shown("call-2"))
+    await act(() => Promise.resolve())
+    expect(fileReads(view.app)).toEqual([])
+    // Nothing is read yet, so there is nothing to read again.
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Play tour.mp4" }))
+    expect(await screen.findByLabelText("Video: tour.mp4")).toBeVisible()
+    rerender(shown("call-3"))
+    await waitFor(() => expect(fileReads(view.app)).toHaveLength(2))
+  })
+
+  it("says in its message why media does not play, offering Refresh only where the file could not be reached", async () => {
+    const address = "https://aos.test/files/brief.mp3?pass=one"
+    let reason = "unreachable"
+    const view = props({ filename: "brief.mp3" }, "en", async (uri) => {
+      if (reason) throw refusedRead(reason)
+      return fileRead(uri, "ID3")
+    })
+    const shown = (
+      <ArtifactView
+        {...view}
+        context={{ ...files(address), displayMode: "inline" }}
+      />
+    )
+    render(shown)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Play brief.mp3" })
+    )
+    expect(await screen.findByText("Can't reach this file.")).toBeVisible()
+    reason = ""
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }))
+    expect(await screen.findByLabelText("Audio: brief.mp3")).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
+    cleanup()
+
+    reason = "denied"
+    render(shown)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Play brief.mp3" })
+    )
+    expect(
+      await screen.findByText("Showing this file isn't allowed.")
+    ).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
   })
 
   it("moves Refresh, Download, and Full screen into a menu in a narrow side panel", async () => {
@@ -615,36 +734,28 @@ describe("artifact view", () => {
         mode: "fullscreen",
       })
       await choose("Refresh")
-      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(fileReads(app)).toEqual([address, address]))
     } finally {
       vi.restoreAllMocks()
     }
   })
 
   it.each([
-    ["without a length", {}, 3],
-    ["with a length above the limit", { "content-length": "256" }, 0],
+    [
+      "past the view's own limit for its kind",
+      async (uri: string) => fileRead(uri, "x".repeat(9)),
+    ],
+    [
+      "refused as past the server's limit",
+      async () => {
+        throw refusedRead("tooLarge")
+      },
+    ],
   ])(
-    "stops reading a text file %s at the text limit and offers Download",
-    async (_case, headers, reads) => {
-      let pulled = 0
-      const cancel = vi.fn()
-      const body = new ReadableStream<Uint8Array>(
-        {
-          pull(controller) {
-            pulled += 1
-            controller.enqueue(new TextEncoder().encode("xxxx"))
-          },
-          cancel,
-        },
-        { highWaterMark: 0 }
-      )
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(body, { headers }))
-      )
+    "says a text file %s is too large to preview, and offers Download",
+    async (_case, readFile) => {
       const address = "https://aos.test/files/notes.txt?pass=one"
-      const view = props(notes)
+      const view = props(notes, "en", readFile)
       render(
         <ArtifactView
           {...view}
@@ -656,8 +767,6 @@ describe("artifact view", () => {
       expect(
         await screen.findByText("This file is too large to preview.")
       ).toBeVisible()
-      expect(pulled).toBe(reads)
-      expect(cancel).toHaveBeenCalledOnce()
       expect(screen.queryByText(/xxxx/u)).toBeNull()
       await userEvent.click(screen.getByRole("button", { name: "Download" }))
       expect(view.app.downloadFile).toHaveBeenCalledWith({
@@ -666,40 +775,74 @@ describe("artifact view", () => {
     }
   )
 
-  it("says a file is not allowed when the gateway answers 403", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 403 }))
-    )
+  it.each([
+    [
+      "the gateway serves no such path",
+      "denied",
+      "Showing this file isn't allowed.",
+    ],
+    ["the file could not be reached", "unreachable", "Can't reach this file."],
+    [
+      "the gateway cannot forward the read",
+      "unavailable",
+      "Preview isn't available here.",
+    ],
+    ["the page names no reason", undefined, "Preview isn't available here."],
+    [
+      "the read names a reason the view does not know",
+      "quota",
+      "Preview isn't available here.",
+    ],
+  ])(
+    "says why a read fails when %s, still offering Download and Open",
+    async (_case, reason, message) => {
+      render(
+        <ArtifactView
+          {...props({ filename: "report.pdf" }, "en", async () => {
+            throw refusedRead(reason)
+          })}
+          context={{
+            ...files("https://aos.test/files/report.pdf?pass=one"),
+            ...PIP,
+          }}
+        />
+      )
 
-    render(
-      <ArtifactView
-        {...props(notes)}
-        context={{ ...files("https://aos.test/files/notes.txt"), ...PIP }}
-      />
-    )
+      expect(await screen.findByText(message)).toBeVisible()
+      expect(screen.getAllByRole("status")).toHaveLength(1)
+      expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+      expect(
+        screen.getByRole("button", { name: "Open in new tab" })
+      ).toBeVisible()
+    }
+  )
+
+  it.each([
+    [
+      "a declared type it has none for, unread",
+      { filename: "export.zip", mimeType: "application/zip" },
+      0,
+    ],
+    ["a type it is read as and has none for", { filename: "export" }, 1],
+  ])("shows no preview for %s", async (_case, file, reads) => {
+    const address = `https://aos.test/files/${file.filename}?pass=one`
+    const view = props(file, "en", async (uri) => fileRead(uri, "PK"))
+    render(<ArtifactView {...view} context={{ ...files(address), ...PIP }} />)
 
     expect(
-      await screen.findByText("Showing this file isn't allowed.")
+      await screen.findByText("No preview is available for this file.")
     ).toBeVisible()
-    expect(screen.queryByText("Can't reach this file.")).toBeNull()
+    expect(fileReads(view.app)).toHaveLength(reads)
   })
 
-  it("fetches again once a renewed address follows a refused one, and downloads from the current address", async () => {
+  it("reads again once a renewed address follows one that could not be reached, and downloads from the current address", async () => {
     const [first, second, third] = ["one", "two", "three"].map(
       (pass) => `https://aos.test/files/notes.txt?pass=${pass}`
     ) as [string, string, string]
-    const fetched: string[] = []
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (address: string) => {
-        fetched.push(address)
-        return address === first
-          ? new Response(null, { status: 401 })
-          : new Response("Quarterly notes")
-      })
-    )
-    const view = props(notes)
+    const view = props(notes, "en", async (address) => {
+      if (address === first) throw refusedRead("unreachable")
+      return fileRead(address, "Quarterly notes")
+    })
     const { rerender } = render(
       <ArtifactView {...view} context={{ ...files(first), ...PIP }} />
     )
@@ -712,11 +855,32 @@ describe("artifact view", () => {
     expect(view.app.downloadFile).toHaveBeenCalledWith({
       contents: [{ type: "resource_link", uri: third, name: "notes.txt" }],
     })
-    expect(fetched).toEqual([first, second])
+    expect(fileReads(view.app)).toEqual([first, second])
 
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }))
     expect(await screen.findByText("Quarterly notes")).toBeVisible()
-    expect(fetched).toEqual([first, second, third])
+    expect(fileReads(view.app)).toEqual([first, second, third])
+  })
+
+  it("cancels its read once it no longer waits for it, as when it unmounts", async () => {
+    const view = props(notes, "en", () => new Promise(() => undefined))
+    const { unmount } = render(
+      <ArtifactView
+        {...view}
+        context={{
+          ...files("https://aos.test/files/notes.txt?pass=one"),
+          ...PIP,
+        }}
+      />
+    )
+    await act(() => Promise.resolve())
+    const [[, options]] = view.app.readServerResource.mock.calls as [
+      Parameters<ViewApp["readServerResource"]>,
+    ]
+    expect(options?.signal?.aborted).toBe(false)
+
+    unmount()
+    expect(options?.signal?.aborted).toBe(true)
   })
 
   it("re-reads the file once the page reports a new revision of it, and not when only its address renews", async () => {
@@ -724,15 +888,10 @@ describe("artifact view", () => {
       (pass) => `https://aos.test/files/notes.txt?pass=${pass}`
     ) as [string, string]
     const bodies = ["Draft notes", "Final notes"]
-    const fetched: string[] = []
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (address: string) => {
-        fetched.push(address)
-        return new Response(bodies[fetched.length - 1] ?? "")
-      })
+    let read = 0
+    const view = props(notes, "en", async (address) =>
+      fileRead(address, bodies[read++] ?? "")
     )
-    const view = props(notes)
     const shown = (address: string, revision: string) => (
       <ArtifactView
         {...view}
@@ -750,20 +909,18 @@ describe("artifact view", () => {
     expect(await screen.findByText("Draft notes")).toBeVisible()
     rerender(shown(second, "call-2"))
     expect(await screen.findByText("Final notes")).toBeVisible()
-    expect(fetched).toEqual([first, second])
+    expect(fileReads(view.app)).toEqual([first, second])
   })
 
   it("runs HTML's scripts only in an opaque origin, under a policy that reaches no network or frame", async () => {
     const html =
       "<head><script>parent.postMessage('ran', '*')</script></head><h1>Launch plan</h1>"
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(html))
-    )
     // HTML keeps its own limit while text is held to 8 bytes.
     render(
       <ArtifactView
-        {...props({ filename: "plan.html" })}
+        {...props({ filename: "plan.html" }, "en", async (uri) =>
+          fileRead(uri, html)
+        )}
         context={{
           ...files("https://aos.test/files/plan.html?pass=one"),
           ...PIP,
@@ -870,12 +1027,10 @@ describe("artifact view", () => {
   })
 
   it("asks to return to its message on Esc only from the side panel", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("Quarterly notes"))
-    )
     const address = "https://aos.test/files/notes.txt?pass=one"
-    const view = props(notes)
+    const view = props(notes, "en", async (uri) =>
+      fileRead(uri, "Quarterly notes")
+    )
     const { rerender } = render(
       <ArtifactView {...view} context={files(address)} />
     )

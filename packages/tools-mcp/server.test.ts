@@ -2,9 +2,19 @@
 
 import { artifactFileId } from "@harness-gw/sdk/node"
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest"
 
 import { ARTIFACT_VIEW_HOST_META } from "../../shared/presentation/views"
+import { useFakeClock } from "../../test/support/fake-clock"
+import { fileReadSettings, type FileReadOptions } from "./file-reads"
 import { toolsServerFactory } from "./server"
 
 const client = new Client({ name: "tools-mcp-test", version: "0.0.0" })
@@ -113,10 +123,9 @@ describe("MCP App views", () => {
       { csp: { connectDomains: ["https://tiles.openfreemap.org"] } },
     ],
     ["render_stats", "ui://aos-ui/stats", "stats", { csp: {} }],
-    // The page adds each call's own file addresses to this view's policy,
-    // which declares only the CDNs the Agent HTML it previews may load from,
-    // named here so that adding one is deliberate; its Copy button writes the
-    // clipboard.
+    // The view reads its file through the server, so its policy declares
+    // only the CDNs the Agent HTML it previews may load from, named here so
+    // that adding one is deliberate; its Copy button writes the clipboard.
     [
       "present_artifact",
       "ui://aos-ui/artifact",
@@ -259,6 +268,314 @@ describe("view files", () => {
     await expect(
       client.readResource({ uri: "ui://aos-ui/grammars/cobol.json" })
     ).rejects.toThrow(/No grammar at ui:\/\/aos-ui\/grammars\/cobol\.json/u)
+  })
+})
+
+describe("file reads", () => {
+  const LANE = "http://localhost:3000"
+  const PASS = "pass-secret-1"
+  const ROUTE = "/api/v1/agents/a1/sessions/s1/tool-calls/c1/app/files/path"
+  const address = `${LANE}${ROUTE}?pass=${PASS}`
+
+  /** A client of a server `factory` makes. */
+  async function connect(factory: ReturnType<typeof toolsServerFactory>) {
+    const reading = new Client({ name: "tools-mcp-test", version: "0.0.0" })
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair()
+    await factory().connect(serverTransport)
+    await reading.connect(clientTransport)
+    onTestFinished(() => reading.close())
+    return reading
+  }
+
+  /**
+   * A client of a server that answers file reads by `fileReads`, its every
+   * fetch answered by `answer`.
+   */
+  async function reader(
+    fileReads: Omit<Partial<FileReadOptions>, "fetch"> = {},
+    answer: NonNullable<FileReadOptions["fetch"]> = async () =>
+      new Response("Quarterly notes")
+  ) {
+    const fetch = vi.fn(answer)
+    const factory = toolsServerFactory(
+      { views },
+      { fileReads: { origins: [LANE], fetch, ...fileReads } }
+    )
+    return { client: await connect(factory), fetch }
+  }
+
+  /** Everything the server wrote to the console, as one string. */
+  function consoleOutput() {
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map(
+      (method) => vi.spyOn(console, method).mockImplementation(() => undefined)
+    )
+    return () =>
+      spies.flatMap((spy) => spy.mock.calls.map((call) => call.join(" ")))
+  }
+
+  it.each([
+    ["a tool call's file", ROUTE],
+    [
+      "a published Artifact's file",
+      "/api/v1/agents/a1/sessions/s1/artifacts/r1/app/files/path",
+    ],
+  ])(
+    "reads %s at its address once, keeping nothing, and answers it typed by the response",
+    async (_case, route) => {
+      const uri = `${LANE}${route}?pass=${PASS}`
+      const { client: reading, fetch } = await reader(
+        {},
+        async () =>
+          new Response("Quarterly notes", {
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          })
+      )
+
+      const { contents } = await reading.readResource({ uri })
+
+      expect(contents).toEqual([
+        {
+          uri,
+          mimeType: "text/plain; charset=utf-8",
+          blob: Buffer.from("Quarterly notes").toString("base64"),
+        },
+      ])
+      expect(fetch).toHaveBeenCalledOnce()
+      const [target, init] = fetch.mock.calls[0]!
+      expect(String(target)).toBe(uri)
+      expect(init).toMatchObject({
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "manual",
+      })
+      expect(init.headers).toBeUndefined()
+    }
+  )
+
+  it.each([
+    ["another origin", `http://files.example.test${ROUTE}?pass=${PASS}`],
+    ["a lane's other path", `${LANE}${ROUTE}/more?pass=${PASS}`],
+    [
+      "the route outside the gateway's prefix",
+      `${LANE}${ROUTE.slice("/api/v1".length)}?pass=${PASS}`,
+    ],
+    [
+      "another collection",
+      `${LANE}/api/v1/agents/a1/sessions/s1/messages/c1/app/files/path?pass=${PASS}`,
+    ],
+    ["a path that climbs out", `${LANE}${ROUTE}/../../../healthz?pass=${PASS}`],
+    [
+      "an address with credentials",
+      `http://user:pw@localhost:3000${ROUTE}?pass=${PASS}`,
+    ],
+    // The lane would judge a read without a pass by the listener's own login.
+    ["an address without a pass", `${LANE}${ROUTE}?pas=${PASS}`],
+    ["an address with an empty pass", `${LANE}${ROUTE}?pass=`],
+    ["another scheme", `ftp://localhost:3000${ROUTE}?pass=${PASS}`],
+    ["a ui:// resource no view serves", "ui://aos-ui/unknown"],
+  ])("finds no resource at %s, reading nothing", async (_case, uri) => {
+    const { client: reading, fetch } = await reader()
+
+    const refused = reading.readResource({ uri }).catch((error: Error) => error)
+
+    expect(await refused).toMatchObject({
+      message: expect.stringMatching(/Resource not found/u),
+    })
+    expect(JSON.stringify(await refused)).not.toContain(PASS)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it("finds no file at all while no lane's origin is set", async () => {
+    const { client: reading, fetch } = await reader({ origins: [] })
+
+    await expect(reading.readResource({ uri: address })).rejects.toThrow(
+      /Resource not found/u
+    )
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  const stream = (chunks: string[]) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks)
+          controller.enqueue(new TextEncoder().encode(chunk))
+        controller.close()
+      },
+    })
+
+  it.each([
+    ["a 403", "denied", async () => new Response(null, { status: 403 })],
+    [
+      "a body past the limit",
+      "tooLarge",
+      async () => new Response(stream(["xxxx", "xxxx", "x"])),
+    ],
+    [
+      "a declared length past the limit",
+      "tooLarge",
+      async () =>
+        new Response(stream([]), { headers: { "content-length": "9" } }),
+    ],
+    ["a 404", "unreachable", async () => new Response(null, { status: 404 })],
+    [
+      "a redirect",
+      "unreachable",
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://files.example.test/" },
+        }),
+    ],
+    [
+      "a network failure",
+      "unreachable",
+      async (target: string | URL) => {
+        throw new TypeError(`Unable to connect to ${String(target)}`)
+      },
+    ],
+    [
+      "no answer in time",
+      "unreachable",
+      (_target: string | URL, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) =>
+          init.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason)
+          )
+        ),
+    ],
+  ] as const)(
+    "names %s as %s, without repeating or logging the pass",
+    async (_case, reason, answer) => {
+      const output = consoleOutput()
+      const { client: reading } = await reader(
+        { limit: 8, timeoutMs: 1 },
+        answer
+      )
+
+      const failed = await reading
+        .readResource({ uri: address })
+        .catch((error: Error) => error)
+
+      expect(failed).toMatchObject({ data: { reason } })
+      expect(JSON.stringify(failed)).not.toContain(PASS)
+      expect((failed as Error).message).not.toContain(PASS)
+      // The failure is logged by its location alone.
+      expect(output().join("\n")).toContain(`${LANE}${ROUTE}`)
+      expect(output().join("\n")).not.toContain(PASS)
+    }
+  )
+
+  it("fetches one read at a time for every server it makes, hands the next turn to the first waiting, and refuses a read past its queue or its wait as unreachable", async () => {
+    const clock = useFakeClock()
+    const answers: Array<(response: Response) => void> = []
+    const fetch = vi.fn<NonNullable<FileReadOptions["fetch"]>>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answers.push(resolve)
+        })
+    )
+    const factory = toolsServerFactory(
+      { views },
+      {
+        fileReads: {
+          origins: [LANE],
+          fetch,
+          concurrency: 1,
+          queue: 2,
+          waitMs: 1_000,
+        },
+      }
+    )
+    const [one, other] = await Promise.all([connect(factory), connect(factory)])
+    const file = (argument: string) =>
+      `${LANE}${ROUTE.replace(/path$/u, argument)}?pass=${PASS}`
+    const fetched = () =>
+      fetch.mock.calls.map(([target]) => target.pathname.split("/").at(-1))
+    const reason = (read: Promise<unknown>) =>
+      read.then(
+        () => undefined,
+        (error: { data?: { reason?: string } }) => error.data?.reason
+      )
+
+    const first = one.readResource({ uri: file("a") })
+    const second = other.readResource({ uri: file("b") })
+    const third = one.readResource({ uri: file("c") })
+    expect(await reason(other.readResource({ uri: file("d") }))).toBe(
+      "unreachable"
+    )
+    await clock.advance(0)
+    expect(fetched()).toEqual(["a"])
+
+    answers[0]!(new Response("A"))
+    expect((await first).contents).toHaveLength(1)
+    await clock.advance(0)
+    expect(fetched()).toEqual(["a", "b"])
+    answers[1]!(new Response("B"))
+    expect((await second).contents).toHaveLength(1)
+    await clock.advance(0)
+    expect(fetched()).toEqual(["a", "b", "c"])
+    answers[2]!(new Response("C"))
+    expect((await third).contents).toHaveLength(1)
+
+    const held = one.readResource({ uri: file("e") })
+    const waited = reason(other.readResource({ uri: file("f") }))
+    await clock.advance(999)
+    expect(fetched()).toEqual(["a", "b", "c", "e"])
+    await clock.advance(1)
+    expect(await waited).toBe("unreachable")
+    answers[3]!(new Response("E"))
+    expect((await held).contents).toHaveLength(1)
+    await clock.advance(0)
+    expect(fetched()).toEqual(["a", "b", "c", "e"])
+  })
+
+  it("reads a lane at its upstream under the lane's own Host, and any other lane as it is", async () => {
+    const guest = "http://localhost:3001"
+    const { client: reading, fetch } = await reader({
+      origins: [LANE, guest],
+      upstreams: new Map([[LANE, "http://caddy:18080"]]),
+    })
+
+    await reading.readResource({ uri: address })
+    await reading.readResource({ uri: `${guest}${ROUTE}?pass=${PASS}` })
+
+    const [[upstream, upstreamInit], [direct, directInit]] = fetch.mock.calls
+    expect(String(upstream)).toBe(`http://caddy:18080${ROUTE}?pass=${PASS}`)
+    expect(upstreamInit?.headers).toEqual({ host: "localhost:3000" })
+    expect(String(direct)).toBe(`${guest}${ROUTE}?pass=${PASS}`)
+    expect(directInit?.headers).toBeUndefined()
+  })
+
+  it("takes the lanes from AOS_UI_PUBLIC_ORIGIN and their upstreams from AOS_UI_TOOLS_MCP_LANE_UPSTREAMS", () => {
+    const { options, note } = fileReadSettings({
+      AOS_UI_PUBLIC_ORIGIN: `${LANE}, http://localhost:3001`,
+      AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: ` ${LANE}=http://caddy:18080 ,`,
+    })
+
+    expect(options).toEqual({
+      origins: [LANE, "http://localhost:3001"],
+      upstreams: new Map([[LANE, "http://caddy:18080"]]),
+    })
+    expect(note).toContain(`${LANE} (at http://caddy:18080)`)
+    expect(fileReadSettings({}).options.origins).toEqual([])
+    expect(fileReadSettings({}).note).toContain("AOS_UI_PUBLIC_ORIGIN is unset")
+  })
+
+  it.each([
+    "http://localhost:3000",
+    "http://localhost:3000=caddy:18080",
+    "http://localhost:3000=http://caddy:18080/files",
+    "http://localhost:3000=http://caddy:18080=http://web:4200",
+  ])("refuses the upstream %s", (entry) => {
+    expect(() =>
+      fileReadSettings({
+        AOS_UI_PUBLIC_ORIGIN: LANE,
+        AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: entry,
+      })
+    ).toThrow(
+      /^AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: .* is not <lane origin>=<base URL>/u
+    )
   })
 })
 

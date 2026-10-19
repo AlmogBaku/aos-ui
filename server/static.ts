@@ -1,8 +1,6 @@
 import { readFile, stat } from "node:fs/promises"
 import { isAbsolute, relative, resolve } from "node:path"
 
-import { FIXTURE_MCP_APP_FILE_PATHS } from "../shared/presentation/views"
-
 export type StaticHandler = (
   request: Request
 ) => Response | undefined | Promise<Response | undefined>
@@ -125,12 +123,6 @@ async function assetResponse(
   )
 }
 
-/**
- * The exact paths that answer any origin, as the gateway's file route does
- * once it admits a pass: views read them from the sandbox origin.
- */
-const FIXTURE_FILE_PATHS = new Set(FIXTURE_MCP_APP_FILE_PATHS)
-
 export function createStaticHandler(
   options: StaticHandlerOptions
 ): StaticHandler {
@@ -145,8 +137,6 @@ export function createStaticHandler(
         ? "public, max-age=31536000, immutable"
         : "no-cache",
     }
-    if (FIXTURE_FILE_PATHS.has(url.pathname))
-      headers["access-control-allow-origin"] = "*"
     const requested = await assetResponse(path, request, headers)
     if (requested) return requested
     if (url.pathname.startsWith("/assets/") || url.pathname.includes("."))

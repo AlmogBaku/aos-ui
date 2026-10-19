@@ -8,6 +8,7 @@ import {
 } from "@shared/presentation/views"
 import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
 
+import { McpAppResourceReadError } from "../contracts"
 import { createFixtureMcpAppAdapter } from "./fixture-mcp-apps"
 
 const AGENT_ID = "agent-aster"
@@ -89,6 +90,53 @@ describe("fixture MCP App adapter", () => {
     const inline = adapter.open({ ...target, artifactId: "fixture-image" })
     await expect(inline).rejects.toThrow()
     await expect(inline).rejects.not.toBeInstanceOf(ArtifactMissingError)
+  })
+
+  it("answers a view's read of a served file's address with the file, as the aos-ui server does, and names why one cannot be read", async () => {
+    vi.stubGlobal("location", new URL("http://localhost:3000/agents/aster"))
+    const address =
+      "http://localhost:3000/fixture/mcp-app-files/quarterly-spend.csv"
+    const fetch = vi.fn(async (url: string) =>
+      url === address
+        ? new Response("quarter,total\n", {
+            headers: { "content-type": "text/csv" },
+          })
+        : recordedServer()
+    )
+    vi.stubGlobal("fetch", fetch)
+    const adapter = createFixtureMcpAppAdapter()
+    const target = {
+      agentId: AGENT_ID,
+      sessionId: SESSION_ID,
+      artifactId: "fixture-market-data",
+    }
+
+    await expect(
+      adapter.readResource({ ...target, uri: address })
+    ).resolves.toEqual({
+      contents: [
+        { uri: address, mimeType: "text/csv", blob: btoa("quarter,total\n") },
+      ],
+    })
+    // A file the preview does not serve, and the view itself, read as before.
+    const other = "http://localhost:3000/fixture/mcp-app-files/other.csv"
+    expect(
+      (await adapter.readResource({ ...target, uri: other })).contents
+    ).toEqual([{ uri: other, mimeType: "text/plain", text: "" }])
+    expect(
+      (await adapter.readResource({ ...target, uri: "ui://aos-ui/artifact" }))
+        .contents[0]
+    ).toMatchObject({ text: "<p>viewer</p>" })
+    expect(fetch.mock.calls.map(([url]) => url)).not.toContain(other)
+
+    fetch.mockImplementationOnce(async () => {
+      throw new TypeError("offline")
+    })
+    const failed = await adapter
+      .readResource({ ...target, uri: address })
+      .catch((error: unknown) => error)
+    expect(failed).toBeInstanceOf(McpAppResourceReadError)
+    expect(failed).toMatchObject({ reason: "unreachable" })
   })
 
   // The browser computes neither, so the fixture carries them as literals.

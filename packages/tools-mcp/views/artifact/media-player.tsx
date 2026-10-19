@@ -4,12 +4,12 @@ import { nextPlaybackRate } from "../../../../shared/playback-rate"
 import { cn } from "../ui/cn"
 
 /**
- * A file's native player, labelled `label`, playing straight from `src`, which
- * answers byte ranges, so the file streams and seeks rather than being read
- * whole. A renewed `src` plays on from where the old one was. Beside it, a
- * button steps through the playback speeds and shows the current one. With
- * `fill`, a video fills the height it is given; otherwise it is at most a
- * modest height.
+ * A file's native player, labelled `label`, playing `src`, the whole file as a
+ * `data:` address, and starting at once with `autoPlay`; `onPlay` hears each
+ * start. A new `src`, such as a new revision of the file, plays on from where
+ * the old one was. Beside it, a button steps through the playback speeds and
+ * shows the current one. With `fill`, a video fills the height it is given;
+ * otherwise it is at most a modest height.
  */
 export function MediaPlayer({
   kind,
@@ -17,12 +17,16 @@ export function MediaPlayer({
   label,
   speedLabel,
   fill = false,
+  autoPlay = false,
+  onPlay,
 }: {
   kind: "audio" | "video"
   src: string
   label: string
   speedLabel: string
   fill?: boolean
+  autoPlay?: boolean
+  onPlay?: () => void
 }) {
   const media = useRef<HTMLMediaElement | null>(null)
   const playing = useRef<string | undefined>(undefined)
@@ -71,6 +75,8 @@ export function MediaPlayer({
           aria-label={label}
           className="block min-w-0 flex-1"
           controls
+          autoPlay={autoPlay}
+          onPlay={onPlay}
           preload="metadata"
         />
       ) : (
@@ -82,6 +88,8 @@ export function MediaPlayer({
             fill ? "min-h-0 flex-1" : "h-auto max-h-64"
           )}
           controls
+          autoPlay={autoPlay}
+          onPlay={onPlay}
           playsInline
           preload="metadata"
         />

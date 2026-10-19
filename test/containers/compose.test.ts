@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
+import { fileReadSettings } from "../../packages/tools-mcp/file-reads"
 import { readWebServerConfig } from "../../server/cli"
 
 type Port = { host_ip?: string; published?: string; target: number }
@@ -130,6 +131,18 @@ function publishedPorts(config: ComposeConfig) {
 const BOTH_LANES =
   "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
 
+/** The operator lane's loopback origins, on the default published port. */
+const OPERATOR_LANE = "http://localhost:3000,http://127.0.0.1:3000"
+
+/** The Caddy site each loopback lane origin is reached at from a container. */
+const throughCaddy = (operator: string, guest?: string) =>
+  [
+    ...operator.split(",").map((origin) => `${origin}=http://caddy:18080`),
+    ...(guest?.split(",") ?? []).map(
+      (origin) => `${origin}=http://caddy:18081`
+    ),
+  ].join(",")
+
 const loopbackPort = (published: string, target: number) =>
   expect.objectContaining({ host_ip: "127.0.0.1", published, target })
 
@@ -232,31 +245,57 @@ describe("container orchestration", () => {
     }
   )
 
+  const operatorThroughCaddy = throughCaddy(OPERATOR_LANE)
+  const bothThroughCaddy = throughCaddy(
+    OPERATOR_LANE,
+    "http://localhost:3001,http://127.0.0.1:3001"
+  )
   it.each([
-    ["the base", ["compose.yaml"], undefined, "http://127.0.0.1:4110/mcp"],
+    [
+      "the base",
+      ["compose.yaml"],
+      undefined,
+      "http://127.0.0.1:4110/mcp",
+      operatorThroughCaddy,
+    ],
     [
       "the Hermes",
       ["compose.yaml", "compose.hermes.yaml"],
       "hermes",
       "http://tools-mcp:4110/mcp",
+      bothThroughCaddy,
     ],
     [
       "the OpenClaw",
       ["compose.yaml", "compose.openclaw.yaml"],
       "openclaw",
       "http://127.0.0.1:4110/mcp",
+      bothThroughCaddy,
     ],
     [
       "the OpenCode",
       ["compose.yaml", "compose.opencode.yaml"],
       "opencode",
       "http://tools-mcp:4110/mcp",
+      bothThroughCaddy,
+    ],
+    [
+      "the operator-only Hermes",
+      [
+        "compose.yaml",
+        "compose.hermes.yaml",
+        "deploy/compose.operator-only.yaml",
+      ],
+      "hermes",
+      "http://tools-mcp:4110/mcp",
+      operatorThroughCaddy,
     ],
     [
       "the host-network Hermes",
       ["compose.yaml", "compose.hermes.yaml", "deploy/compose.host.yaml"],
       "hermes",
       "http://127.0.0.1:4110/mcp",
+      "",
     ],
     [
       "the host-network OpenCode",
@@ -268,11 +307,16 @@ describe("container orchestration", () => {
       ],
       "opencode",
       "http://127.0.0.1:4110/mcp",
+      "",
     ],
   ] as const)(
-    "tells the tools MCP server, in %s shape, the URL the gateway dials it at, with the stable origins off",
-    (_shape, files, runtime, dialed) => {
-      const { "tools-mcp": toolsMcp, opencode } = composeConfig(
+    "tells the tools MCP server, in %s shape, the URL the gateway dials it at, the web server's lane origins and how it reaches them, with the stable origins off",
+    (_shape, files, runtime, dialed, upstreams) => {
+      const {
+        "tools-mcp": toolsMcp,
+        opencode,
+        web,
+      } = composeConfig(
         [...files],
         runtime ? harnessEnvironment(runtime) : {}
       ).services
@@ -280,6 +324,8 @@ describe("container orchestration", () => {
       expect(toolsMcp!.environment).toEqual({
         AOS_UI_MCP_APP_STABLE_ORIGINS: "",
         AOS_UI_TOOLS_MCP_URL: dialed,
+        AOS_UI_PUBLIC_ORIGIN: web.environment?.AOS_UI_PUBLIC_ORIGIN,
+        AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: upstreams,
       })
       // The gateway dials the URL OpenCode registers, which harness-gw's
       // example configuration does not override; only its overlay runs it.
@@ -301,6 +347,51 @@ describe("container orchestration", () => {
       expect.objectContaining({ host_ip: "192.0.2.10", target: 18082 })
     )
   })
+
+  it("reaches each lane through its own Caddy site from the tools MCP server's container, on the lanes' published ports", () => {
+    const { "tools-mcp": toolsMcp } = composeConfig(
+      ["compose.yaml", "compose.hermes.yaml"],
+      harnessEnvironment("hermes", {
+        AOS_UI_WEB_PUBLISHED_PORT: "3400",
+        AOS_UI_GUEST_PUBLISHED_PORT: "3401",
+      })
+    ).services
+    const { options } = fileReadSettings(toolsMcp!.environment ?? {})
+
+    expect(Object.fromEntries(options.upstreams ?? [])).toEqual({
+      "http://localhost:3400": "http://caddy:18080",
+      "http://127.0.0.1:3400": "http://caddy:18080",
+      "http://localhost:3401": "http://caddy:18081",
+      "http://127.0.0.1:3401": "http://caddy:18081",
+    })
+    expect(options.origins).toEqual(
+      Object.keys(Object.fromEntries(options.upstreams ?? []))
+    )
+  })
+
+  it.each([
+    ["the bridged Hermes", ["compose.yaml", "compose.hermes.yaml"]],
+    [
+      "the host-network Hermes",
+      ["compose.yaml", "compose.hermes.yaml", "deploy/compose.host.yaml"],
+    ],
+  ])(
+    "lets the operator name each lane's own Caddy site for the tools MCP server in %s shape",
+    (_shape, files) => {
+      const upstreams =
+        "https://agents.example.test=http://127.0.0.1:18080,https://guest.example.test=http://127.0.0.1:18081"
+      const { "tools-mcp": toolsMcp } = composeConfig(
+        files,
+        harnessEnvironment("hermes", {
+          AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: upstreams,
+        })
+      ).services
+
+      expect(toolsMcp!.environment?.AOS_UI_TOOLS_MCP_LANE_UPSTREAMS).toBe(
+        upstreams
+      )
+    }
+  )
 
   it("keeps the tools MCP server on loopback whatever the bind address", () => {
     const toolsMcp = composeConfig(["compose.yaml"], {
@@ -554,6 +645,8 @@ describe("container orchestration", () => {
     expect(toolsMcp!.environment).toEqual({
       AOS_UI_MCP_APP_STABLE_ORIGINS: lanes.AOS_UI_MCP_APP_STABLE_ORIGINS,
       AOS_UI_TOOLS_MCP_URL: dialed,
+      AOS_UI_PUBLIC_ORIGIN: lanes.AOS_UI_PUBLIC_ORIGIN,
+      AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: "",
     })
   })
 

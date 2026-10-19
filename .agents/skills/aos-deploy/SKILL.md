@@ -180,7 +180,18 @@ in each Hermes profile's `mcp_servers` and confirm it with
 `hermes -p PROFILE mcp test aos-ui`; a running `hermes serve` picks it up
 without a restart. The gateway reads the chart, map, and stats views from that
 URL too, but a gateway container does not share the host's loopback: its
-config sets `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp`. Install the `aos-invite-link` and `aos-agent-creator` skills
+config sets `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp`.
+For file reads, the `tools-mcp` service fetches from the gateway's file route
+server to server; Compose passes it `AOS_UI_PUBLIC_ORIGIN`, the origins it
+accepts, and `AOS_UI_TOOLS_MCP_LANE_UPSTREAMS`, each lane's own Caddy site it
+reads that lane at. The defaults cover only the loopback default origins.
+Whenever the lane origins are not those, set `AOS_UI_TOOLS_MCP_LANE_UPSTREAMS`
+in `.env` to each lane's own site, or the server reads through the public
+edge and a guest's file hairpins out through it: under host networking,
+`https://agents.example.com=http://127.0.0.1:18080,https://guest.example.com=http://127.0.0.1:18081`;
+in a bridged shape, the same origins to `http://caddy:18080` and
+`http://caddy:18081`. Map each lane origin to its own lane's site, since only
+the guest listener accepts a guest pass. Install the `aos-invite-link` and `aos-agent-creator` skills
 by copying them into the profile's `skills/` directory or listing the checkout's
 `shared/` directory under `skills.external_dirs`, then restart `hermes serve`.
 Register the server with OpenClaw disabled and let the gateway enable it per

@@ -2,7 +2,7 @@
 # which reaches it on the Compose network only, and opens the guest lane.
 services:
   gateway:
-    image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.13.0}
+    image: ${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.14.0}
     user: "${AOS_UI_HOST_UID:-1000}:${AOS_UI_HOST_GID:-1000}"
     environment:
       HARNESS_GW_CONFIG_FILE: /run/harness-gw/config.yaml
@@ -45,7 +45,7 @@ services:
       AOS_UI_GUEST_WEB_HOST: 0.0.0.0
       AOS_UI_GUEST_WEB_PORT: "4201"
       # The operator's and the guest lane's loopback origins, by default.
-      AOS_UI_PUBLIC_ORIGIN: ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001},http://127.0.0.1:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}}
+      AOS_UI_PUBLIC_ORIGIN: &public-origins ${AOS_UI_PUBLIC_ORIGIN:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001},http://127.0.0.1:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}}
     expose:
       - "4201"
 
@@ -66,6 +66,9 @@ services:
     environment:
       # The URL OpenCode registers below, which the gateway dials.
       AOS_UI_TOOLS_MCP_URL: ${AOS_UI_TOOLS_MCP_URL:-http://tools-mcp:4110/mcp}
+      # Both lanes' origins, each reached through its own Caddy site.
+      AOS_UI_PUBLIC_ORIGIN: *public-origins
+      AOS_UI_TOOLS_MCP_LANE_UPSTREAMS: ${AOS_UI_TOOLS_MCP_LANE_UPSTREAMS:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000}=http://caddy:18080,http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}=http://caddy:18080,http://localhost:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}=http://caddy:18081,http://127.0.0.1:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}=http://caddy:18081}
 
   opencode:
     build:

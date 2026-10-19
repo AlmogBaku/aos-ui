@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 
+import type { ViewApp } from "../view"
 import { loadFile, type FileState, type PreviewLimits } from "./file"
 
 const LOADING: FileState = { status: "loading" }
@@ -11,13 +12,14 @@ const LOADING: FileState = { status: "loading" }
 type Request = { address: string; revision: string | undefined }
 
 /**
- * The file at `address`, read once it is known, again on `refresh`, again
- * when the page reports a new `revision` of it, since a later call showed the
- * file and it may have changed, and again when a renewed address follows one
- * that could not reach it. A renewal alone never reloads a preview that
- * already shows.
+ * The file at `address`, read through the page with `read` once it is known,
+ * again on `refresh`, again when the page reports a new `revision` of it,
+ * since a later call showed the file and it may have changed, and again when
+ * a renewed address follows one that could not reach it. A renewal alone
+ * never reloads a preview that already shows.
  */
 export function useFile(
+  read: ViewApp["readServerResource"],
   address: string | undefined,
   filename: string,
   mimeType: string | undefined,
@@ -43,8 +45,10 @@ export function useFile(
 
   useEffect(() => {
     if (!request) return
+    // A read the view no longer waits for, as once it unmounts, is cancelled.
     const controller = new AbortController()
     void loadFile(
+      read,
       request.address,
       { filename, mimeType },
       limits,
@@ -53,7 +57,7 @@ export function useFile(
       if (!controller.signal.aborted) setOutcome({ request, state: next })
     })
     return () => controller.abort()
-  }, [request, filename, mimeType, limits])
+  }, [read, request, filename, mimeType, limits])
 
   return {
     state,

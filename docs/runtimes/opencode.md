@@ -182,7 +182,7 @@ Each Agent's folder is the gateway's configured `runtime.directory`.
 ## Artifacts
 
 OpenCode 1.19.0 cannot call MCP tools, so `present_artifact` is not callable
-and the App shows "Can't reach this file".
+and the App shows "Can't reach this file."
 
 ## Agent icons
 

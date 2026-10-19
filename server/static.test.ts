@@ -5,10 +5,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
-import {
-  FIXTURE_MCP_APP_FILES,
-  FIXTURE_MCP_APP_FILES_PATH,
-} from "../shared/presentation/views"
 import { createStaticHandler } from "./static"
 
 const directories: string[] = []
@@ -111,43 +107,6 @@ describe("static serving", () => {
     expect(head?.headers.get("content-encoding")).toBe("br")
     expect(head?.headers.get("content-length")).toBe("6")
     expect(await head?.text()).toBe("")
-  })
-
-  it("lets any origin read the fixture MCP App files alone", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aos-static-"))
-    directories.push(root)
-    await mkdir(join(root, "fixture", "mcp-app-files"), { recursive: true })
-    const pdfPath = `${FIXTURE_MCP_APP_FILES_PATH}/${FIXTURE_MCP_APP_FILES.pdf}`
-    await writeFile(join(root, pdfPath), "fake pdf")
-    await writeFile(
-      join(root, "fixture", "mcp-app-files", "other.pdf"),
-      "not a fixture file"
-    )
-    await writeFile(join(root, "index.html"), "<html>shell</html>")
-    const fetch = createStaticHandler({
-      root,
-    })
-
-    // Exact fixture file path carries the header.
-    const pdfResp = await fetch(
-      new Request(`https://aos.example.test${pdfPath}`)
-    )
-    expect(pdfResp?.headers.get("access-control-allow-origin")).toBe("*")
-    expect(pdfResp?.headers.has("access-control-allow-credentials")).toBe(false)
-
-    // A neighbor path that is not one of the three file names does not.
-    const other = await fetch(
-      new Request(
-        `https://aos.example.test${FIXTURE_MCP_APP_FILES_PATH}/other.pdf`
-      )
-    )
-    expect(other?.headers.get("access-control-allow-origin")).toBeNull()
-
-    // The SPA shell does not carry the header.
-    const shell = await fetch(
-      new Request("https://aos.example.test/index.html")
-    )
-    expect(shell?.headers.get("access-control-allow-origin")).toBeNull()
   })
 
   it("rejects traversal", async () => {

@@ -64,14 +64,15 @@ no AOS system prompt. The operator registers the server in each harness as
 `/health` with no authentication, so it stays on loopback or a private Compose
 network.
 
-The server never reads the filesystem or talks to the gateway. `render_chart`,
-`render_map`, and `render_stats` are [MCP Apps](#mcp-apps): each validates its
-data and declares a single-file HTML view (`ui://aos-ui/chart`, `map`, or
-`stats`) built from `packages/tools-mcp/views`. The map view draws MapLibre
-over OpenFreeMap tiles. `present_artifact` is also an MCP App: it declares an
-`artifact` view (`ui://aos-ui/artifact`) that renders PDFs, images, plain text,
-and sandboxed HTML. The view reads the file from the address the gateway grants it
-in `aos/files`; the server itself never opens the file. The gateway serves the
+The server never reads the filesystem. `render_chart`, `render_map`, and
+`render_stats` are [MCP Apps](#mcp-apps): each validates its data and declares a
+single-file HTML view (`ui://aos-ui/chart`, `map`, or `stats`) built from
+`packages/tools-mcp/views`. The map view draws MapLibre over OpenFreeMap tiles.
+`present_artifact` is also an MCP App: it declares an `artifact` view
+(`ui://aos-ui/artifact`) that renders PDFs, images, plain text, and sandboxed
+HTML. The view reads the file by calling `readServerResource` with the address
+from `aos/files`; the gateway relays the read to the server, which fetches the
+file from the gateway's own file route, server to server. The gateway serves the
 file through the runtime's own file interface, governed by the `mcpApps.files`
 folder rules; the harness therefore remains the authority on what a Session may
 read.
@@ -80,7 +81,7 @@ read.
 
 Charts, maps, stats, and files are MCP App views; every tool call keeps an inspectable textual fallback in its compact row. AOS does not execute arbitrary generated code in the main page.
 
-An Agent shows a file with `present_artifact`. The `artifact` view renders PDFs (with pdf.js, fitted to the view, with selectable text, keyboard paging, zoom, and an outline and page sidebar), zoomable images, plain text, and Agent-written HTML (its own scripts in a sandboxed frame with an opaque origin, no network; with in-memory storage and https links relayed to the workspace). A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) offers download and open instead of a preview. pip moves the view to the side panel. The gateway serves the file through the runtime's own file interface; the `aos-ui` MCP server never opens it. A signed address, valid about ten minutes and renewed while the view is open, lets the view fetch from the deployment's one sandbox origin. Folder rules in `mcpApps.files` govern which paths are served.
+An Agent shows a file with `present_artifact`. The `artifact` view renders PDFs (with pdf.js, fitted to the view, with selectable text, keyboard paging, zoom, and an outline and page sidebar), zoomable images, plain text, audio and video (read when Play is pressed), and Agent-written HTML (its own scripts in a sandboxed frame with an opaque origin, no network; with in-memory storage and https links relayed to the workspace). A file over its kind's preview limit (64 MiB for a PDF, image, audio, or video; 25 MiB for HTML; 2 MiB for text) offers download and open instead of a preview. pip moves the view to the side panel. The gateway serves the file through the runtime's own file interface. A signed address, valid about ten minutes and renewed while the view is open, is read by the `aos-ui` server from the file route when the view calls `readServerResource` on it. Folder rules in `mcpApps.files` govern which paths are served.
 
 An Agent may also publish an Artifact through a harness's own media delivery such as a Hermes `MEDIA:` line or a trusted native delivery tool such as Hermes text-to-speech. The gateway validates the path, refuses relative, traversing, and credential-file paths, and caps reads at 25 MiB. Published image, audio, and video Artifacts render inline in the conversation. AOS does not provide file editing, storage, or version history.
 

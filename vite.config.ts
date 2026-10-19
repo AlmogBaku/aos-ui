@@ -43,7 +43,6 @@ import { readTitleBarColors } from "./shared/theme-color.ts"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
   FIXTURE_ARTIFACT_VIEW_DOMAIN,
-  FIXTURE_MCP_APP_FILE_PATHS,
 } from "./shared/presentation/views.ts"
 import {
   buildGrammars,
@@ -195,27 +194,6 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
         }
       })
     },
-  }
-}
-
-/**
- * Adds `Access-Control-Allow-Origin: *` to the synthetic fixture files the
- * artifact view fetches from the sandbox origin. Mirrors what
- * `server/static.ts` does in production.
- */
-function fixtureMcpAppFilesPlugin(): Plugin {
-  const paths = new Set(FIXTURE_MCP_APP_FILE_PATHS)
-  const addHeader = (server: PreviewServer | ViteDevServer) => {
-    server.middlewares.use((request, response, next) => {
-      if (paths.has(request.url?.split("?")[0] ?? ""))
-        response.setHeader("access-control-allow-origin", "*")
-      next()
-    })
-  }
-  return {
-    name: "aos-fixture-mcp-app-files",
-    configureServer: addHeader,
-    configurePreviewServer: addHeader,
   }
 }
 
@@ -510,7 +488,6 @@ export default defineConfig(({ mode }) => {
       reactCompiler(),
       runtimeConfigurationPlugin(environment, originsOf),
       e2eReadinessPlugin(environment),
-      fixtureMcpAppFilesPlugin(),
       fixtureToolsServerPlugin(environment.AOS_UI_E2E_STABLE_ORIGINS_PORT),
       buildIdPlugin(),
       titleBarColorPlugin(titleBarColors),

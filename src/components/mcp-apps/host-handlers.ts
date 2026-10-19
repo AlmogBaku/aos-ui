@@ -37,11 +37,11 @@ export function openAppLink(
 }
 
 /**
- * Where a file address points, as a CSP source and for comparing addresses:
- * its origin and path, every path segment percent-encoded, without the query
- * that carries its pass; `undefined` for anything but an absolute http(s) URL.
+ * Where a file address points, for comparing addresses: its origin and path,
+ * every path segment percent-encoded, without the query that carries its
+ * pass; `undefined` for anything but an absolute http(s) URL.
  */
-export function fileLocation(address: string): string | undefined {
+function fileLocation(address: string): string | undefined {
   try {
     const url = new URL(address)
     if (url.protocol !== "https:" && url.protocol !== "http:") return undefined

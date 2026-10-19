@@ -9,6 +9,7 @@ import {
   FileVideoCamera,
   Maximize2,
   PictureInPicture2,
+  Play,
   RotateCw,
   type LucideIcon,
 } from "lucide-react"
@@ -30,6 +31,8 @@ import {
   knownType,
   type FileKind,
   type FilePreview,
+  type FileState,
+  type MediaPreview,
   type PreviewLimits,
 } from "./artifact/file"
 import { Code } from "./artifact/code"
@@ -211,7 +214,7 @@ function Preview({
   app,
   room,
 }: {
-  preview: FilePreview
+  preview: Exclude<FilePreview, MediaPreview>
   filename: string
   fileId: string | undefined
   labels: ArtifactLabels
@@ -421,6 +424,15 @@ function ImageThumbnail({
   )
 }
 
+/** Whether a preview is media, which plays in a player of its own. */
+const isMedia = (preview: FilePreview): preview is MediaPreview =>
+  preview.kind === "audio" || preview.kind === "video"
+
+/** What the view says of a file it cannot show, or still reads. */
+function statusLabel(state: FileState, labels: ArtifactLabels) {
+  return state.status === "ready" ? labels.noPreview : labels[state.status]
+}
+
 /** The kinds a browser shows itself, so a new tab opens them as they are. */
 const OPENS_IN_TAB: ReadonlySet<FileKind> = new Set([
   "pdf",
@@ -430,12 +442,13 @@ const OPENS_IN_TAB: ReadonlySet<FileKind> = new Set([
 ])
 
 /**
- * The file `present_artifact` shows, read from the address the page grants in
- * `aos/files`. In its message an image shows alone, and any other file as a
- * card without its contents; the side panel and full screen preview it whole,
- * with every control. Download and Open in new tab hand the page that same
- * address; Open is offered only for a kind the browser shows itself, since the
- * page serves any other as plain text.
+ * The file `present_artifact` shows, read through the page at the address it
+ * grants in `aos/files`. In its message an image shows alone, media as a card
+ * with its player, and any other file as a card without its contents; the
+ * side panel and full screen preview it whole, with every control. Download
+ * and Open in new tab hand the page that same address; Open is offered only
+ * for a kind the browser shows itself, since the page serves any other as
+ * plain text.
  */
 export function ArtifactView({
   value,
@@ -453,16 +466,22 @@ export function ArtifactView({
   const expanded = pip || fullscreen
   const type = knownType(value)
   const kind = kindOf(type)
-  // Media plays from its address, never read; in its message only an image
-  // is read, since only an image shows there.
-  const media = kind === "audio" || kind === "video" ? kind : undefined
+  const media = kind === "audio" || kind === "video"
+  // Media is read only once asked to play, wherever it shows, and then starts
+  // at once; once it has played, a player shown afresh waits for its controls.
+  const [playback, setPlayback] = useState<"idle" | "asked" | "played">("idle")
+  // In its message only an image is read, since only it shows there whole.
   const file = useFile(
-    media === undefined && (expanded || kind === "image") ? address : undefined,
+    app.readServerResource,
+    (media ? playback !== "idle" : expanded || kind === "image")
+      ? address
+      : undefined,
     value.filename,
     value.mimeType,
     previewLimits,
     revision
   )
+  const ready = file.state.status === "ready" ? file.state.preview : undefined
   const root = useRef<HTMLDivElement>(null)
   const compact = useCompact(root)
   const box = useRef<HTMLDivElement>(null)
@@ -508,6 +527,11 @@ export function ArtifactView({
               })
               .catch(ignore),
         }
+  const refresh: MenuAction = {
+    label: artifact.refresh,
+    icon: <RotateCw />,
+    onSelect: file.refresh,
+  }
   const open: MenuAction | undefined =
     address === undefined || kind === undefined || !OPENS_IN_TAB.has(kind)
       ? undefined
@@ -537,22 +561,37 @@ export function ArtifactView({
         <Status>{artifact.unreachable}</Status>
       </div>
     )
-  const player =
-    media && address ? (
-      <MediaPlayer
-        kind={media}
-        src={address}
-        label={`${artifact[media]}: ${value.filename}`}
-        speedLabel={artifact.playbackSpeed}
-        fill={expanded}
-      />
-    ) : null
+  const play = (preview: MediaPreview) => (
+    <MediaPlayer
+      kind={preview.kind}
+      src={preview.url}
+      label={`${artifact[preview.kind]}: ${value.filename}`}
+      speedLabel={artifact.playbackSpeed}
+      fill={expanded}
+      autoPlay={playback === "asked"}
+      onPlay={() => setPlayback("played")}
+    />
+  )
+  // Media not yet asked to play offers to, and once asked shows its player
+  // or why it has none.
+  const mediaBody =
+    playback === "idle" ? (
+      <IconButton
+        label={artifact.play(value.filename)}
+        onClick={() => setPlayback("asked")}
+      >
+        <Play />
+      </IconButton>
+    ) : ready && isMedia(ready) ? (
+      play(ready)
+    ) : (
+      <Status>{statusLabel(file.state, artifact)}</Status>
+    )
   if (!expanded)
-    return file.state.status === "ready" &&
-      file.state.preview.kind === "image" ? (
+    return ready?.kind === "image" ? (
       <div ref={root}>
         <ImageThumbnail
-          url={file.state.preview.url}
+          url={ready.url}
           filename={value.filename}
           labels={artifact}
           room={roomWidth(context)}
@@ -566,22 +605,23 @@ export function ArtifactView({
           filename={value.filename}
           type={type}
           labels={artifact}
-          actions={[download, goFullscreen, open].filter(
-            (action) => action !== undefined
-          )}
+          actions={[
+            media && file.state.status === "unreachable" ? refresh : undefined,
+            download,
+            goFullscreen,
+            open,
+          ].filter((action) => action !== undefined)}
           onOpen={openPip}
         >
-          {player}
+          {media ? mediaBody : null}
         </FileCard>
       </div>
     )
   // The page names the file above the side panel and in full screen, so the
   // view does not.
-  // Media reloads from its own controls, so it has no Refresh.
+  // Media not yet read has nothing to read again.
   const actions = [
-    media
-      ? undefined
-      : { label: artifact.refresh, icon: <RotateCw />, onSelect: file.refresh },
+    media && playback === "idle" ? undefined : refresh,
     download,
     goFullscreen,
     open,
@@ -592,9 +632,8 @@ export function ArtifactView({
         <div ref={setToolbar} className="flex items-center empty:hidden" />
         <div className="ms-auto flex items-center gap-1">
           {/* HTML carries its Copy over its source. */}
-          {file.state.status === "ready" &&
-          file.state.preview.kind === "text" ? (
-            <CopyButton text={file.state.preview.text} labels={artifact} />
+          {ready?.kind === "text" ? (
+            <CopyButton text={ready.text} labels={artifact} />
           ) : null}
           {compact ? (
             <MenuButton label={artifact.more} actions={actions} />
@@ -618,26 +657,30 @@ export function ArtifactView({
           ) : null}
         </div>
       </div>
-      {player ??
-        (file.state.status === "ready" ? (
-          <div ref={box}>
-            <ToolbarSlot value={toolbar}>
-              <Compact value={compact}>
-                <Preview
-                  preview={file.state.preview}
-                  filename={value.filename}
-                  fileId={value.fileId}
-                  labels={artifact}
-                  app={app}
-                  room={room}
-                />
-              </Compact>
-            </ToolbarSlot>
-          </div>
-        ) : (
-          // Each state still loading or refused names its own label.
-          <Status>{artifact[file.state.status]}</Status>
-        ))}
+      {media ? (
+        mediaBody
+      ) : ready === undefined ? (
+        // Each state still loading or refused names its own label.
+        <Status>{statusLabel(file.state, artifact)}</Status>
+      ) : isMedia(ready) ? (
+        // A file whose type shows it is media only once it is read.
+        play(ready)
+      ) : (
+        <div ref={box}>
+          <ToolbarSlot value={toolbar}>
+            <Compact value={compact}>
+              <Preview
+                preview={ready}
+                filename={value.filename}
+                fileId={value.fileId}
+                labels={artifact}
+                app={app}
+                room={room}
+              />
+            </Compact>
+          </ToolbarSlot>
+        </div>
+      )}
     </div>
   )
 }

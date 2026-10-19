@@ -356,15 +356,31 @@ harness-gw's `src/routes/app-files.ts`:
 A 401 response means a bad or expired pass, or a guest without a valid login.
 A 429 response means the file route's own rate limit was hit.
 
-If the card shows "Can't reach this file" and the gateway logged nothing, `open`
-returned no address. Every path that leads there:
+Once the gateway has returned addresses, the `aos-ui` tools server reads the file
+from the file route server to server. A failure there is logged on the server's
+own stderr as `aos-ui: the file read at <path> failed: <reason>`. The card shows:
+
+| Card message              | `reason` | Meaning                                                                             |
+| ------------------------- | -------- | ----------------------------------------------------------------------------------- |
+| "Can't reach this file."  | `unreachable` | The file route answered neither 2xx nor 403 (an expired pass's 401, a missing file's 404, 429, 5xx), gave no answer within 30 s, or the server already had 32 reads waiting for its 4 at a time, or one waited 30 s |
+| "Showing this file isn't allowed." | `denied` | The file route answered 403                                             |
+| "This file is too large to preview." | `tooLarge` | The file exceeds 64 MiB, or its kind's own preview limit (25 MiB for HTML, 2 MiB for text) |
+| "Preview isn't available here." | `unavailable` | The gateway could not forward the read (OpenClaw, no server or viewer, no answer) |
+| "No preview is available for this file." | — | The file's type has no preview; Download and Open still work |
+
+**"Preview isn't available here."** also shows when the workspace opened at an
+address not in `AOS_UI_PUBLIC_ORIGIN`, or when the tools server is not reachable
+at the registered URL.
+
+If the card shows "Can't reach this file." and neither the gateway nor the tools
+server logged anything, `open` returned no address. Every path that leads there:
 
 - The call's MCP server is not in `mcpApps.files.servers`.
 - The runtime cannot read files (OpenCode).
 - No folder is configured for this Agent.
 - The guest is on OpenClaw (guests get no file addresses on OpenClaw).
 
-**OpenCode** cannot yet serve files; the card always shows "Can't reach this file".
+**OpenCode** cannot yet serve files; the card always shows "Can't reach this file."
 
 **OpenClaw** cannot reach sandboxed Sessions or Sessions on other machines.
 

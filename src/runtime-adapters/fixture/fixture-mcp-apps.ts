@@ -2,20 +2,27 @@ import type { ReadResourceResult } from "@modelcontextprotocol/client"
 import { z } from "zod"
 
 import {
+  MAX_MCP_APP_FILE_BYTES,
   McpUiCspSchema,
   McpUiDomainSchema,
   viewerFileResult,
   type McpAppView,
 } from "@harness-gw/sdk/protocol"
+import { refusalReason } from "@shared/presentation/file-reads"
 import {
   FIXTURE_AOS_UI_MCP_PATH,
   FIXTURE_MCP_APP_FILE_IDS,
+  FIXTURE_MCP_APP_FILE_PATHS,
   FIXTURE_MCP_APP_FILES_PATH,
 } from "@shared/presentation/views"
 
 import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
 
-import type { McpAppAdapter, McpAppTarget } from "../contracts"
+import {
+  McpAppResourceReadError,
+  type McpAppAdapter,
+  type McpAppTarget,
+} from "../contracts"
 import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
 import {
   FIXTURE_PRESENTATION_RESULT,
@@ -184,6 +191,53 @@ function recordedToolsServer(): () => Promise<RecordedToolsServer> {
     })
 }
 
+/** Whether `uri` addresses one of the files the preview serves its views. */
+function isFixtureFile(uri: string) {
+  try {
+    const url = new URL(uri)
+    return (
+      url.origin === globalThis.location.origin &&
+      FIXTURE_MCP_APP_FILE_PATHS.includes(url.pathname)
+    )
+  } catch {
+    return false
+  }
+}
+
+function base64(bytes: Uint8Array) {
+  let binary = ""
+  for (let offset = 0; offset < bytes.length; offset += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  return btoa(binary)
+}
+
+/**
+ * One of the preview's files, read at its address as the `aos-ui` server
+ * reads a file address for its view: whole, up to its limit, as base64 typed
+ * by the response, or refused for the reason that server would name.
+ */
+async function readFixtureFile(uri: string): Promise<ReadResourceResult> {
+  const response = await fetch(uri, { cache: "no-store" }).catch(
+    () => undefined
+  )
+  if (!response) throw new McpAppResourceReadError("unreachable")
+  if (!response.ok)
+    throw new McpAppResourceReadError(refusalReason(response.status))
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.length > MAX_MCP_APP_FILE_BYTES)
+    throw new McpAppResourceReadError("tooLarge")
+  return {
+    contents: [
+      {
+        uri,
+        mimeType:
+          response.headers.get("content-type") ?? "application/octet-stream",
+        blob: base64(bytes),
+      },
+    ],
+  }
+}
+
 /** The viewer a published attachment opens in, as the gateway configures it by default. */
 const ARTIFACT_VIEWER = "ui://aos-ui/artifact"
 
@@ -282,6 +336,8 @@ async function presentationView(
  * `aos-ui` server's recorded `tools/list` and `resources/read`, one launch
  * board whose every refresh answers the next numbered board, and each
  * published attachment in the recorded artifact viewer, which calls no tool.
+ * A view's read of one of the preview's file addresses is answered from the
+ * file, as the gateway and the `aos-ui` server answer it.
  */
 export function createFixtureMcpAppAdapter(): McpAppAdapter {
   const server = recordedToolsServer()
@@ -324,6 +380,7 @@ export function createFixtureMcpAppAdapter(): McpAppAdapter {
       }
     },
     async readResource({ uri }) {
+      if (isFixtureFile(uri)) return readFixtureFile(uri)
       const recorded = uri.startsWith("ui://aos-ui/")
         ? (await server()).resources[uri]
         : undefined

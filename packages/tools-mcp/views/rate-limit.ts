@@ -3,14 +3,14 @@
  * call order. The page refuses a frame that sends too fast, so a view paces its
  * own reads below the page's limit instead of retrying refused ones.
  */
-export function rateLimited<A, R>(
-  send: (argument: A) => Promise<R>,
+export function rateLimited<A extends unknown[], R>(
+  send: (...args: A) => Promise<R>,
   limit = 8,
   windowMs = 1_000
-): (argument: A) => Promise<R> {
+): (...args: A) => Promise<R> {
   const starts: number[] = []
   let queue = Promise.resolve()
-  return (argument) => {
+  return (...args) => {
     const turn = queue.then(async () => {
       if (starts.length === limit) {
         const wait = starts.shift()! + windowMs - performance.now()
@@ -19,6 +19,6 @@ export function rateLimited<A, R>(
       starts.push(performance.now())
     })
     queue = turn
-    return turn.then(() => send(argument))
+    return turn.then(() => send(...args))
   }
 }

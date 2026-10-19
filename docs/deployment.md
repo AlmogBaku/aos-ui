@@ -57,6 +57,38 @@ server under
 [`mcpApps.fallback.servers.NAME.url`](configuration.md#mcp-apps-fallback).
 Without Compose, run it with `bun run tools-mcp:serve`.
 
+For file reads, the artifact view calls `readServerResource` with the signed
+address, and the gateway relays that to the tools server, which reads the file
+from the gateway's file route server to server. Two settings control this
+path:
+
+- **`AOS_UI_PUBLIC_ORIGIN`** — the same list the web server reads. The tools
+  server accepts reads only for addresses whose origin is in this list. Every
+  Compose shape passes it to the `tools-mcp` service; set it explicitly when
+  running outside Compose.
+- **`AOS_UI_TOOLS_MCP_LANE_UPSTREAMS`** — the lane's own Caddy site the
+  server reads each lane's addresses at, keeping the lane's `Host`. Format:
+  `<lane origin>=<base URL>`, comma-separated. Each lane origin must map to its
+  own lane's site: the gateway's guest listener alone accepts a guest pass.
+  Compose's defaults cover only the loopback default origins: the bridged
+  shapes map them to `http://caddy:18080` (operator) and `http://caddy:18081`
+  (guest), and host networking (`deploy/compose.host.yaml`) leaves the setting
+  empty, since its default origins are Caddy's own loopback sites already.
+  **Whenever the lane origins are not the loopback defaults, set it** to each
+  lane's own Caddy site. Otherwise the server reads every address through the
+  public edge in front of Caddy, so a guest's file hairpins out through it and
+  back. Under host networking:
+
+  ```bash
+  AOS_UI_TOOLS_MCP_LANE_UPSTREAMS=https://agents.example.com=http://127.0.0.1:18080,https://guest.example.com=http://127.0.0.1:18081
+  ```
+
+  In a bridged shape, map the same origins to `http://caddy:18080` and
+  `http://caddy:18081`.
+
+With `AOS_UI_PUBLIC_ORIGIN` unset, the server refuses all file reads and logs
+the reason on startup.
+
 ```bash
 curl --fail --silent http://127.0.0.1:4110/health
 ```
@@ -66,7 +98,7 @@ Each runtime guide explains how to register the server with that harness.
 ## Lanes and Caddy
 
 A harness overlay adds the `gateway` service (image
-`${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.13.0}`) and the guest lane.
+`${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.14.0}`) and the guest lane.
 Caddy is then the only published lane listener:
 
 | Lane                     | Host port (default) | Caddy   | Gateway listener | Web server listener |
@@ -293,8 +325,10 @@ gateway's configuration dials another URL. See
 [Tools MCP server configuration](configuration.md#tools-mcp-server) for the
 full rules.
 
-**Lockstep deploy.** The gateway (0.13.0) and this aos-ui build use a strict
-view schema. An older aos-ui that has not consumed the 0.13.0 SDK refuses a
+**Lockstep deploy.** The gateway (0.14.0) and this aos-ui build deploy
+together. The artifact view reads its file through the gateway, which forwards
+that read only from 0.14.0: against an older gateway the card shows "Preview
+isn't available here." An aos-ui older than the 0.13.0 SDK, in turn, refuses a
 view carrying `domain`. Deploy and roll back the gateway and aos-ui together.
 
 ### DNS and certificate

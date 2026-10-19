@@ -37,12 +37,14 @@ export type ViewLabels = {
     audio: string
     video: string
     playbackSpeed: string
+    play: (filename: string) => string
     view: (filename: string) => string
     loading: string
     unreachable: string
     denied: string
     noPreview: string
     tooLarge: string
+    unavailable: string
     htmlTitle: string
     htmlView: string
     preview: string
@@ -95,12 +97,14 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       audio: "Audio",
       video: "Video",
       playbackSpeed: "Playback speed",
+      play: (filename) => `Play ${filename}`,
       view: (filename) => `View ${filename}`,
       loading: "Loading file…",
       unreachable: "Can't reach this file.",
       denied: "Showing this file isn't allowed.",
       noPreview: "No preview is available for this file.",
       tooLarge: "This file is too large to preview.",
+      unavailable: "Preview isn't available here.",
       htmlTitle: "HTML preview",
       htmlView: "HTML view",
       preview: "Preview",
@@ -151,12 +155,14 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       audio: "שמע",
       video: "וידאו",
       playbackSpeed: "מהירות ניגון",
+      play: (filename) => `הפעלת ${filename}`,
       view: (filename) => `הצגת ${filename}`,
       loading: "הקובץ נטען…",
       unreachable: "לא ניתן לגשת לקובץ הזה.",
       denied: "אין הרשאה להציג את הקובץ הזה.",
       noPreview: "אין תצוגה מקדימה לקובץ הזה.",
       tooLarge: "הקובץ גדול מדי לתצוגה מקדימה.",
+      unavailable: "תצוגה מקדימה לא זמינה כאן.",
       htmlTitle: "תצוגה מקדימה של HTML",
       htmlView: "תצוגת HTML",
       preview: "תצוגה מקדימה",

@@ -2,11 +2,13 @@ import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
 
 import {
   McpAppFilesRefusedError,
+  McpAppResourceReadError,
   type McpAppAdapter,
   type McpAppTarget,
 } from "../contracts"
 import {
   HgwClientError,
+  McpAppFileReadError,
   type HgwRemoteClient,
   type McpAppSubject,
 } from "@harness-gw/sdk"
@@ -64,9 +66,16 @@ export class AosMcpAppAdapter implements McpAppAdapter {
   }
 
   readResource: McpAppAdapter["readResource"] = (input) =>
-    this.client.readMcpAppResource(input.sessionId, subjectOf(input), {
-      uri: input.uri,
-    })
+    this.client
+      .readMcpAppResource(input.sessionId, subjectOf(input), {
+        uri: input.uri,
+      })
+      .catch((error: unknown) => {
+        // The gateway names why it or the view's server refused a file read.
+        throw error instanceof McpAppFileReadError
+          ? new McpAppResourceReadError(error.reason)
+          : error
+      })
 
   renewFiles: McpAppAdapter["renewFiles"] = (target) =>
     this.client

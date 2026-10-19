@@ -68,21 +68,22 @@ An Agent shows a file with `present_artifact` from the AOS UI tools MCP server, 
 
 - **PDFs** as wide as the card, with selectable, findable text, keyboard reading (the arrow, Page Up/Down, and Space keys scroll the page and turn it at its edge; Home and End jump to the first and last page), and a sidebar of the outline and pages that the Sidebar control opens
 - **Images**, fitted to the card
+- **Audio and video**, with a Play control; the file is read only when Play is pressed
 - **Plain text**
 - **Agent-written HTML** with its own scripts, in a sandboxed frame with an opaque origin that reaches no network directly and loads no outside or relative files; web storage is available in memory for the preview, and `https:` link clicks are relayed to the workspace to open in a new tab; beside its source highlighted as HTML
-- **Anything else** as "No preview"
+- **Anything else** as "No preview is available for this file."
 
 PDFs and images zoom with a pinch, Ctrl and the wheel or a trackpad pinch, the + and - keys (0 fits again), or the zoom controls; zoomed in, they pan by scrolling. Agent HTML zooms with Ctrl and the wheel or a trackpad pinch over its frame.
 
 The card's controls are Refresh, Download, Full screen, Open in new tab, and pip, on one row with the preview's own controls; in the side panel and in full screen, whose header names the file, the view does not repeat the name. Open in new tab appears only for a PDF, an image, audio, or video, which the browser shows itself; any other file opens there as its plain text, so read it in the card, the side panel, or full screen. Esc leaves full screen for where the view was.
 
-A file over its kind's preview limit (64 MiB for a PDF or an image, 25 MiB for HTML, 2 MiB for text) shows Download, and Open in new tab where the browser shows that kind, instead of a preview.
+A file over its kind's preview limit (64 MiB for a PDF, an image, audio, or video; 25 MiB for HTML; 2 MiB for text) shows "This file is too large to preview.", Download, and Open in new tab where the browser shows that kind, instead of a preview.
 
 The tool's description tells the Agent to use it for every file it shows, instead of a `MEDIA:` line, and to call it again after each change to the file. One path is one Artifact however the Agent titles it: every open view of that file, in its message, in the side panel, or in full screen, re-reads it when a later call presents it again, and the inspector's Outputs list names the file once, at its latest call, under the latest title. Earlier cards stay in the conversation as history and show the current file on Refresh.
 
 **pip** moves the view into the side panel beside the conversation, or into a drawer over the conversation on phones. The message shows a short placeholder with a control that brings the view back. Moving the view reloads it, so a PDF reopens at its first page. Only one view is in pip at a time, within a Session. Close the panel, press Escape, or use the view's own inline control to return it.
 
-The gateway serves the file; the `aos-ui` MCP server never opens it. The page receives a signed address that is valid for about ten minutes and renewed while the card is open. The address serves only the path the tool call named. Which paths may be served is governed by the `mcpApps.files` folder rules; see [Configuration](configuration.md) and [MCP Apps](mcp-apps.md).
+The gateway serves the file. The view reads it by calling `readServerResource` with a signed address; the gateway relays the call to the `aos-ui` server, which fetches the file from the gateway's file route server to server. The signed address is valid for about ten minutes and is renewed while the card is open. The address serves only the path the tool call named. Which paths may be served is governed by the `mcpApps.files` folder rules; see [Configuration](configuration.md) and [MCP Apps](mcp-apps.md).
 
 **What can prevent a file from loading.** Each failure logs `app_file.refused` or `app_file.unavailable` in the gateway log. Common reasons:
 
@@ -92,7 +93,7 @@ The gateway serves the file; the `aos-ui` MCP server never opens it. The page re
 - The path is outside the folder rules or matches the built-in deny list (credential files and keys).
 - The file is missing.
 
-Hermes reads through its dashboard file API. OpenClaw reads through its Control UI media route. OpenCode cannot yet serve files; the card shows "Can't reach this file".
+Hermes reads through its dashboard file API. OpenClaw reads through its Control UI media route. OpenCode cannot yet serve files; the card shows "Can't reach this file."
 
 An Artifact from a `MEDIA:` line (Hermes and OpenClaw) or a trusted native delivery tool such as Hermes text-to-speech appears in the conversation as an inline image, audio, or video, or as a download link for other types. Publishing the same path again lists it once in the inspector's Artifacts list, at its latest publication. Paths mentioned in prose are not published.
 
