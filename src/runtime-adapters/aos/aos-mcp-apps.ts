@@ -2,6 +2,7 @@ import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
 
 import {
   McpAppFilesRefusedError,
+  McpAppResourceReadError,
   type McpAppAdapter,
   type McpAppTarget,
 } from "../contracts"
@@ -64,9 +65,19 @@ export class AosMcpAppAdapter implements McpAppAdapter {
   }
 
   readResource: McpAppAdapter["readResource"] = (input) =>
-    this.client.readMcpAppResource(input.sessionId, subjectOf(input), {
-      uri: input.uri,
-    })
+    this.client
+      .readMcpAppResource(input.sessionId, subjectOf(input), {
+        uri: input.uri,
+      })
+      .catch((error: unknown) => {
+        // The gateway names why it or the view's server refused a read. The
+        // SDK release that types the reason follows harness-gw's; until this
+        // repository takes it, the reason is read by its shape.
+        const reason = (error as { reason?: unknown } | undefined)?.reason
+        throw typeof reason === "string"
+          ? new McpAppResourceReadError(reason)
+          : error
+      })
 
   renewFiles: McpAppAdapter["renewFiles"] = (target) =>
     this.client

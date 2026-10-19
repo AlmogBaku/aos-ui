@@ -8,9 +8,11 @@ import {
   type McpUiHostContext,
   type McpUiStyles,
 } from "@modelcontextprotocol/ext-apps/app-bridge"
-import type {
-  CallToolResult,
-  ReadResourceResult,
+import {
+  ProtocolError,
+  ProtocolErrorCode,
+  type CallToolResult,
+  type ReadResourceResult,
 } from "@modelcontextprotocol/client"
 import { useTheme } from "next-themes"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
@@ -23,7 +25,11 @@ import {
 } from "@harness-gw/sdk/protocol"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 import { cn } from "@/lib/utils"
-import type { McpAppAdapter, McpAppTarget } from "@/runtime-adapters/contracts"
+import {
+  McpAppResourceReadError,
+  type McpAppAdapter,
+  type McpAppTarget,
+} from "@/runtime-adapters/contracts"
 import type { DeploymentOrigins } from "@shared/lane-origins"
 import { sandboxPageUrl, sandboxPolicyOrigins } from "@shared/mcp-app-sandbox"
 
@@ -33,7 +39,6 @@ import {
   createRateLimiter,
   createResourceCache,
   fileArgument,
-  fileLocation,
   grantDisplayMode,
   offeredDisplayModes,
   openAppLink,
@@ -215,20 +220,14 @@ export default function McpAppFrame({
       atPublicOrigin ? sandboxPolicyOrigins(origins, view.domain) : undefined,
     [atPublicOrigin, origins, view.domain]
   )
-  // A renewal changes only the passes, which the address leaves out, so the
-  // view keeps running.
+  // The view reads its files through this page, never by their addresses,
+  // so its policy names none of them, and a renewal leaves the view running.
   const sandboxUrl = useMemo(
     () =>
       policyOrigins
-        ? sandboxPageUrl(policyOrigins.sandboxOrigin, {
-            allow,
-            csp: view.csp,
-            fileLocations: Object.values(view.files?.addresses ?? {}).flatMap(
-              (address) => fileLocation(address) ?? []
-            ),
-          })
+        ? sandboxPageUrl(policyOrigins.sandboxOrigin, { allow, csp: view.csp })
         : undefined,
-    [allow, policyOrigins, view.csp, view.files]
+    [allow, policyOrigins, view.csp]
   )
   const { files, renew } = useAppFiles({
     files: view.files,
@@ -296,8 +295,8 @@ export default function McpAppFrame({
     // host pads the frame by the device's own insets.
     safeAreaInsets: NO_INSETS,
     styles: { variables: styleVariables() },
-    // Where the view fetches each file its call names, by argument, and the
-    // revision of the file it shows.
+    // Where each file its call names is, by argument, which the view reads
+    // through this page, and the revision of the file it shows.
     ...(files ? { "aos/files": files.addresses } : {}),
     ...(filesRevision === undefined
       ? {}
@@ -440,6 +439,7 @@ export default function McpAppFrame({
       })
       return adapter.callTool({ ...target, ...request })
     }
+    // A read the runtime refused for a reason it names tells the view why.
     bridge.onreadresource = async (params) => {
       if (!admit()) refuse()
       const request = McpAppResourceReadRequestSchema.parse({ uri: params.uri })
@@ -447,7 +447,13 @@ export default function McpAppFrame({
       return sharedReads(adapter)(
         { agentId, toolName: context.current.toolName, uri: request.uri },
         () => adapter.readResource({ ...target, ...request })
-      )
+      ).catch((error: unknown) => {
+        throw error instanceof McpAppResourceReadError
+          ? new ProtocolError(ProtocolErrorCode.InternalError, error.message, {
+              reason: error.reason,
+            })
+          : error
+      })
     }
     // The view's own files open and download by a fresh pass, never by the
     // address it names.

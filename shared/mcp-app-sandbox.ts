@@ -21,16 +21,11 @@ const CSP_LISTS = [
   "baseUriDomains",
 ] as const satisfies readonly (keyof McpUiCsp)[]
 
-/** The query parameter each of the call's file locations travels in. */
-const FILE_PARAMETER = "file"
-
 export type SandboxPageView = {
   /** The frame's `allow` features, which the relay hands the view's frame. */
   allow: string
   /** The view's declared `_meta.ui.csp`. */
   csp?: McpUiCsp | undefined
-  /** The call's file addresses without their passes. */
-  fileLocations: readonly string[]
 }
 
 /** The pages a sandbox policy lets frame it, and the origin it is served from. */
@@ -134,13 +129,12 @@ export function sandboxAt(
  */
 export function sandboxPageUrl(
   sandboxOrigin: string,
-  { allow, csp, fileLocations }: SandboxPageView
+  { allow, csp }: SandboxPageView
 ): string | undefined {
   const query = new URLSearchParams()
   if (allow) query.set("allow", allow)
   for (const list of CSP_LISTS)
     for (const domain of csp?.[list] ?? []) query.append(list, domain)
-  for (const location of fileLocations) query.append(FILE_PARAMETER, location)
   const search = query.toString()
   const url = `${sandboxOrigin}${MCP_APP_SANDBOX_PATH}${search ? `?${search}` : ""}`
   return url.length > MAX_SANDBOX_PAGE_URL_LENGTH ? undefined : url
@@ -149,7 +143,8 @@ export function sandboxPageUrl(
 /**
  * The policy the sandbox page is sent with for the view its query names, which
  * `origins.frameAncestors` may frame. Anyone can ask for the page with any
- * query; `mcpAppSandboxPolicy` checks every value before it writes it.
+ * query; `mcpAppSandboxPolicy` checks every value before it writes it. A view
+ * reads its files through its page, so the policy reaches none of them.
  */
 export function sandboxPagePolicy(
   origins: SandboxPolicyOrigins,
@@ -157,11 +152,7 @@ export function sandboxPagePolicy(
 ): string {
   const csp: McpUiCsp = {}
   for (const list of CSP_LISTS) csp[list] = query.getAll(list)
-  return mcpAppSandboxPolicy({
-    ...origins,
-    csp,
-    fileLocations: query.getAll(FILE_PARAMETER),
-  })
+  return mcpAppSandboxPolicy({ ...origins, csp })
 }
 
 /**

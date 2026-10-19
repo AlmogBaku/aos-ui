@@ -14,6 +14,7 @@ import type { McpUiCsp } from "@harness-gw/sdk/protocol"
 import { ToolUiLocaleProvider } from "@/components/tool-ui"
 import {
   McpAppFilesRefusedError,
+  McpAppResourceReadError,
   type McpAppAdapter,
 } from "@/runtime-adapters/contracts"
 
@@ -472,7 +473,7 @@ describe("MCP App sandbox", () => {
     </ToolUiLocaleProvider>
   )
 
-  it("loads the sandbox page from the sandbox origin, with the view's declared lists and no pass", async () => {
+  it("loads the sandbox page from the sandbox origin, with the view's declared lists and none of its files", async () => {
     render(
       frame({
         view: {
@@ -498,7 +499,6 @@ describe("MCP App sandbox", () => {
         "src",
         `${SANDBOX}/mcp-app-sandbox.html?${new URLSearchParams([
           ["connectDomains", "https://api.example.test"],
-          ["file", `${window.location.origin}/files/report.pdf`],
         ])}`
       )
     )
@@ -548,9 +548,8 @@ describe("MCP App sandbox", () => {
     const reported = bridges.at(-1)?.capabilities.sandbox?.csp
     expect(reported).toEqual({ connectDomains: ["https://api.example.test"] })
     // The server's header for the same view connects to exactly those.
-    const query = new URL(
-      sandboxPageUrl(SANDBOX, { allow: "", csp, fileLocations: [] }) ?? ""
-    ).searchParams
+    const query = new URL(sandboxPageUrl(SANDBOX, { allow: "", csp }) ?? "")
+      .searchParams
     const policy = sandboxPagePolicy(sandboxPolicyOrigins(origins), query)
     expect(policy).toContain(
       `connect-src ${reported?.connectDomains?.join(" ")};`
@@ -683,18 +682,23 @@ describe("MCP App files", () => {
     clock = useFakeClock()
   })
 
-  /** A view whose ten-minute passes arrived at 0, mounted at `mountedAt`. */
+  /**
+   * A view whose ten-minute passes arrived at 0, mounted at `mountedAt`, on
+   * `apps`, which renews them by `renewFiles`.
+   */
   function mountFiles({
+    adapter: apps = adapter,
     renewFiles = async () => files("fresh", 1_200_000),
     connectionStatus,
     mountedAt = 0,
   }: {
+    adapter?: McpAppAdapter
     renewFiles?: McpAppAdapter["renewFiles"]
     connectionStatus?: AppConnectionStatus
     mountedAt?: number
   } = {}) {
     vi.setSystemTime(mountedAt)
-    const apps = { ...adapter, renewFiles: vi.fn(renewFiles) }
+    const renewing = { ...apps, renewFiles: vi.fn(renewFiles) }
     const view = { html: "<p>app</p>", files: files("first", 600_000) }
     const frame = (status?: AppConnectionStatus) => (
       <ToolUiLocaleProvider locale="en">
@@ -704,7 +708,7 @@ describe("MCP App files", () => {
           openedAt={0}
           connectionStatus={status}
           target={target}
-          adapter={apps}
+          adapter={renewing}
           title="report app"
         />
       </ToolUiLocaleProvider>
@@ -714,7 +718,7 @@ describe("MCP App files", () => {
     act(() => bridge.initialize())
     return {
       bridge,
-      renewFiles: apps.renewFiles,
+      renewFiles: renewing.renewFiles,
       unmount,
       setStatus: (status: AppConnectionStatus) =>
         act(async () => rerender(frame(status))),
@@ -905,6 +909,23 @@ describe("MCP App files", () => {
     expect(open.mock.calls).toEqual([
       [address("t1", "fresh"), "_blank", "noopener,noreferrer"],
     ])
+  })
+
+  it("tells the view why the runtime refused a read of its file, and passes any other failure on as it came", async () => {
+    const offline = new Error("offline")
+    const readResource = vi
+      .fn()
+      .mockRejectedValueOnce(new McpAppResourceReadError("denied"))
+      .mockRejectedValueOnce(offline)
+    const { bridge } = mountFiles({ adapter: { ...adapter, readResource } })
+    const read = () => bridge.onreadresource?.({ uri: address("t1", "first") })
+
+    // The view's read rejects with the JSON-RPC error the bridge sends it.
+    await expect(read()).rejects.toMatchObject({
+      code: -32603,
+      data: { reason: "denied" },
+    })
+    await expect(read()).rejects.toBe(offline)
   })
 
   it("reads a server's view resource once for all the views it hosts", async () => {

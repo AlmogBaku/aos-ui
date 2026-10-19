@@ -169,17 +169,20 @@ describe("web server", () => {
       const page = sandboxPageUrl(SANDBOX, {
         allow: "camera",
         csp: { connectDomains: ["https://api.example.test"] },
-        // A file on any lane's origin is the view's to read, and a location
-        // cannot end the policy and widen who may frame it.
-        fileLocations: [`${GUEST_PAGES[0]}/report; frame-ancestors *`],
+      })
+      // A view reads its files through its page, so a file a query names,
+      // even on a lane's origin, is no source of the policy, and cannot end
+      // it and widen who may frame it.
+      const file = new URLSearchParams({
+        file: `${GUEST_PAGES[0]}/report; frame-ancestors *`,
       })
 
-      const response = await app(new Request(page ?? ""))
+      const response = await app(new Request(`${page}&${file}`))
       expect(response.status).toBe(200)
       const policy = response.headers.get("content-security-policy")
       const [connect] = directives(policy, "connect-src")
       expect(connect).toContain("https://api.example.test")
-      expect(connect).toContain("https://guest.example.test/report")
+      expect(policy).not.toContain(`${GUEST_PAGES[0]}/report`)
       expect(directives(policy, "frame-ancestors")).toEqual([
         `frame-ancestors ${ORIGINS.publicOrigins.join(" ")}`,
       ])
@@ -221,11 +224,7 @@ describe("web server", () => {
       // A view may not reach its own sandbox origin; the shared one is just
       // another host to it.
       const csp = { connectDomains: [STABLE_ORIGIN, STABLE_DOMAIN] }
-      const page = sandboxPageUrl(STABLE_ORIGIN, {
-        allow: "",
-        csp,
-        fileLocations: [],
-      })
+      const page = sandboxPageUrl(STABLE_ORIGIN, { allow: "", csp })
 
       const response = await app(new Request(page ?? ""))
       expect(response.status).toBe(200)

@@ -317,6 +317,19 @@ export class McpAppFilesRefusedError extends Error {
   }
 }
 
+/**
+ * A view's resource read failed for a reason the runtime names, such as the
+ * `denied` or `tooLarge` of a file address, which the host hands the view as
+ * the read's JSON-RPC `data.reason`; every other read failure remains an
+ * ordinary Error.
+ */
+export class McpAppResourceReadError extends Error {
+  constructor(readonly reason: string) {
+    super(`The resource could not be read: ${reason}`)
+    this.name = "McpAppResourceReadError"
+  }
+}
+
 export type McpAppAdapter = {
   /**
    * The call's view. The arguments its `files` name are withheld from its
@@ -326,6 +339,7 @@ export type McpAppAdapter = {
   callTool(
     input: McpAppTarget & { name: string; arguments: Record<string, unknown> }
   ): Promise<CallToolResult>
+  /** Rejects with `McpAppResourceReadError` for a failure it names. */
   readResource(
     input: McpAppTarget & { uri: string }
   ): Promise<ReadResourceResult>
