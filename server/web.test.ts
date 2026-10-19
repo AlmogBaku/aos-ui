@@ -422,8 +422,9 @@ describe("web server settings", () => {
       { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.localhost:3000; *" },
       /^AOS_UI_MCP_APP_SANDBOX_ORIGIN: .* is not an exact origin/u,
     ],
+    // Every origin listed, not only the first.
     [
-      { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://localhost:3000" },
+      { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://127.0.0.1:3000" },
       /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must differ in host and port from every origin in AOS_UI_PUBLIC_ORIGIN$/u,
     ],
     // Routing tells origins apart by host and port alone.
@@ -457,12 +458,14 @@ describe("web server settings", () => {
       { AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://localhost:3005" },
       /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must be a name below localhost/u,
     ],
+    // Every origin listed, not only the first.
     [
       {
-        AOS_UI_PUBLIC_ORIGIN: "https://aos.example.test",
+        AOS_UI_PUBLIC_ORIGIN:
+          "http://aos.example.test,https://guest.example.test",
         AOS_UI_MCP_APP_SANDBOX_ORIGIN: "http://sandbox.example.test",
       },
-      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must be https:, since AOS_UI_PUBLIC_ORIGIN lists https:\/\/aos\.example\.test/u,
+      /^AOS_UI_MCP_APP_SANDBOX_ORIGIN must be https:, since AOS_UI_PUBLIC_ORIGIN lists https:\/\/guest\.example\.test/u,
     ],
     // The stable origins name one wildcard origin whose stable hosts a view's
     // domain can name.
@@ -485,6 +488,15 @@ describe("web server settings", () => {
     [
       { AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.localhost:3000" },
       /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN or AOS_UI_MCP_APP_SANDBOX_ORIGIN is at or below, but http:\/\/localhost:3000 is$/u,
+    ],
+    // Every origin listed, not only the first.
+    [
+      {
+        AOS_UI_PUBLIC_ORIGIN:
+          "http://localhost:3000,http://guest.mcp-apps.localhost:3001",
+        AOS_UI_MCP_APP_STABLE_ORIGINS: "http://*.mcp-apps.localhost:3000",
+      },
+      /^AOS_UI_MCP_APP_STABLE_ORIGINS must name a domain that no origin in AOS_UI_PUBLIC_ORIGIN or AOS_UI_MCP_APP_SANDBOX_ORIGIN is at or below, but http:\/\/guest\.mcp-apps\.localhost:3001 is$/u,
     ],
     [
       {
