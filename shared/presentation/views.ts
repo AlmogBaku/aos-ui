@@ -21,7 +21,8 @@ export type PresentationView = {
  * loads from them signals nothing to anyone. A host anyone may publish to,
  * such as an npm mirror whose per-file hit counts are public, would.
  *
- * Agent HTML also has in-memory storage (via the stand-in) and relays `https:`
+ * Agent HTML also has storage of its own (via the stand-in, which the
+ * artifact view saves per file on its stable origin) and relays `https:`
  * links to the workspace. Loading from these CDNs signals nothing beyond what
  * an ordinary https link click would.
  */
