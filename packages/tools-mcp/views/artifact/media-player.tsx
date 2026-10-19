@@ -4,12 +4,11 @@ import { nextPlaybackRate } from "../../../../shared/playback-rate"
 import { cn } from "../ui/cn"
 
 /**
- * A file's native player, labelled `label`, playing straight from `src`, which
- * answers byte ranges, so the file streams and seeks rather than being read
- * whole. A renewed `src` plays on from where the old one was. Beside it, a
- * button steps through the playback speeds and shows the current one. With
- * `fill`, a video fills the height it is given; otherwise it is at most a
- * modest height.
+ * A file's native player, labelled `label`, playing `src`, the whole file as a
+ * `data:` address. A new `src`, such as a new revision of the file, plays on
+ * from where the old one was. Beside it, a button steps through the playback
+ * speeds and shows the current one. With `fill`, a video fills the height it
+ * is given; otherwise it is at most a modest height.
  */
 export function MediaPlayer({
   kind,

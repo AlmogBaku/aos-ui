@@ -1,4 +1,6 @@
+import { FILE_READ_LIMIT } from "../../../../shared/presentation/file-reads"
 import { syntaxLanguageFromFilename } from "../../../../shared/syntax-language"
+import type { ViewApp } from "../view"
 import { codeLanguage } from "./code"
 
 /** How a text file lays out: as prose, a table, or highlighted source. */
@@ -6,33 +8,44 @@ export type TextFormat =
   | { format: "plain" | "markdown" | "csv" | "json" }
   | { format: "code"; language: string }
 
+/** Audio or video, played whole from a `data:` address. */
+export type MediaPreview = { kind: "audio" | "video"; url: string }
+
 export type FilePreview =
   | { kind: "pdf"; blob: Blob }
   | { kind: "image"; url: string }
   | { kind: "html"; text: string }
   | ({ kind: "text"; text: string } & TextFormat)
+  | MediaPreview
   | { kind: "none" }
 
+/**
+ * A file still loading, refused for a reason its read names, unread because
+ * the page cannot read it here, or ready to show.
+ */
 export type FileState =
-  | { status: "loading" | "unreachable" | "denied" | "tooLarge" }
+  | {
+      status: "loading" | "unreachable" | "denied" | "tooLarge" | "unavailable"
+    }
   | { status: "ready"; preview: FilePreview }
 
-export type PreviewKind = Exclude<FilePreview["kind"], "none">
+/** What a file is shown as: a preview read from it. */
+export type FileKind = Exclude<FilePreview["kind"], "none">
 
-/** What a file is shown as: a preview read from it, or media played from it. */
-export type FileKind = PreviewKind | "audio" | "video"
-
-export type PreviewLimits = Record<PreviewKind, number>
+export type PreviewLimits = Record<FileKind, number>
 
 const MIB = 1024 * 1024
 
 /**
- * The largest file of each kind, in bytes, the view reads to preview; a larger
- * one is only offered. The view lays text out itself, so text gets the least.
+ * The largest file of each kind, in bytes, the view previews; a larger one is
+ * only offered. Every read stops at `FILE_READ_LIMIT`, and the view lays text
+ * out itself, so text gets the least.
  */
 export const PREVIEW_LIMITS: PreviewLimits = {
-  pdf: 64 * MIB,
-  image: 64 * MIB,
+  pdf: FILE_READ_LIMIT,
+  image: FILE_READ_LIMIT,
+  audio: FILE_READ_LIMIT,
+  video: FILE_READ_LIMIT,
   html: 25 * MIB,
   text: 2 * MIB,
 }
@@ -140,101 +153,74 @@ export function knownType(file: {
   )
 }
 
-function discard(body: ReadableStream | null) {
-  void body?.cancel().catch(() => undefined)
+/** How many bytes base64 `text` decodes to. */
+function decodedSize(text: string) {
+  const padding = text.endsWith("==") ? 2 : text.endsWith("=") ? 1 : 0
+  return (text.length / 4) * 3 - padding
 }
 
-/**
- * The whole body, or nothing once it proves larger than `limit`: by its
- * declared length before any byte is read, else by counting what arrives.
- */
-async function readBody(response: Response, limit: number) {
-  if (Number(response.headers.get("content-length")) > limit) {
-    discard(response.body)
-    return undefined
-  }
-  const chunks: Uint8Array<ArrayBuffer>[] = []
-  if (!response.body) return chunks
-  const reader = response.body.getReader()
-  let size = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) return chunks
-    size += value.length
-    if (size > limit) {
-      void reader.cancel().catch(() => undefined)
-      return undefined
-    }
-    chunks.push(value)
-  }
+function decode(text: string) {
+  const binary = atob(text)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index++)
+    bytes[index] = binary.charCodeAt(index)
+  return bytes
 }
 
-function dataUrl(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(blob)
-  })
-}
-
-async function preview(
-  kind: PreviewKind,
-  type: string,
-  blob: Blob
-): Promise<FilePreview> {
-  if (kind === "pdf") return { kind, blob }
-  // The view's policy loads images only from `data:` addresses.
-  if (kind === "image") return { kind, url: await dataUrl(blob) }
-  const text = await blob.text()
+function preview(kind: FileKind, type: string, blob: string): FilePreview {
+  // The view's policy loads images and media only from `data:` addresses.
+  if (kind === "image" || kind === "audio" || kind === "video")
+    return { kind, url: `data:${type};base64,${blob}` }
+  const bytes = decode(blob)
+  if (kind === "pdf") return { kind, blob: new Blob([bytes], { type }) }
+  const text = new TextDecoder().decode(bytes)
   if (kind === "html") return { kind, text }
   return { kind, text, ...textFormat(type) }
 }
 
+/** The reasons a read names that the view says apart; any other is none. */
+const REASONS = new Set(["unreachable", "denied", "tooLarge"])
+
 /**
- * Fetches the file at `address` whole, up to its kind's limit, and prepares
- * its preview. The first type that is known decides how it shows: the one the
- * Agent declared, then the file name's, then the response's; a vague declared
- * text type yields to the file name's. A file with no
+ * Why a read failed, by the `data.reason` its JSON-RPC error carries; a read
+ * that names none the view knows, or that the page could not make at all, is
+ * one the page cannot make here.
+ */
+function failure(error: unknown) {
+  const reason = (error as { data?: { reason?: unknown } } | undefined)?.data
+    ?.reason
+  return typeof reason === "string" && REASONS.has(reason)
+    ? (reason as "unreachable" | "denied" | "tooLarge")
+    : "unavailable"
+}
+
+const NO_PREVIEW: FileState = { status: "ready", preview: { kind: "none" } }
+
+/**
+ * Reads the file at `address` whole through the page, as the `aos-ui` server
+ * reads it there (`resources/read`), and prepares its preview, up to its
+ * kind's limit. The first type that is known decides how it shows: the one the
+ * Agent declared, then the file name's, then the one it was read as; a vague
+ * declared text type yields to the file name's. A file known to have no
  * preview is not read at all.
  */
 export async function loadFile(
+  read: ViewApp["readServerResource"],
   address: string,
   file: { filename: string; mimeType?: string | undefined },
-  limits: PreviewLimits,
-  signal: AbortSignal
+  limits: PreviewLimits
 ): Promise<FileState> {
+  const known = knownType(file)
+  if (known !== undefined && kindOf(known) === undefined) return NO_PREVIEW
   try {
-    const response = await fetch(address, {
-      cache: "no-store",
-      credentials: "omit",
-      signal,
-    })
-    if (!response.ok) {
-      discard(response.body)
-      // The gateway answers 403 only for a path its folders do not serve.
-      return { status: response.status === 403 ? "denied" : "unreachable" }
-    }
-    const type =
-      knownType(file) ?? mediaType(response.headers.get("content-type"))
+    const [content] = (await read({ uri: address })).contents
+    if (!content || !("blob" in content)) return { status: "unavailable" }
+    const type = known ?? mediaType(content.mimeType)
     const kind = kindOf(type)
-    // Media plays from its address, so it is never read here.
-    if (
-      type === undefined ||
-      kind === undefined ||
-      kind === "audio" ||
-      kind === "video"
-    ) {
-      discard(response.body)
-      return { status: "ready", preview: { kind: "none" } }
-    }
-    const chunks = await readBody(response, limits[kind])
-    if (!chunks) return { status: "tooLarge" }
-    return {
-      status: "ready",
-      preview: await preview(kind, type, new Blob(chunks, { type })),
-    }
-  } catch {
-    return { status: "unreachable" }
+    if (type === undefined || kind === undefined) return NO_PREVIEW
+    if (decodedSize(content.blob) > limits[kind]) return { status: "tooLarge" }
+    return { status: "ready", preview: preview(kind, type, content.blob) }
+  } catch (error) {
+    return { status: failure(error) }
   }
 }
