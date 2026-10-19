@@ -278,8 +278,10 @@ describe("container orchestration", () => {
         AOS_UI_TOOLS_MCP_URL: dialed,
       })
       // The gateway dials the URL OpenCode registers, which harness-gw's
-      // example configuration does not override.
-      expect(opencode?.environment?.AOS_UI_TOOLS_MCP_URL ?? dialed).toBe(dialed)
+      // example configuration does not override; only its overlay runs it.
+      expect(opencode?.environment?.AOS_UI_TOOLS_MCP_URL).toBe(
+        runtime === "opencode" ? dialed : undefined
+      )
     }
   )
 

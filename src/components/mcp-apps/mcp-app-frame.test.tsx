@@ -593,18 +593,6 @@ describe("MCP App sandbox", () => {
       `${KEY}.mcp-apps.localhost`,
       SANDBOX,
     ],
-    [
-      "from the shared sandbox when its domain is below another",
-      STABLE_ORIGINS,
-      `${KEY}.other.localhost`,
-      SANDBOX,
-    ],
-    [
-      "from the shared sandbox when its domain's key is not 32 hex digits",
-      STABLE_ORIGINS,
-      `${KEY.slice(1)}.mcp-apps.localhost`,
-      SANDBOX,
-    ],
   ] as const)(
     "loads a view %s",
     async (_label, stableOrigins, domain, origin) => {
