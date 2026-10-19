@@ -33,9 +33,9 @@ guides document the fallback.
 
 The view runs inside a double iframe. The outer frame (`sandbox="allow-scripts
 allow-same-origin"`) loads a static relay page, `/mcp-app-sandbox.html`, from
-the deployment's one sandbox origin, `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, which
-both lanes' views load from and which differs from every lane's origin, as the
-spec requires; see
+the deployment's one sandbox origin, `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, such as
+`https://mcp-apps.example.com`, which both lanes' views load from and which
+differs from every lane's origin, as the spec requires; see
 [MCP App sandbox origins](deployment.md#mcp-app-sandbox-origins). The inner
 frame holds the view itself. Because the outer frame has `allow-same-origin`,
 the view runs on the sandbox origin and can use cookies and web storage.
@@ -90,12 +90,13 @@ The view frame may not navigate the workspace, open pop-ups, or submit forms.
 
 An App can declare `_meta.ui.domain` to request an origin of its own, separate
 from the shared sandbox. AOS honors it only when `AOS_UI_MCP_APP_STABLE_ORIGINS`
-is set; with it unset every view loads from the shared sandbox and no
-configuration is required for a new installation. Two protocol fixes apply
-regardless of that setting: `_meta.ui` is taken from the `resources/list` entry
-when the `resources/read` content item declares none, and a file the gateway
-delivers by a native path carries a `fileId` that matches `present_artifact`'s
-for the same path.
+is set, such as `https://*.mcp-apps.example.com` right below a sandbox at
+`https://mcp-apps.example.com`; with it unset every view loads from the shared
+sandbox and no configuration is required for a new installation. Two protocol
+fixes apply regardless of that setting: `_meta.ui` is taken from the
+`resources/list` entry when the `resources/read` content item declares none,
+and a file the gateway delivers by a native path carries a `fileId` that
+matches `present_artifact`'s for the same path.
 
 **Format.** A domain AOS accepts is `<32 hex digits>.<the wildcard's domain>`,
 where the 32-digit prefix is the first 32 hex digits of a SHA-256 of the MCP

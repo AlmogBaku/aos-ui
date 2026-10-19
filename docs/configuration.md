@@ -84,11 +84,11 @@ the gateway answers `/api/v1` beside it.
 | `AOS_UI_WEB_HOST`                    | `127.0.0.1`                                                                    | Operator surface bind address: `127.0.0.1`, `::1`, or a wildcard with `AOS_UI_WEB_EXPOSURE`.                                                                 |
 | `AOS_UI_WEB_PORT`                    | `3000`                                                                         | Operator surface port. Compose uses `4200`.                                                                                                                  |
 | `AOS_UI_PUBLIC_ORIGIN`               | required; Compose defaults to `http://localhost:<port>,http://127.0.0.1:<port>` on the operator lane's port, and a harness overlay adds the same on the guest lane's | Every exact origin the browser opens AOS UI at, operator and guest alike, comma-separated. Must be [exact origins](#exact-origins). Served in both surfaces' `/runtime-config.json` as `publicOrigins`. |
-| `AOS_UI_MCP_APP_SANDBOX_ORIGIN`      | required; Compose defaults to `http://sandbox.localhost:<port>`, the operator lane's port | The one sandbox origin both lanes' MCP App views load from. Must be an exact origin differing in host and port from every origin in `AOS_UI_PUBLIC_ORIGIN`, `https:` when any of them is, and loopback exactly when they are, then a `*.localhost` name. Served in both surfaces' `/runtime-config.json` as `mcpAppSandboxOrigin`. |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN`      | required; Compose defaults to `http://sandbox.localhost:<port>`, the sandbox site's port (`AOS_UI_SANDBOX_PUBLISHED_PORT`) | The one sandbox origin both lanes' MCP App views load from, such as `https://mcp-apps.example.com`. Must be an exact origin differing in host and port from every origin in `AOS_UI_PUBLIC_ORIGIN`, `https:` when any of them is, and loopback exactly when they are, then a `*.localhost` name. Served in both surfaces' `/runtime-config.json` as `mcpAppSandboxOrigin`. |
 | `AOS_UI_GUEST_WEB_PORT`              | unset                                                                          | Guest surface port; the guest surface runs only when it is set. Compose's harness overlays use `4201`.                                                        |
 | `AOS_UI_GUEST_WEB_HOST`              | `127.0.0.1`                                                                    | Guest surface bind address, under the same rule as `AOS_UI_WEB_HOST`.                                                                                        |
 | `AOS_UI_WEB_EXPOSURE`                | unset                                                                          | `private-container` allows a wildcard bind (`0.0.0.0` or `::`) inside a private container network.                                                           |
-| `AOS_UI_MCP_APP_STABLE_ORIGINS`      | unset                                                                          | Optional MCP App stable origins wildcard: `<scheme>://*.<domain>[:port]`. Off while unset; a view that asks for a stable domain loads from that origin instead of the shared sandbox. The web server refuses to start when the value is set but malformed, when any lane's or the sandbox's host is at or below `<domain>`, when the wildcard is `http:` under an `https:` lane, or when loopback status does not match. See [Stable origins](deployment.md#stable-origins-optional). |
+| `AOS_UI_MCP_APP_STABLE_ORIGINS`      | unset                                                                          | Optional MCP App stable origins wildcard: `<scheme>://*.<domain>[:port]`. Off while unset; a view that asks for a stable domain loads from that origin instead of the shared sandbox. The web server refuses to start when the value is set but malformed, when any lane's host is at or below `<domain>`, when the sandbox's host is below it (it may be `<domain>` itself, such as `https://mcp-apps.example.com` beside `https://*.mcp-apps.example.com`), when the wildcard is `http:` under an `https:` lane, or when loopback status does not match. See [Stable origins](deployment.md#stable-origins-optional). |
 | `AOS_UI_STATIC_ROOT`                 | `/app/dist`                                                                    | The built app, holding `build-id` beside the assets.                                                                                                         |
 | `AOS_UI_RUNTIME_CONFIG_FILE`         | `/run/aos-ui/runtime-config.json`                                              | The operator's public runtime configuration.                                                                                                                  |
 
@@ -123,18 +123,19 @@ host. They are not read by the Vite dev server. Caddy is the only published
 lane listener; the `tools-mcp` service has no authentication and is always
 published on `127.0.0.1`, whatever the operator bind address.
 
-| Variable                      | Default                              | Use                                                                        |
-| ----------------------------- | ------------------------------------ | -------------------------------------------------------------------------- |
-| `AOS_UI_BIND_ADDRESS`         | `127.0.0.1`                          | Host bind address for the operator lane.                                   |
-| `AOS_UI_WEB_PUBLISHED_PORT`   | `3000`                               | Host port for the operator lane (Caddy `:18080`).                          |
-| `AOS_UI_GUEST_BIND_ADDRESS`   | `127.0.0.1`                          | Host bind address for the guest lane.                                      |
-| `AOS_UI_GUEST_PUBLISHED_PORT` | `3001`                               | Host port for the guest lane (Caddy `:18081`), added by a harness overlay. |
-| `AOS_UI_PUBLIC_HOST`          | unset                                | Extra `Host` name the operator lane answers, such as a tailnet name.       |
-| `AOS_UI_GUEST_PUBLIC_HOST`    | unset                                | Extra `Host` name the guest lane answers.                                  |
-| `AOS_UI_TOOLS_MCP_PORT`       | `4110`                               | Loopback host port for the `tools-mcp` service.                            |
-| `AOS_UI_HOST_UID`/`_GID`      | `1000`                               | Numeric owner of the mounted secret files; the gateway runs as this user.  |
-| `HARNESS_GW_IMAGE`            | `ghcr.io/almogbaku/harness-gw:0.13.0` | Gateway image a harness overlay runs.                                      |
-| `HARNESS_GW_CONFIG_FILE`      | required by a harness overlay        | Host path of the private gateway configuration.                            |
+| Variable                        | Default                               | Use                                                                                     |
+| ------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `AOS_UI_BIND_ADDRESS`           | `127.0.0.1`                           | Host bind address for the operator lane and the sandbox site.                           |
+| `AOS_UI_WEB_PUBLISHED_PORT`     | `3000`                                | Host port for the operator lane (Caddy `:18080`).                                       |
+| `AOS_UI_SANDBOX_PUBLISHED_PORT` | `3002`                                | Host port for the MCP App sandbox site (Caddy `:18082`), which belongs to neither lane. |
+| `AOS_UI_GUEST_BIND_ADDRESS`     | `127.0.0.1`                           | Host bind address for the guest lane.                                                   |
+| `AOS_UI_GUEST_PUBLISHED_PORT`   | `3001`                                | Host port for the guest lane (Caddy `:18081`), added by a harness overlay.              |
+| `AOS_UI_PUBLIC_HOST`            | unset                                 | Extra `Host` name the operator lane answers, such as a tailnet name.                    |
+| `AOS_UI_GUEST_PUBLIC_HOST`      | unset                                 | Extra `Host` name the guest lane answers.                                               |
+| `AOS_UI_TOOLS_MCP_PORT`         | `4110`                                | Loopback host port for the `tools-mcp` service.                                         |
+| `AOS_UI_HOST_UID`/`_GID`        | `1000`                                | Numeric owner of the mounted secret files; the gateway runs as this user.               |
+| `HARNESS_GW_IMAGE`              | `ghcr.io/almogbaku/harness-gw:0.13.0` | Gateway image a harness overlay runs.                                                   |
+| `HARNESS_GW_CONFIG_FILE`        | required by a harness overlay         | Host path of the private gateway configuration.                                         |
 
 Each harness overlay also requires its secret-file variables, such as
 `HARNESS_GW_HERMES_TOKEN_FILE` and `HARNESS_GW_GUEST_INVITE_SIGNING_KEY_FILE`;
@@ -168,21 +169,21 @@ overlays) gives each lane one origin: `/api/v1/*`, HTTP and WebSocket, goes to
 that lane's gateway listener, and everything else to that lane's aos-ui web
 server listener. The lane is the port, never the path.
 
-- Each site also matches the one sandbox address (by host and port from
-  `AOS_UI_MCP_APP_SANDBOX_ORIGIN`) and routes every request for it — any path —
-  to its own web server listener, so whichever site receives it serves it.
-  This matcher runs before the `/api/v1` route, so the gateway never receives a
-  sandbox request.
-- When `AOS_UI_MCP_APP_STABLE_ORIGINS` is set, each site also matches exactly
-  each stable host — a 32-hex-digit label directly below the wildcard's domain,
-  on its port — and routes the request to the web server's own listener, the
-  same way the sandbox matcher does. Any other host at or below that domain is
-  foreign and gets 421 from the catch-all matcher below.
-- Each site answers only `127.0.0.1`, `localhost`, the sandbox address, stable
-  hosts, and the optional `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`;
-  any other name gets 421. Setting either `PUBLIC_HOST` variable to a loopback name is
-  harmless. Compose maps an empty value to `localhost`; run outside Compose,
-  Caddy refuses to start with either variable set but empty.
+- Each lane site answers only `127.0.0.1`, `localhost`, and the optional
+  `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other name, the
+  sandbox's and each stable host included, gets 421. Setting either
+  `PUBLIC_HOST` variable to a loopback name is harmless. Compose maps an empty
+  value to `localhost`; run outside Compose, Caddy refuses to start with either
+  variable set but empty.
+- The MCP App sandbox has a site of its own, `:18082`, which belongs to neither
+  lane. It matches the one sandbox address (by host and port from
+  `AOS_UI_MCP_APP_SANDBOX_ORIGIN`) and routes every request for it — any path,
+  `/api/v1` included — to the web server's operator listener, so the gateway
+  never receives a sandbox request.
+- When `AOS_UI_MCP_APP_STABLE_ORIGINS` is set, the sandbox site also matches
+  exactly each stable host — a 32-hex-digit label directly below the
+  wildcard's domain, on its port — and routes it the same way. Any other host
+  there gets 421.
 - `AOS_UI_CADDY_BIND` sets the bind address (default `127.0.0.1`; Compose sets
   `0.0.0.0` inside the container and publishes the port on loopback).
 - The upstreams default to the Compose service names and are overridden by

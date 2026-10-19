@@ -30,7 +30,9 @@ existing invite links.
 Present the exact files, services, ports, external DNS/Tunnel changes, and
 secrets that would change. State that Caddy publishes two loopback lane ports
 in front of the gateway and the web server: the operator lane (`3000`) is
-private and the guest lane (`3001`) may receive only the guest host. Require
+private and the guest lane (`3001`) may receive only the guest host. A third
+loopback port (`3002`) is the MCP App sandbox site, which belongs to neither
+lane and receives only the sandbox address and the stable hosts. Require
 a direct confirmation immediately before writes, service reloads/restarts, DNS
 changes, tunnel creation, or stopping duplicate processes. Treat each later material change as a new confirmation point.
 
@@ -50,13 +52,13 @@ the OpenClaw and OpenCode equivalents). Set `AOS_UI_PUBLIC_HOST` and
 **Before configuring addresses, ask for:**
 
 1. Every exact origin the browser will open AOS UI at, operator and guest alike, comma-separated, for the one `AOS_UI_PUBLIC_ORIGIN` list. A harness overlay turns the guest lane on, so list the guest lane's origins too unless `deploy/compose.operator-only.yaml` is added. Every origin in the list must sit on the same side of loopback: a loopback operator lane beside a public guest lane is unsupported with one shared sandbox.
-2. One MCP App sandbox address for the whole deployment, for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. The MCP Apps spec only requires its origin to differ from every lane's, so any separate name (`https://sandbox.agents.example`, `https://agents-sandbox.example`) or a lane's name on another port (`https://agents.example:8443`) works. State the trade-off without steering: a registrable domain of its own is a different site, optional extra isolation; a sibling name or a port is the same site as the lane and its views' requests to the lane carry the lane's `SameSite=Strict` cookies; the port form also shares the lane's whole cookie jar, since cookies ignore ports, so its views can read the lane's cookies that are not `HttpOnly` and set host-only cookies the lane receives. With a public guest lane, the sandbox address must be publicly reachable too; it serves only the sandbox page and its script, and the operator's own views then load it over that public route and stop showing while it is down. Its page's header lists every lane's origins to whoever requests it, so the operator's origins must be names the operator is fine publishing. A name proxied by Cloudflare must be one level below its zone for the free certificate.
+2. One MCP App sandbox address for the whole deployment, for `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. The MCP Apps spec only requires its origin to differ from every lane's, so any separate name (`https://sandbox.agents.example`, `https://mcp-apps.example.com`) or a lane's name on another port (`https://agents.example:8443`) works; with stable origins, it may be their wildcard's domain itself (`https://mcp-apps.example.com` beside `https://*.mcp-apps.example.com`). State the trade-off without steering: a registrable domain of its own is a different site, optional extra isolation; a sibling name or a port is the same site as the lane and its views' requests to the lane carry the lane's `SameSite=Strict` cookies; the port form also shares the lane's whole cookie jar, since cookies ignore ports, so its views can read the lane's cookies that are not `HttpOnly` and set host-only cookies the lane receives. With a public guest lane, the sandbox address must be publicly reachable too; it serves only the sandbox page and its script, and the operator's own views then load it over that public route and stop showing while it is down. Its page's header lists every lane's origins to whoever requests it, so the operator's origins must be names the operator is fine publishing. Whatever terminates TLS issues its certificate; see `docs/deployment.md#dns-and-certificate`.
 
 Set both in `/etc/aos-ui/aos-ui.env` (or `.env` for a Compose-only deployment). Both lanes share the one sandbox. The web server refuses to start if either is missing or not an exact origin, or if the sandbox shares a host and port with an origin in `AOS_UI_PUBLIC_ORIGIN`, is loopback while one of them is not or the reverse, is `http:` under an `https:` one, or is loopback but not a `*.localhost` name.
 
 **Reverse proxy rules for the sandbox address:**
 
-- Route every request for the sandbox address to the web server through one Caddy site, never to the gateway: the guest site (Caddy then sends it to `web:4201`) when the address is public, the operator site (`web:4200`) only when it is as private as the operator lane. A guest lane behind a tunnel needs the sandbox name in that tunnel too, sent to the guest lane; a public port-form sandbox forwards to the guest Caddy port.
+- Route every request for the sandbox address, and every stable host, to Caddy's sandbox site, never to a lane's port or the gateway: `AOS_UI_SANDBOX_PUBLISHED_PORT` (default `3002`), or `127.0.0.1:18082` under `deploy/compose.host.yaml`; Caddy then sends it whole to `web:4200`. With a public guest lane, that route must be public: a guest lane behind a tunnel needs the sandbox name in that tunnel too, sent to the sandbox site, and a port-form sandbox forwards there too. A proxy other than Caddy sends those hosts to the aos-ui web server.
 - Keep the operator site as private as its lane: a public sandbox route never reaches it.
 - Keep the original `Host` header, and let a listener in front for the sandbox pass only requests whose `Host` equals the sandbox's host and port.
 - Never add the sandbox origin to the gateway's `allowedOrigins`.
@@ -98,7 +100,8 @@ add `-f compose.push.yaml` after the runtime overlay in `ExecStart`,
 `systemctl daemon-reload && systemctl reload aos-ui`. Do not install Cloudflare,
 create a tunnel, alter DNS, or assume Tailscale unless the operator explicitly
 selected it. For Cloudflare, route the selected guest hostname to the guest
-listener and retain the same guest-only path boundary.
+listener and the sandbox name to the sandbox site, and retain the same
+guest-only path boundary.
 
 ## Stable origins (optional)
 
@@ -109,24 +112,26 @@ standard deployment. Set it only when an App needs a fixed origin of its own
 (OAuth callback, CORS or API-key allowlist, persistent `localStorage`). Before
 setting it, confirm:
 
-1. **A wildcard DNS record** (`*.agents-apps.example` CNAME or A) points to
-   the Caddy host for every stable key the operator expects.
-2. **A wildcard TLS certificate** (`*.agents-apps.example`) is in place.
-   Whatever terminates TLS issues it, for example an external Caddy with an
-   ACME DNS challenge. A Cloudflare-proxied wildcard is covered by the free
-   certificate only when the wildcard sits one level below the zone apex — for
-   example `*.agents-apps.example` in a `agents-apps.example` zone of its own.
-   A `<domain>` that is a subdomain of another zone, such as
-   `mcp-apps.agents.example` in `agents.example`, needs Cloudflare's paid
-   certificate or a separate domain, as in the example above.
-3. **The domain sits outside every lane and sandbox.** The web server refuses
-   `AOS_UI_MCP_APP_STABLE_ORIGINS` when any lane's or the sandbox's host is at
-   or below the wildcard's domain.
+1. **A wildcard DNS record** (`*.mcp-apps.example.com` CNAME or A) points to
+   the Caddy host for every stable key the operator expects, routed to the
+   sandbox site.
+2. **A TLS certificate** covers both `mcp-apps.example.com` and
+   `*.mcp-apps.example.com`, because a wildcard does not cover its own apex.
+   Whatever terminates TLS issues it, for example Caddy with an ACME DNS
+   challenge, which is free. Behind Cloudflare's proxy or tunnel, Cloudflare's
+   free edge certificate covers `mcp-apps.example.com` but not
+   `*.mcp-apps.example.com`, so the stable hosts need DNS-only records pointing
+   at a server that terminates TLS with its own certificate, or Cloudflare's
+   paid Advanced Certificate Manager.
+3. **The domain sits outside every lane, and the sandbox at it or outside
+   it.** The web server refuses `AOS_UI_MCP_APP_STABLE_ORIGINS` when any lane's
+   host is at or below the wildcard's domain, or the sandbox's host is below
+   it; the sandbox may be the domain itself.
 
 Set both variables in `/etc/aos-ui/aos-ui.env` (or `.env`):
 
 ```bash
-AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.agents-apps.example
+AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.mcp-apps.example.com
 AOS_UI_TOOLS_MCP_URL=http://tools-mcp:4110/mcp   # the URL the gateway dials
 ```
 
@@ -141,8 +146,8 @@ naming the stable domain it declared, or why it declared none. Then verify:
 
 ```bash
 # A stable host serves the sandbox page, not a gateway route:
-curl -I https://<32hexkey>.agents-apps.example/api/v1/healthz  # 404
-curl -I https://<32hexkey>.agents-apps.example/mcp-app-sandbox.html  # 200
+curl -I https://<32hexkey>.mcp-apps.example.com/api/v1/healthz  # 404
+curl -I https://<32hexkey>.mcp-apps.example.com/mcp-app-sandbox.html  # 200
 ```
 
 Deploy and roll back the gateway and aos-ui together: the strict view schema

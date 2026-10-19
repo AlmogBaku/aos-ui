@@ -69,16 +69,20 @@ A harness overlay adds the `gateway` service (image
 `${HARNESS_GW_IMAGE:-ghcr.io/almogbaku/harness-gw:0.13.0}`) and the guest lane.
 Caddy is then the only published lane listener:
 
-| Lane     | Host port (default) | Caddy   | Gateway listener | Web server listener |
-| -------- | ------------------- | ------- | ---------------- | ------------------- |
-| Operator | `3000`              | `18080` | `gateway:4100`   | `web:4200`          |
-| Guest    | `3001`              | `18081` | `gateway:4101`   | `web:4201`          |
+| Lane                     | Host port (default) | Caddy   | Gateway listener | Web server listener |
+| ------------------------ | ------------------- | ------- | ---------------- | ------------------- |
+| Operator                 | `3000`              | `18080` | `gateway:4100`   | `web:4200`          |
+| Guest                    | `3001`              | `18081` | `gateway:4101`   | `web:4201`          |
+| None: MCP App sandbox    | `3002`              | `18082` | none             | `web:4200`          |
 
 On each lane, `/api/v1/*` goes to the gateway and everything else to the web
 server. Which port a request reaches, never its path, decides whether it is a
 guest's. Caddy answers only `127.0.0.1`, `localhost`, and the lane's
 `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`; any other `Host` gets 421.
-Set those variables to the name the browser uses, such as a tailnet name.
+Set those variables to the name the browser uses, such as a tailnet name. The
+sandbox site sends only the sandbox address and the stable hosts to the web
+server, `/api/v1` included, and gives any other `Host` 421; see
+[One sandbox for both lanes](#one-sandbox-for-both-lanes).
 
 The gateway is API-only: it answers nothing outside `/api/v1`. Its liveness
 endpoint is `/api/v1/healthz` (always HTTP 200; `degraded` in the body means
@@ -127,14 +131,15 @@ guest lane's origins in `AOS_UI_PUBLIC_ORIGIN` beside the operator's, such as
 `https://agents.example,https://guests.agents.example`.
 
 Compose defaults both to loopback, so local development and containerized
-fixture mode need no extra configuration. The sandbox takes the operator lane's
-published port, and the guest lane frames that same address. A harness
-overlay, which opens the guest lane, lists both lanes' loopback origins:
+fixture mode need no extra configuration. The sandbox takes the sandbox site's
+published port, `AOS_UI_SANDBOX_PUBLISHED_PORT`, and both lanes frame that same
+address. A harness overlay, which opens the guest lane, lists both lanes'
+loopback origins:
 
-| Variable | Compose default (ports 3000 and 3001) | Under [host networking](#host-networking) |
+| Variable | Compose default (ports 3000, 3001, and 3002) | Under [host networking](#host-networking) |
 | --- | --- | --- |
 | `AOS_UI_PUBLIC_ORIGIN` | `http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001` | `http://127.0.0.1:18080,http://localhost:18080,http://127.0.0.1:18081,http://localhost:18081` |
-| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | `http://sandbox.localhost:3000` | `http://sandbox.localhost:18080` |
+| `AOS_UI_MCP_APP_SANDBOX_ORIGIN` | `http://sandbox.localhost:3002` | `http://sandbox.localhost:18082` |
 
 Without a harness overlay, or with
 [`deploy/compose.operator-only.yaml`](#run-without-the-guest-lane),
@@ -146,13 +151,16 @@ leaves the guest port listed; see
 ### Choosing a sandbox address
 
 Any address whose origin differs from every lane's meets the spec: another
-name, such as `https://agents-sandbox.example` or
+name, such as `https://mcp-apps.example.com` or
 `https://sandbox.agents.example`, or a lane's name on another port, such as
-`https://agents.example:8443`. How much of the lane's site it shares follows
+`https://agents.example:8443`. With
+[stable origins](#stable-origins-optional), the sandbox may sit at their
+wildcard's domain itself: `https://mcp-apps.example.com` beside
+`https://*.mcp-apps.example.com`. How much of the lane's site it shares follows
 from the choice:
 
-- **A registrable domain of its own** (`https://agents-sandbox.example`) is a
-  different site from `https://agents.example`: its cookies and `SameSite`
+- **A name on another registrable domain** (`https://mcp-apps.example.com`) is
+  a different site from `https://agents.example`: its cookies and `SameSite`
   context are its own. This isolation is optional.
 - **A sibling name** (`https://sandbox.agents.example`) is the same site as the
   lane. Views there can set `Domain=agents.example` cookies, and their requests
@@ -167,18 +175,21 @@ AOS itself sets only a locale preference cookie; App servers may set their
 own.
 
 For loopback development, the sandbox must be a `*.localhost` name such as
-`http://sandbox.localhost:3000`, never `localhost` or a loopback address on
+`http://sandbox.localhost:3002`, never `localhost` or a loopback address on
 another port, which the gateway still answers. Vite accepts `*.localhost` names
 without extra configuration. The sandbox must be loopback exactly when the
-lanes' origins are: a sandbox at `http://sandbox.localhost:3000` with a lane at
+lanes' origins are: a sandbox at `http://sandbox.localhost:3002` with a lane at
 `https://agents.example` stops the web server with an error naming the
 mismatched setting.
 
 ### One sandbox for both lanes
 
-Whichever lane receives a request for the sandbox address serves it. Each Caddy
-site matches the same `AOS_UI_MCP_APP_SANDBOX_ORIGIN` and sends the request to
-its own web listener, and every listener answers with the sandbox page whose
+Caddy serves the sandbox from a site of its own, which belongs to neither
+lane: `http://:18082`, published on `AOS_UI_SANDBOX_PUBLISHED_PORT` (default
+`3002`). It sends every request for the `AOS_UI_MCP_APP_SANDBOX_ORIGIN` host and
+port, `/api/v1` included, to the web server's operator listener, and gives any
+other host 421; a lane site gives the sandbox's name 421 too. Every web server
+listener answers the sandbox address with the sandbox page whose
 `frame-ancestors` names every origin in `AOS_UI_PUBLIC_ORIGIN`. Both surfaces'
 `/runtime-config.json` carry the same `publicOrigins` and
 `mcpAppSandboxOrigin`, and both pages' `frame-src` name the sandbox.
@@ -192,11 +203,11 @@ whoever requests the page: keep the operator lane's origins to names you are
 fine publishing.
 
 With a public guest lane, the sandbox address must be publicly reachable too,
-since guests' browsers load it. Route that public address to the guest Caddy
-site alone, so the operator site stays as private as its lane. The operator's
-own views then load the sandbox over that public route as well, and stop
-showing while it is down. The sandbox address serves only the sandbox page and
-its relay script; every other path on it, `/api/v1` included, is 404.
+since guests' browsers load it. Route that public address to the sandbox site
+alone, so the operator site stays as private as its lane. The operator's own
+views then load the sandbox over that public route as well, and stop showing
+while it is down. The sandbox address serves only the sandbox page and its
+relay script; every other path on it, `/api/v1` included, is 404.
 
 ### Stable origins (optional) {#stable-origins-optional}
 
@@ -204,62 +215,64 @@ its relay script; every other path on it, `/api/v1` included, is 404.
 nothing new; skip this section unless you specifically want Apps to run on
 their own origins.
 
-Set it to a wildcard origin:
+Set it to a wildcard origin, here right below the sandbox's own name:
 
 ```
-AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.agents-apps.example
+AOS_UI_MCP_APP_SANDBOX_ORIGIN=https://mcp-apps.example.com
+AOS_UI_MCP_APP_STABLE_ORIGINS=https://*.mcp-apps.example.com
 ```
 
 The web server refuses to start when the value is not a valid
-`<scheme>://*.<domain>[:port]` wildcard origin; when any lane's host or the
-sandbox's is at or below `<domain>`; when the wildcard is `http:` under an
-`https:` lane; or when loopback status does not match the lanes.
+`<scheme>://*.<domain>[:port]` wildcard origin; when any lane's host is at or
+below `<domain>`; when the sandbox's host is below it (it may be `<domain>`
+itself); when the wildcard is `http:` under an `https:` lane; or when loopback
+status does not match the lanes. On loopback under Compose, the wildcard names
+the sandbox site's port, such as `http://*.mcp-apps.localhost:3002`.
 
 A view that asks for a stable domain gets its sandbox page from
-`https://<32hexkey>.agents-apps.example`, with the wildcard's scheme and port,
+`https://<32hexkey>.mcp-apps.example.com`, with the wildcard's scheme and port,
 when the domain the gateway forwarded is exactly one 32-hex-digit key label
-below the wildcard's domain. Any other host at or below that domain — a label
-that is 31 or 33 hex digits, a label that is not hex, an extra label, or the
-wrong port — is foreign and gets **421** from Caddy; the web server itself
-returns 404 for such names when reached directly, past Caddy. Nothing at or
-below the domain bypasses the web server through Caddy; the gateway never sees a
-stable host.
+below the wildcard's domain. Any other host at or below that domain, but for
+the sandbox address itself — a label that is 31 or 33 hex digits, a label that
+is not hex, an extra label, or the wrong port — is foreign and gets **421**
+from Caddy; the web server itself returns 404 for such names when reached
+directly, past Caddy. Nothing at or below the domain bypasses the web server
+through Caddy; the gateway never sees a stable host.
 
 Stable hosts follow the same same-site and cookie rules as the sandbox address;
 see [Choosing a sandbox address](#choosing-a-sandbox-address) for the trade-offs
-of a registrable domain of its own versus a name under the lane's site.
+of a name on another registrable domain versus a name under the lane's site. With
+the sandbox at `<domain>` itself, it and every stable host share that domain's
+cookies.
 
 With a public guest lane, the stable host addresses must be publicly reachable
 too, for the same reason the sandbox address must: guests' browsers load them
 directly. Route them through the same public path as the sandbox address, sent
-to the guest Caddy site.
+to the sandbox site.
 
-**DNS and certificate.** Every `<32hexkey>.agents-apps.example` host needs DNS
-and a TLS certificate. A wildcard DNS record (`*` CNAME or A) covers all keys.
-The certificate must cover `*.agents-apps.example`; whatever terminates TLS
-issues it, for example an external Caddy using an ACME DNS challenge. A
-Cloudflare-proxied wildcard is covered by the free certificate only when the
-wildcard sits one level below the zone apex — for example `*.agents-apps.example`
-in a zone whose apex is `agents-apps.example`. A `<domain>` that is itself a
-subdomain of another zone, such as `mcp-apps.agents.example` in
-`agents.example`, puts the wildcard two levels below the apex and requires
-Cloudflare's paid certificate or a separate domain, as in the example above.
+**DNS and certificate.** Every `<32hexkey>.mcp-apps.example.com` host needs DNS
+and a TLS certificate. A wildcard DNS record (`*` CNAME or A) covers all keys;
+for the certificate, see [DNS and certificate](#dns-and-certificate).
 
-**Caddy routing.** Both Caddy sites already match each stable host, using the
-same `@stable` expression, and send it to the web server's own listener.
-No manual Caddyfile change is needed; setting the variable is enough. Verify:
+**Caddy routing.** Caddy's sandbox site already matches each stable host with
+its `@stable` expression and sends it to the web server's operator listener; a
+lane site gives it 421. No manual Caddyfile change is needed; setting the
+variable is enough. Verify:
 
 ```bash
 # A stable host reaches the web server, not the gateway:
-curl -I https://<32hexkey>.agents-apps.example/api/v1/healthz   # expect 404 from the web server
-curl -I https://<32hexkey>.agents-apps.example/mcp-app-sandbox.html  # expect 200
+curl -I https://<32hexkey>.mcp-apps.example.com/api/v1/healthz   # expect 404 from the web server
+curl -I https://<32hexkey>.mcp-apps.example.com/mcp-app-sandbox.html  # expect 200
 
-# A near-miss (wrong label length) goes through Caddy's @foreign rule:
-curl -I https://<31digits>.agents-apps.example/mcp-app-sandbox.html  # expect 421 through Caddy
+# The domain itself is the shared sandbox:
+curl -I https://mcp-apps.example.com/mcp-app-sandbox.html  # expect 200
+
+# A near-miss (wrong label length) gets the sandbox site's 421:
+curl -I https://<31digits>.mcp-apps.example.com/mcp-app-sandbox.html  # expect 421 through Caddy
 ```
 
 **Proxy rules.** Send only exact stable hosts — a 32-hex-digit label directly
-below the wildcard's domain, on the wildcard's port — to the web server, the
+below the wildcard's domain, on the wildcard's port — to the sandbox site, the
 same way the sandbox address is routed. The gateway must never receive a stable
 host request. Any other name at or below the domain is foreign and gets 421 from
 Caddy; do not let a wildcard DNS catch-all route non-stable names to the gateway.
@@ -287,9 +300,17 @@ view carrying `domain`. Deploy and roll back the gateway and aos-ui together.
 The sandbox address is a real hostname, not a path alias, and needs its own DNS
 record and TLS certificate. Add the sandbox name to the SANs of the lane's
 certificate, or obtain a separate certificate for it. An external TLS reverse
-proxy must serve the sandbox name alongside the lanes' names. A name proxied by
-Cloudflare must sit one level below its zone, such as `sandbox.agents.example`
-in the `agents.example` zone, for Cloudflare's free certificate to cover it.
+proxy must serve the sandbox name alongside the lanes' names.
+
+With [stable origins](#stable-origins-optional) below the sandbox's own name, a
+certificate must cover both `mcp-apps.example.com` and
+`*.mcp-apps.example.com`, because a wildcard does not cover its own apex.
+Whatever terminates TLS issues it, for example Caddy with an ACME DNS
+challenge, which is free. Behind Cloudflare's proxy or tunnel, Cloudflare's
+free edge certificate covers `mcp-apps.example.com` but not
+`*.mcp-apps.example.com`, so the stable hosts need DNS-only records pointing at
+a server that terminates TLS with its own certificate, or Cloudflare's paid
+Advanced Certificate Manager.
 
 ### Three places that must agree
 
@@ -301,8 +322,8 @@ The operator lane's address must be consistent in three places:
 
 The guest lane's address agrees the same way, in `AOS_UI_GUEST_PUBLIC_HOST`,
 the same `AOS_UI_PUBLIC_ORIGIN` list, and the gateway's guest listener. The sandbox
-address is one value, `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, which Caddy's sites
-match and the web server serves the sandbox page for.
+address is one value, `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, which Caddy's sandbox
+site matches and the web server serves the sandbox page for.
 
 Caddy routes every request for the sandbox address — any path, any method — to
 the web server. The web server answers the sandbox address with the sandbox page
@@ -314,22 +335,21 @@ gateway from the sandbox address.
 If you terminate TLS in front of Caddy or run a different reverse proxy:
 
 - **Keep the `Host` header.** Caddy's sandbox matcher compares the request's host and port against `AOS_UI_MCP_APP_SANDBOX_ORIGIN`. A proxy that rewrites `Host` defeats both that matcher and the gateway's host check.
-- **Route everything for the sandbox address to the web server** through one Caddy site: the guest site when the address is public, the operator site only when the address is as private as the operator lane. No path on the sandbox address goes to the gateway; the web server handles it all.
-- **Keep the operator site as private as its lane.** A public route for the sandbox reaches the guest site alone, never the operator site.
+- **Route everything for the sandbox address, and every stable host, to Caddy's sandbox site:** port `18082` under [host networking](#host-networking), or the published `AOS_UI_SANDBOX_PUBLISHED_PORT` (default `3002`) under bridged Compose. With a public guest lane, that route must be public. No path on the sandbox address goes to the gateway; the web server handles it all. A proxy other than Caddy sends those hosts to the aos-ui web server itself, which answers them on any listener.
+- **Keep the operator site as private as its lane.** A public route for the sandbox reaches the sandbox site alone, never the operator site.
 - **Pass only the sandbox's own `Host`.** A listener in front for the sandbox address forwards only requests whose `Host` equals the sandbox's host and port, so no other name reaches the Caddy site behind it.
 - **Never add the sandbox origin to the gateway's `allowedOrigins`.** The sandbox address has nothing to do with the gateway's origin policy.
 
 For a **port-form sandbox** (`https://agents.example:8443` beside
 `https://agents.example`), add a TLS listener on port 8443 that passes only
 requests whose `Host` is `agents.example:8443`, keeping that header, and
-forwards them to one Caddy site. A public sandbox goes to the guest site's
-port: `127.0.0.1:18081` under [host networking](#host-networking), or the
-published `AOS_UI_GUEST_PUBLISHED_PORT` (default `3001`) under bridged
-Compose. A sandbox as private as the operator lane may go to the operator
-site's port instead: `127.0.0.1:18080`, or `AOS_UI_WEB_PUBLISHED_PORT`
-(default `3000`). Caddy's `@sandbox` matcher routes requests for that host and
-port to the web server, as with a separate name; the gateway never sees
-port-8443 requests.
+forwards them to the sandbox site's port: `127.0.0.1:18082` under
+[host networking](#host-networking), or the published
+`AOS_UI_SANDBOX_PUBLISHED_PORT` (default `3002`) under bridged Compose.
+Caddy's `@sandbox` matcher routes requests for that host and port to the web
+server, as with a separate name; the gateway never sees port-8443 requests.
+Send them nowhere else: a lane site checks a name without its port, so it
+takes `agents.example:8443` for the lane's own.
 
 The gateway answers 421 to any request whose `Host` header names a host and
 port it does not serve and that is not exactly `localhost`, `127.0.0.1`, or
@@ -343,18 +363,18 @@ set `AOS_GATEWAY_URL` to a sandbox origin.
 
 ```bash
 # Sandbox address returns 404 for /api/v1 — it never reaches the gateway:
-curl -I https://agents-sandbox.example/api/v1/healthz
+curl -I https://mcp-apps.example.com/api/v1/healthz
 
 # Lane address returns 404 for the sandbox page under every spelling:
 curl -I https://agents.example/mcp-app-sandbox.html
 curl -I "https://agents.example//mcp-app-sandbox.html"
 
 # Sandbox address serves the page (200) with every lane's origins in frame-ancestors:
-curl -I https://agents-sandbox.example/mcp-app-sandbox.html
+curl -I https://mcp-apps.example.com/mcp-app-sandbox.html
 # Content-Security-Policy: … frame-ancestors https://agents.example https://guests.agents.example; …
 
 # Gateway answers 421 for a host it does not serve (host networking only):
-curl -I -H "Host: agents-sandbox.example" http://127.0.0.1:4100/api/v1/healthz
+curl -I -H "Host: mcp-apps.example.com" http://127.0.0.1:4100/api/v1/healthz
 ```
 
 The last check needs the gateway on the host's `127.0.0.1:4100`, as under
@@ -376,8 +396,8 @@ without a guest lane, add
 
 Apply the same DNS, certificate, and reverse-proxy rules to the guest lane's
 name, and give guests' browsers a route to the sandbox address: a guest lane
-behind a tunnel needs the sandbox name in that tunnel too, sent to the guest
-lane like the tunnel's other name.
+behind a tunnel needs the sandbox name in that tunnel too, sent to the sandbox
+site's port rather than the guest lane's.
 
 ### Development with compose.dev.yaml
 
@@ -510,8 +530,9 @@ invitation signing-key file is still required by the overlay.
 ## Host networking
 
 `deploy/compose.host.yaml` runs every service on the host network, each bound
-to loopback: Caddy on `18080` and `18081`, the gateway on `4100` and `4101`,
-the web server on `4200` and `4201`, and `tools-mcp` on `4110`. Use it with
+to loopback: Caddy on `18080` and `18081` and its sandbox site on `18082`, the
+gateway on `4100` and `4101`, the web server on `4200` and `4201`, and
+`tools-mcp` on `4110`. Use it with
 exactly one harness overlay, after it (and after `compose.push.yaml` when push
 is enabled):
 
@@ -541,13 +562,13 @@ Use host networking in either of these cases:
   Hermes on `127.0.0.1`, or bind Hermes where the bridge can reach it under a
   `Host` name it accepts.
 
-Compose ignores published ports here, so `AOS_UI_WEB_PUBLISHED_PORT` and the
-bind variables have no effect: the lanes are `http://127.0.0.1:18080` and
+Compose ignores published ports here, so the published-port and bind
+variables have no effect: the lanes are `http://127.0.0.1:18080` and
 `http://127.0.0.1:18081`, usually behind an external ingress, and the lanes'
 origin settings default to them, with the one sandbox at
-`http://sandbox.localhost:18080`. The gateway configuration must list
-`127.0.0.1` as both listener hosts, its origins must match the address the
-browser uses, and the `aos-ui` MCP App override can use
+`http://sandbox.localhost:18082`, Caddy's sandbox site. The gateway
+configuration must list `127.0.0.1` as both listener hosts, its origins must
+match the address the browser uses, and the `aos-ui` MCP App override can use
 `http://127.0.0.1:4110/mcp`, the same URL the host harness registers.
 
 ## Web Push state and VAPID secret
@@ -703,8 +724,9 @@ which is a different credential.
 ## Use hot reload in containers
 
 `compose.dev.yaml` runs the Vite dev server in the `web` service, behind the
-same Caddy site, with `AOS_UI_GATEWAY_TARGET=http://gateway:4100`. For fixture
-mode with source hot-reload:
+same Caddy sites, with `AOS_UI_GATEWAY_TARGET=http://gateway:4100`. Caddy's
+sandbox site reaches Vite too, which serves the sandbox page and the stable
+hosts as the web server would. For fixture mode with source hot-reload:
 
 ```bash
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
@@ -733,7 +755,9 @@ secret boundaries.
 All published ports bind to `127.0.0.1` by default, and the `tools-mcp` port
 never binds anywhere else. `AOS_UI_WEB_PUBLISHED_PORT` (default `3000`) and
 `AOS_UI_GUEST_PUBLISHED_PORT` (default `3001`) set the host-side published
-ports for the operator and guest lanes. Set `AOS_UI_BIND_ADDRESS` or
+ports for the operator and guest lanes, and `AOS_UI_SANDBOX_PUBLISHED_PORT`
+(default `3002`) the sandbox site's, which shares the operator lane's
+`AOS_UI_BIND_ADDRESS`. Set `AOS_UI_BIND_ADDRESS` or
 `AOS_UI_GUEST_BIND_ADDRESS` only when another host must connect, set the
 matching `AOS_UI_PUBLIC_HOST` or `AOS_UI_GUEST_PUBLIC_HOST`, and configure the
 corresponding exact browser origin in the gateway. A wider bind requires TLS in
@@ -776,15 +800,18 @@ slot, and a host-owned overlay after it, in all three `Exec` lines.
 `ExecReload` recreates the containers without tearing down the stack. `TimeoutStartSec=10min` covers the initial
 image build.
 
-The service owns both lanes:
+The service owns both lanes and the sandbox site:
 
 - the trusted operator lane is published on loopback port `3000` by default;
 - the optional JWT-scoped guest lane is published separately on loopback port
-  `3001` by default.
+  `3001` by default;
+- the MCP App sandbox site, which belongs to neither lane, is published on
+  loopback port `3002` by default.
 
-An external reverse proxy may expose only the guest lane for invited chat. It
-must pass WebSocket upgrades on `/api/v1/acp` and must not route the operator
-lane or any native Hermes endpoint.
+An external reverse proxy may expose only the guest lane for invited chat, and
+the sandbox site for its views. It must pass WebSocket upgrades on
+`/api/v1/acp` and must not route the operator lane or any native Hermes
+endpoint.
 
 Copy and substitute the template outside the checkout; it is not an
 installer and intentionally contains no domain, proxy provider, tunnel, or
@@ -806,9 +833,10 @@ systemctl daemon-reload
 ```
 
 Use Cloudflare Tunnel only when the operator selects it. Tunnel ingress must
-target the loopback guest lane exclusively, for the guest name and the sandbox
-name alike; it must not expose the private operator lane, a native runtime's
-own endpoints, `/auth`, or a host Docker socket. Then verify the guest root, that an unauthenticated
+target the loopback guest lane for the guest name and the loopback sandbox site
+for the sandbox name, and nothing else; it must not expose the private
+operator lane, a native runtime's own endpoints, `/auth`, or a host Docker
+socket. Then verify the guest root, that an unauthenticated
 `GET /api/v1/runtime` on the guest host returns `401`, that operator-only
 routes such as `POST /api/v1/guest-invitations` return `404` there, and that
 `/auth/` cannot reach the native runtime. The guest origin remains a separate

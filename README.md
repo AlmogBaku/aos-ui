@@ -131,17 +131,20 @@ can switch between the gateway and explicit fixture mode without rebuilding the
 frontend.
 
 MCP App views load from a sandbox origin, an address whose origin differs from
-every lane's, as the MCP Apps spec requires; one serves both lanes. Compose
-defaults the lanes' origins and the sandbox origin to loopback, so local
+every lane's, as the MCP Apps spec requires; one serves both lanes, from a
+Caddy site of its own on `AOS_UI_SANDBOX_PUBLISHED_PORT` (default `3002`).
+Compose defaults the lanes' origins and the sandbox origin to loopback, so local
 development and fixture mode need no configuration. For a named deployment, set
-`AOS_UI_PUBLIC_ORIGIN` and `AOS_UI_MCP_APP_SANDBOX_ORIGIN` in `.env`.
+`AOS_UI_PUBLIC_ORIGIN` and `AOS_UI_MCP_APP_SANDBOX_ORIGIN`, such as
+`https://mcp-apps.example.com`, in `.env`.
 `AOS_UI_PUBLIC_ORIGIN` lists every origin people open AOS UI at, operator and
 guest alike, all on the same side of loopback: a loopback operator lane beside
 a public guest lane is unsupported with one shared sandbox. Without a guest
 lane, add `deploy/compose.operator-only.yaml`. See
 [MCP App sandbox origins](docs/deployment.md#mcp-app-sandbox-origins). For
-Apps that need a fixed origin of their own, `AOS_UI_MCP_APP_STABLE_ORIGINS` is
-an optional opt-in; see [Stable origins](docs/deployment.md#stable-origins-optional).
+Apps that need a fixed origin of their own, `AOS_UI_MCP_APP_STABLE_ORIGINS`,
+such as `https://*.mcp-apps.example.com`, is an optional opt-in; see
+[Stable origins](docs/deployment.md#stable-origins-optional).
 
 For a containerized fixture preview:
 

@@ -37,7 +37,7 @@ in the query.
 
 | Response | Where it comes from |
 | --- | --- |
-| `421 Misdirected Request` | Caddy: the request's `Host` is not `127.0.0.1`, `localhost`, or the lane's `AOS_UI_PUBLIC_HOST` / `AOS_UI_GUEST_PUBLIC_HOST`. Set the name the browser uses. |
+| `421 Misdirected Request` | Caddy: the request's `Host` is not `127.0.0.1`, `localhost`, or the lane's `AOS_UI_PUBLIC_HOST` / `AOS_UI_GUEST_PUBLIC_HOST`. Set the name the browser uses. On the sandbox site, the `Host` is neither the sandbox address nor a stable host; a sandbox or stable host sent to a lane's port gets 421 too, so route it to the sandbox site. |
 | `502 Bad Gateway` | Caddy cannot reach the web server or gateway lane. Under `compose.dev.yaml`, the guest site reaches the `web-guest` service, so check that it is running. On the guest lane's `/api/v1` with no gateway guest listener, add `deploy/compose.operator-only.yaml`; see [Run without the guest lane](deployment.md#run-without-the-guest-lane). |
 | `404` on an `/api` path | The web server answers no `/api` path, and the gateway answers nothing outside `/api/v1`; operator-only gateway routes such as invitations and push answer 404 on the guest lane. |
 | `405` | The web server accepts only GET and HEAD. |
@@ -129,6 +129,11 @@ table (52 for Tailscale) sends Docker's bridge ranges, such as
 172.` lists such routes. Run the [host-networking shape](deployment.md#host-networking),
 or add an `ip rule` with a higher priority than the VPN's that looks up the
 `main` table for the Docker bridge subnets.
+
+If the host's default route is a VPN exit node, replies to connections arriving
+on the public interface leave by the VPN, and the connection times out. Add a
+source routing rule, such as
+`ip rule add from <public-interface address> lookup main`.
 
 ## The gateway container cannot reach Hermes
 
@@ -238,21 +243,21 @@ the sandbox origin. This happens when:
 **The sandbox page does not load.** The sandbox address is unreachable, or the
 proxy is misrouting it. Verify:
 
-1. The sandbox address is routed to the web server, not the gateway.
-   `curl -I https://agents-sandbox.example/api/v1/healthz` must return 404, not
-   200 or a gateway response.
+1. The sandbox address is routed to Caddy's sandbox site, or to the web server
+   itself, not to a lane's port or the gateway.
+   `curl -I https://mcp-apps.example.com/api/v1/healthz` must return 404, not
+   200, 421, or a gateway response.
 2. The reverse proxy keeps the original `Host` header. The web server and Caddy
    both identify the sandbox by host and port; a proxy that rewrites `Host`
    makes them treat the request as a lane request, which returns 404 for the
    sandbox page.
 3. The sandbox name resolves to the right address and has a valid TLS
-   certificate. A name proxied by Cloudflare sits one level below its zone,
-   where Cloudflare's free certificate covers it.
+   certificate; see [DNS and certificate](deployment.md#dns-and-certificate).
 4. Guests can reach it. One sandbox serves both lanes, so when views fail for
    guests alone, the sandbox address is missing from their route: a guest lane
-   behind a tunnel needs the sandbox name in that tunnel too, sent to the guest
-   lane. When the sandbox is reachable only through that public route, the
-   operator's views stop showing while the route is down too.
+   behind a tunnel needs the sandbox name in that tunnel too, sent to the
+   sandbox site. When the sandbox is reachable only through that public route,
+   the operator's views stop showing while the route is down too.
 
 **421 from the gateway for a non-browser caller.** The gateway answers 421 for
 any `Host` that is not in its allowed origins and is not exactly `localhost`,
@@ -286,20 +291,24 @@ The log carries the server name but never the URL. The most common mismatch is
 
 ## A stable host returns 421 or 404
 
-A request for an exact stable host, such as `<32hexkey>.agents-apps.example`,
+A request for an exact stable host, such as `<32hexkey>.mcp-apps.example.com`,
 returns **421** through Caddy when `AOS_UI_MCP_APP_STABLE_ORIGINS` is not set:
-Caddy's `@stable` matcher never fires, so the host falls through to the
-`@foreign` catch-all. The web server returns **404** directly (past Caddy) for
-any host at or below the domain that is not exactly a stable host on the
-wildcard's port; this is intentional.
+the sandbox site's `@stable` matcher never fires, so the host falls through to
+its closing 421. The web server returns **404** directly (past Caddy) for any
+host at or below the domain that is neither the sandbox address nor exactly a
+stable host on the wildcard's port; this is intentional.
 
 Other causes of a stable host not loading:
 
 - **Near-miss host through Caddy** (wrong label length, non-hex label, extra
-  label, wrong port): also gets 421 from the `@foreign` catch-all.
-- **DNS not resolving**: the wildcard `*.agents-apps.example` DNS record does
+  label, wrong port): also gets the sandbox site's 421.
+- **Sent to a lane's port**: a lane site gives every stable host 421; route
+  them to the sandbox site.
+- **DNS not resolving**: the wildcard `*.mcp-apps.example.com` DNS record does
   not point to the Caddy host.
-- **TLS not valid**: the certificate does not cover `*.agents-apps.example`.
+- **TLS not valid**: the certificate does not cover `*.mcp-apps.example.com`;
+  behind Cloudflare's proxy or tunnel, the free edge certificate does not. See
+  [DNS and certificate](deployment.md#dns-and-certificate).
 
 Check that `AOS_UI_MCP_APP_STABLE_ORIGINS` is set in the environment Compose
 reads (`.env` or the system environment) and that DNS and TLS are in place for
@@ -310,9 +319,9 @@ the wildcard domain.
 The web server logs the setting name and the reason it refused it. Common causes:
 
 - **Not a wildcard origin.** The value must be `<scheme>://*.<domain>[:port]`; omitting `*.` is the most frequent mistake.
-- **A lane or sandbox host is at or below `<domain>`.** For example, if `AOS_UI_PUBLIC_ORIGIN` is `https://agents.example` and `AOS_UI_MCP_APP_STABLE_ORIGINS` is `https://*.agents.example`, the lane origin `agents.example` is at `<domain>`. Choose a distinct domain that no lane or sandbox host is at or below, such as `https://*.agents-apps.example`.
+- **A lane host is at or below `<domain>`, or the sandbox host is below it.** For example, if `AOS_UI_PUBLIC_ORIGIN` is `https://agents.example` and `AOS_UI_MCP_APP_STABLE_ORIGINS` is `https://*.agents.example`, the lane origin `agents.example` is at `<domain>`. Choose a domain that no lane host is at or below, such as `https://*.mcp-apps.example.com`. The sandbox may be that domain itself, `https://mcp-apps.example.com`, but not a name below it.
 - **`http:` wildcard under an `https:` lane.** The wildcard must be `https:` when any lane is.
-- **Loopback mismatch.** The wildcard must be loopback exactly when the lanes are, and a loopback value must be a name below `localhost`, such as `http://*.mcp-apps.localhost:3000`.
+- **Loopback mismatch.** The wildcard must be loopback exactly when the lanes are, and a loopback value must be a name below `localhost`, such as `http://*.mcp-apps.localhost:3002` on the Compose sandbox site's port.
 
 ## A published Artifact cannot load
 
