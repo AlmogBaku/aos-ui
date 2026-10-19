@@ -75,6 +75,11 @@ function sharedReads(adapter: McpAppAdapter) {
 const MAX_HEIGHT_SHARE = 0.8
 /** A sandbox that has not reported ready by then will not render the view. */
 const SANDBOX_READY_TIMEOUT_MS = 10_000
+/**
+ * The JSON-RPC code a refused or failed `ui/update-model-context` answers
+ * with: the spec's implementation-defined error (2026-01-26).
+ */
+const MODEL_CONTEXT_FAILED = -32_000
 
 const mediaMatches = (query: string) =>
   typeof window.matchMedia === "function" && window.matchMedia(query).matches
@@ -156,11 +161,12 @@ export type McpAppFrameProps = {
 
 /**
  * Hosts one MCP App view (spec 2026-01-26) behind the sandbox proxy. The bridge
- * answers the view from this Session only: its tool calls and resource reads go
- * to the runtime's App adapter, its messages become the operator's next turn in
- * this thread, it may open links and download its call's own files, and
- * nothing else it asks for is granted. The view mounts while its call still
- * runs and receives the input and the result as each arrives.
+ * answers the view from this Session only: its tool calls, resource reads, and
+ * context for the model go to the runtime's App adapter, its messages become
+ * the operator's next turn in this thread, it may open links and download its
+ * call's own files, and nothing else it asks for is granted. The view mounts
+ * while its call still runs and receives the input and the result as each
+ * arrives.
  */
 export default function McpAppFrame({
   view,
@@ -493,8 +499,24 @@ export default function McpAppFrame({
         .append({ role: "user", content: [{ type: "text", text }] })
       return {}
     }
-    bridge.onupdatemodelcontext = async () => {
-      throw new Error("Model context updates are not supported")
+    // What the view tells the model goes to the runtime as the view sent it;
+    // one the runtime cannot take, or that fails, answers the view with the
+    // spec's error for a refused or failed update.
+    bridge.onupdatemodelcontext = async ({ content, structuredContent }) => {
+      if (!admit()) refuse()
+      await adapter
+        .updateModelContext({
+          ...target,
+          ...(content === undefined ? {} : { content }),
+          ...(structuredContent === undefined ? {} : { structuredContent }),
+        })
+        .catch((error: unknown) => {
+          throw new ProtocolError(
+            MODEL_CONTEXT_FAILED,
+            error instanceof Error ? error.message : "Context update failed"
+          )
+        })
+      return {}
     }
     bridge.onrequestdisplaymode = async ({ mode }) => {
       const { onMove, placement: home } = context.current

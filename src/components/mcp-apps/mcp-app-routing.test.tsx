@@ -68,6 +68,7 @@ function adapter(
     callTool: vi.fn(),
     readResource: vi.fn(),
     renewFiles: vi.fn(),
+    updateModelContext: vi.fn(),
   } satisfies McpAppAdapter
 }
 

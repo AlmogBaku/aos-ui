@@ -342,6 +342,7 @@ describe("artifact side panel", () => {
       callTool: vi.fn(),
       readResource: vi.fn(),
       renewFiles: vi.fn(),
+      updateModelContext: vi.fn(),
     } satisfies McpAppAdapter
   }
 

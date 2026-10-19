@@ -30,6 +30,7 @@ describe("AOS MCP App adapter", () => {
       callMcpAppTool: vi.fn(),
       readMcpAppResource,
       renewMcpAppFiles: vi.fn(),
+      updateMcpAppModelContext: vi.fn(),
     })
     const read = () =>
       adapter.readResource({

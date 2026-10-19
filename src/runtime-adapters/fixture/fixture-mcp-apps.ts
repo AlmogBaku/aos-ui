@@ -398,5 +398,10 @@ export function createFixtureMcpAppAdapter(): McpAppAdapter {
           : {},
       }
     },
+    // The preview runs no model, so it takes nothing for one, as a runtime
+    // with nowhere to put it answers.
+    async updateModelContext() {
+      throw new Error("The preview takes no model context")
+    },
   }
 }
