@@ -403,6 +403,12 @@
         "no-restricted-imports": [
           "error",
           {
+            "paths": [
+              {
+                "name": "@harness-gw/sdk/node",
+                "message": "Shared code reaches the browser, which never computes a stable origin key or a fileId: @harness-gw/sdk/node is server-only, and the browser takes both from what the server sends."
+              }
+            ],
             "patterns": [
               {
                 "group": [

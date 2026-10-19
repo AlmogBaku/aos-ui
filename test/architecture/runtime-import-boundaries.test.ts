@@ -218,6 +218,7 @@ describe("runtime package import boundaries", () => {
         "src/components/example.tsx",
         "src/runtime-adapters/aos/acp/example.ts",
         "packages/tools-mcp/views/example.tsx",
+        "shared/example.ts",
       ].map((path) => [path, SERVER_ONLY_IMPORT]),
     ].map(([path, code]) => lintCase(path, code))
   )(
