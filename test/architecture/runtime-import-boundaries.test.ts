@@ -110,6 +110,10 @@ const boundaryErrors = (entry: LintCase) =>
 const restrictedImportErrors = (entry: LintCase) =>
   reported(entry).filter((code) => code === "eslint(no-restricted-imports)")
 
+/** The server-only SDK entry, which browser code never imports. */
+const SERVER_ONLY_IMPORT =
+  'import { artifactFileId } from "@harness-gw/sdk/node"'
+
 /** Block comments, and line comments that start a line or follow whitespace. */
 function stripComments(source: string) {
   return source
@@ -210,6 +214,11 @@ describe("runtime package import boundaries", () => {
         "src/runtime-adapters/aos/acp/example.ts",
         'import { Button } from "@/components/ui/button"',
       ],
+      ...[
+        "src/components/example.tsx",
+        "src/runtime-adapters/aos/acp/example.ts",
+        "packages/tools-mcp/views/example.tsx",
+      ].map((path) => [path, SERVER_ONLY_IMPORT]),
     ].map(([path, code]) => lintCase(path, code))
   )(
     "keeps each package out of code it must not import: $path $code",
@@ -224,6 +233,11 @@ describe("runtime package import boundaries", () => {
         "packages/tools-mcp/example.ts",
         'import { presentationToolDefinitions } from "../../shared/presentation/tools"',
       ],
+      // The server computes stable origin keys and fileIds; a test may check a
+      // literal against them.
+      ["packages/tools-mcp/example.ts", SERVER_ONLY_IMPORT],
+      ["src/runtime-adapters/fixture/example.test.ts", SERVER_ONLY_IMPORT],
+      ["packages/tools-mcp/views/example.test.tsx", SERVER_ONLY_IMPORT],
     ].map(([path, code]) => lintCase(path, code))
   )("allows the sanctioned package imports: $path $code", (entry) => {
     expect(restrictedImportErrors(entry)).toEqual([])
