@@ -23,8 +23,9 @@ type ClientAgentCatalogEntry = Awaited<
 >[number]
 
 /**
- * The aos adapter reads the client's `_meta` into `role` and reports created
- * Agents itself (`aos/aos-agent-creation.ts`); everything else is the client's.
+ * The aos adapter reads the client's `_meta` into `role` and
+ * `creatorSessionId` and reports created Agents itself
+ * (`aos/aos-agent-creation.ts`); everything else is the client's.
  */
 type AdapterActivity = Extract<
   Contract.WorkspaceActivityEvent,
@@ -35,7 +36,10 @@ export type ClientMatchesContract = [
   Assert<Same<Client.AgentVisibility, Contract.AgentVisibility>>,
   Assert<Same<Client.AgentUpdate, Contract.AgentUpdate>>,
   Assert<
-    Same<Omit<ClientAgentSummary, "_meta">, Omit<Contract.AgentSummary, "role">>
+    Same<
+      Omit<ClientAgentSummary, "_meta">,
+      Omit<Contract.AgentSummary, "role" | "creatorSessionId">
+    >
   >,
   Assert<Same<ClientAgentCatalogEntry["summary"], ClientAgentSummary>>,
   Assert<

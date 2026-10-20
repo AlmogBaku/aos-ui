@@ -52,14 +52,13 @@ import {
   isRosterAgent,
 } from "@/runtime-adapters/agent-identity"
 import {
+  agentCreatedBy,
   draftAgentId,
   draftSessionId,
   isDraftAgentId,
   nextDraftExpiry,
   PENDING_DRAFT_AGENT_ID,
   projectDraftAgents,
-  readResolvedDrafts,
-  writeResolvedDrafts,
 } from "@/runtime-adapters/draft-agents"
 
 const emptySessions: SessionMetadata[] = []
@@ -87,26 +86,6 @@ function isThreadStatusError(reason: unknown) {
 
 function readBrowserPathname() {
   return window.location.pathname
-}
-
-function readStoredResolvedDrafts(): ReadonlySet<string> {
-  if (typeof window === "undefined") return new Set()
-  try {
-    return readResolvedDrafts(window.localStorage)
-  } catch {
-    return new Set()
-  }
-}
-
-function storeResolvedDraft(sessionId: string) {
-  if (typeof window === "undefined") return
-  try {
-    const stored = readResolvedDrafts(window.localStorage)
-    stored.add(sessionId)
-    writeResolvedDrafts(window.localStorage, stored)
-  } catch {
-    // Without storage a reload rebuilds the draft; the roster still wins.
-  }
 }
 
 function wait(delayMs: number) {
@@ -198,9 +177,6 @@ export function useWorkspaceNavigation({
   // that Agent's catalog first instead of the default Agent's.
   const [preferredAgentId, setPreferredAgentId] = useState<string | null>(
     () => parseWorkspacePathname(pathname)?.agentId ?? null
-  )
-  const [resolvedDrafts, setResolvedDrafts] = useState<ReadonlySet<string>>(
-    readStoredResolvedDrafts
   )
   const [creatorNotice, setCreatorNotice] = useState<string | undefined>(
     undefined
@@ -320,7 +296,6 @@ export function useWorkspaceNavigation({
         creator: agentCreator,
         agents,
         sessions: publishedSessions,
-        resolvedThreadIds: resolvedDrafts,
         now: eligibilityNow.getTime(),
         name: dictionary.actions.newAgent,
         draftLabel: dictionary.creator.draftDescription,
@@ -337,7 +312,6 @@ export function useWorkspaceNavigation({
       eligibilityNow,
       locale,
       publishedSessions,
-      resolvedDrafts,
       threadTitles,
     ]
   )
@@ -363,11 +337,25 @@ export function useWorkspaceNavigation({
   })
   const navigableAgents = draftProjection.agents
   const defaultAgentId = agents.find(isRosterAgent)?.id ?? null
-  const selectedAgentId = navigableAgents.some(
+  const preferredIsNavigable = navigableAgents.some(
     ({ id }) => id === preferredAgentId
   )
+  // A finished interview's row hands its place to the Agent it made, whether
+  // the operator watched it finish or follows a link to it afterwards.
+  const preferredDraftSessionId =
+    preferredAgentId && !preferredIsNavigable
+      ? draftSessionId(preferredAgentId)
+      : undefined
+  const preferredDraftAgent = preferredDraftSessionId
+    ? agentCreatedBy(agents, preferredDraftSessionId)
+    : undefined
+  const createdFromPreferredDraft =
+    preferredDraftAgent && isRosterAgent(preferredDraftAgent)
+      ? preferredDraftAgent.id
+      : undefined
+  const selectedAgentId = preferredIsNavigable
     ? preferredAgentId
-    : defaultAgentId
+    : (createdFromPreferredDraft ?? defaultAgentId)
   const selectedAgentIsDraft = selectedAgentId
     ? isDraftAgentId(selectedAgentId)
     : false
@@ -550,6 +538,17 @@ export function useWorkspaceNavigation({
     readNow,
     sessions,
   ])
+
+  // Selection already follows the created Agent; the route catches up here.
+  useEffect(() => {
+    if (!createdFromPreferredDraft) return
+    // The created Agent owns no Session yet, and creation never invents one.
+    lastSelected.current.set(createdFromPreferredDraft, null)
+    updateRoute(
+      { agentId: createdFromPreferredDraft, sessionId: null },
+      "replace"
+    )
+  }, [createdFromPreferredDraft, updateRoute])
 
   // A notice belongs to the place it was raised, except when retiring a draft
   // moves the route itself: that explanation outlives its own navigation.
@@ -1202,7 +1201,8 @@ export function useWorkspaceNavigation({
   /**
    * A created Agent is one the provider owns. The catalog decides when the
    * draft is done: until the created Agent is listed, the interview stays
-   * exactly where the operator left it.
+   * exactly where the operator left it. Once it is, the draft row hands its
+   * place to that Agent, or to the default Agent when it is hidden.
    */
   const acceptCreatedAgent = useEffectEvent(
     async (event: WorkspaceActivityEvent) => {
@@ -1222,29 +1222,13 @@ export function useWorkspaceNavigation({
         setCreatorNotice(dictionary.creator.createdPending)
         return
       }
-      setResolvedDrafts((current) =>
-        current.has(event.sessionId)
-          ? current
-          : new Set(current).add(event.sessionId)
-      )
-      storeResolvedDraft(event.sessionId)
-      if (event.type === "agent-activation-failed") {
-        setCreatorNotice(dictionary.creator.createdHidden)
-        // A retired draft keeps neither the selection nor the route it owned.
-        if (
-          selectedAgentId === draftAgentId(event.sessionId) &&
-          defaultAgentId
-        ) {
-          noticeOutlivesRoute.current = true
-          await selectAgent(defaultAgentId)
-        }
-        return
+      if (event.type !== "agent-activation-failed") return
+      setCreatorNotice(dictionary.creator.createdHidden)
+      // A retired draft keeps neither the selection nor the route it owned.
+      if (selectedAgentId === draftAgentId(event.sessionId) && defaultAgentId) {
+        noticeOutlivesRoute.current = true
+        await selectAgent(defaultAgentId)
       }
-      if (selectedAgentId !== draftAgentId(event.sessionId)) return
-      // The created Agent owns no Session yet, and creation never invents one.
-      lastSelected.current.set(event.agentId, null)
-      setPreferredAgentId(event.agentId)
-      updateRoute({ agentId: event.agentId, sessionId: null }, "replace")
     }
   )
 

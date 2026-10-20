@@ -588,7 +588,11 @@ export class FixtureWorkspace implements WorkspaceAdapter {
       agent.id === this.agentCreator.id
     )
       throw new Error("Agent already exists")
-    this.#agents.push(structuredClone(agent))
+    // The creator stamps what it makes with its own Session, as a harness does.
+    this.#agents.push({
+      ...structuredClone(agent),
+      creatorSessionId: creatorThreadId,
+    })
   }
 
   /** A created Agent, as the browser store reports one the catalog lists. */

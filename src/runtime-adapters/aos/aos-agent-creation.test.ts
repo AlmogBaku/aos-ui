@@ -46,12 +46,16 @@ const creator = entry(CREATOR_ID, "Agent Creator", {
 const research = entry(RESEARCH_ID, "Research", {
   meta: { aos: { avatar: "ring/blue" } },
 })
-const sora = entry("agent-sora", "Sora")
+/** An Agent the creator made in `sessionId`, stamped as a harness stores it. */
+const madeIn = (sessionId: string) =>
+  entry("agent-sora", "Sora", {
+    meta: { aos: { creatorSessionId: sessionId } },
+  })
+const sora = madeIn(INTERVIEW)
 
-/** The SDK client's catalog, Session owners, and activity feed, as plain values. */
+/** The SDK client's catalog and activity feed, as plain values. */
 function fakeClient(agents: CatalogEntry[]) {
   const catalog = [...agents]
-  const owners = new Map<string, string>()
   const activity = new Set<(event: ClientActivityEvent) => void>()
   const state = { disposed: false }
   const summaries = async () => catalog.map(({ summary }) => summary)
@@ -59,12 +63,6 @@ function fakeClient(agents: CatalogEntry[]) {
     listAgents: summaries,
     refreshAgents: summaries,
     listAgentCatalog: async () => [...catalog],
-    async createSession(agentId: string) {
-      owners.set(INTERVIEW, agentId)
-      return { sessionId: INTERVIEW }
-    },
-    subscribeSession: () => () => undefined,
-    knownAgentIdOf: (sessionId: string) => owners.get(sessionId),
     subscribeActivity(listener: (event: ClientActivityEvent) => void) {
       activity.add(listener)
       return () => activity.delete(listener)
@@ -73,15 +71,27 @@ function fakeClient(agents: CatalogEntry[]) {
       state.disposed = true
     },
   }
-  return { client, catalog, owners, activity, state }
+  return { client, catalog, activity, state }
 }
 
 describe("withAgentCreation", () => {
-  it("marks the Agent whose harness metadata names the creator, and hands on no metadata", async () => {
-    const workspace = withAgentCreation(fakeClient([creator, research]).client)
+  it("marks the creator and the creator Session each Agent was made in, and hands on no other metadata", async () => {
+    const unstamped = entry("agent-mica", "Mica", {
+      meta: { aos: { creatorSessionId: 7 } },
+    })
+    const workspace = withAgentCreation(
+      fakeClient([creator, research, sora, unstamped]).client
+    )
     const summaries = [
       { kind: "ready", id: CREATOR_ID, name: "Agent Creator", role: "creator" },
       { kind: "ready", id: RESEARCH_ID, name: "Research" },
+      {
+        kind: "ready",
+        id: "agent-sora",
+        name: "Sora",
+        creatorSessionId: INTERVIEW,
+      },
+      { kind: "ready", id: "agent-mica", name: "Mica" },
     ]
 
     await expect(workspace.listAgents()).resolves.toStrictEqual(summaries)
@@ -93,67 +103,64 @@ describe("withAgentCreation", () => {
 
   it.each([
     {
-      case: "a new visible Agent as ready",
+      case: "a stamped visible Agent as ready",
       owner: CREATOR_ID,
-      opens: "create",
       ends: "turn-finished",
       created: sora,
       reported: "agent-ready",
     },
     {
-      case: "a new hidden Agent as needing its operator",
+      case: "a stamped hidden Agent as needing its operator",
       owner: CREATOR_ID,
-      opens: "create",
       ends: "turn-finished",
       created: { ...sora, visibility: "hidden" },
       reported: "agent-activation-failed",
     },
     {
-      case: "an Agent a failed turn still wrote",
+      case: "an Agent a failed turn still made",
       owner: CREATOR_ID,
-      opens: "create",
       ends: "turn-failed",
       created: sora,
       reported: "agent-ready",
     },
     {
-      case: "an Agent from a creator Session it reopens",
+      case: "nothing for a new Agent without a stamp",
       owner: CREATOR_ID,
-      opens: "subscribe",
       ends: "turn-finished",
-      created: sora,
-      reported: "agent-ready",
+      created: entry("agent-sora", "Sora"),
+      reported: undefined,
     },
     {
-      case: "nothing when no Agent is new",
+      case: "nothing for an Agent another creator Session made",
       owner: CREATOR_ID,
-      opens: "create",
       ends: "turn-finished",
-      created: undefined,
+      created: madeIn("session-other"),
       reported: undefined,
     },
     {
       case: "nothing for a Session the creator does not own",
       owner: RESEARCH_ID,
-      opens: "create",
       ends: "turn-finished",
+      created: sora,
+      reported: undefined,
+    },
+    {
+      case: "nothing for a turn end replayed on connect",
+      owner: CREATOR_ID,
+      ends: "turn-finished",
+      replayed: true,
       created: sora,
       reported: undefined,
     },
   ] as const)(
     "reports $case, once",
-    async ({ owner, opens, ends, created, reported }) => {
+    async ({ owner, ends, created, reported, ...rest }) => {
       const clock = useFakeClock()
       const fake = fakeClient([creator, research])
       const workspace = withAgentCreation(fake.client, { now: () => NOW })
       const events: WorkspaceActivityEvent[] = []
       workspace.subscribeActivity((event) => events.push(event))
       await workspace.listAgents()
-      if (opens === "create") await workspace.createSession(owner)
-      else {
-        fake.owners.set(INTERVIEW, owner)
-        workspace.subscribeSession(INTERVIEW)
-      }
       const turnEnd: ClientActivityEvent = {
         id: `${INTERVIEW}:turn-1:${ends}`,
         type: ends,
@@ -161,13 +168,14 @@ describe("withAgentCreation", () => {
         agentId: owner,
         sessionId: INTERVIEW,
         occurredAt: new Date(NOW).toISOString(),
+        ...("replayed" in rest ? { replayed: true } : {}),
       }
       const endTurn = async () => {
         for (const listener of fake.activity) listener(turnEnd)
         await clock.advance(0)
       }
 
-      if (created) fake.catalog.push(created)
+      fake.catalog.push(created)
       await endTurn()
       await endTurn()
 

@@ -131,7 +131,7 @@ For runtimes that support it (Hermes), you can edit a submitted user message or 
 
 ## Start a new Agent
 
-Use the **New Agent** control to open a Session with the creator Agent when exactly one creator is configured in the runtime. This is available only when the provider marks one Agent as the creator. The creator interviews you with the `aos-agent-creator` skill, confirms the definition, and creates the Agent with the harness's own means. The **New Agent** draft row becomes the new Agent once the harness lists it; if the run ends without one, it stays an ordinary creator Session.
+Use the **New Agent** control to open a Session with the creator Agent when exactly one creator is configured in the runtime. This is available only when the provider marks one Agent as the creator. The creator interviews you with the `aos-agent-creator` skill, confirms the definition, and creates the Agent with the harness's own means. As soon as the Agent exists, the creator stamps it with the interview's Session, and the **New Agent** draft row becomes the new Agent once the harness lists it that way and the interview has no turn or question still open, on every device. An interview that made no stamped Agent stays a draft until you discard it or it is 48 hours old.
 
 ## Manage Agent visibility
 

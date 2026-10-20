@@ -9,8 +9,6 @@ import {
   nextDraftExpiry,
   PENDING_DRAFT_AGENT_ID,
   projectDraftAgents,
-  readResolvedDrafts,
-  writeResolvedDrafts,
 } from "./draft-agents"
 
 const now = Date.parse("2026-09-20T12:00:00.000Z")
@@ -31,16 +29,25 @@ function session(
   sessionId: string,
   agentId: string,
   ageMs: number,
-  createdAt?: string
+  createdAt?: string,
+  status: SessionMetadata["status"] = "idle"
 ): SessionMetadata {
   return {
     sessionId,
     agentId,
     updatedAt: new Date(now - ageMs).toISOString(),
-    status: "idle",
+    status,
     ...(createdAt ? { createdAt } : {}),
   }
 }
+
+/** An Agent the creator made in `sessionId`, as the catalog lists it. */
+const madeIn = (sessionId: string): AgentSummary => ({
+  kind: "ready",
+  id: "sora",
+  name: "Sora",
+  creatorSessionId: sessionId,
+})
 
 const copy = { name: "New Agent", draftLabel: "Draft", locale: "en" }
 
@@ -61,16 +68,15 @@ describe("draft Agent identifiers", () => {
 describe("projectDraftAgents", () => {
   const project = (
     sessions: SessionMetadata[],
-    resolvedThreadIds: ReadonlySet<string> = new Set<string>(),
+    made: readonly AgentSummary[] = [],
     creatorAgent: AgentSummary | undefined = creator,
     pendingDraftAgentId: string | undefined = undefined,
     titles: ReadonlyMap<string, string> = new Map()
   ) =>
     projectDraftAgents({
       creator: creatorAgent,
-      agents: [...roster, ...(creatorAgent ? [creatorAgent] : [])],
+      agents: [...roster, ...(creatorAgent ? [creatorAgent] : []), ...made],
       sessions,
-      resolvedThreadIds,
       now,
       ...copy,
       titles,
@@ -123,7 +129,7 @@ describe("projectDraftAgents", () => {
         session("hebrew", creator.id, 0, startedAt),
         session("blank", creator.id, 0),
       ],
-      new Set<string>(),
+      [],
       creator,
       undefined,
       new Map([
@@ -150,24 +156,36 @@ describe("projectDraftAgents", () => {
     ])
   })
 
-  it("excludes resolved interviews and leaves other Sessions untouched", () => {
-    const sessions = [
-      session("resolved", creator.id, 0),
-      session("unresolved", creator.id, 0),
-      session("work", "aster", 0),
-    ]
+  it.each([
+    { status: "idle", kept: false },
+    { status: "failed", kept: false },
+    { status: "running", kept: true },
+    { status: "waiting-for-input", kept: true },
+  ] as const)(
+    "retires an $status interview whose Agent is listed only once nothing in it is open, and leaves other Sessions untouched",
+    ({ status, kept }) => {
+      const sessions = [
+        session("made", creator.id, 0, undefined, status),
+        session("unmade", creator.id, 0),
+        session("work", "aster", 0),
+      ]
 
-    const projected = project(sessions, new Set(["resolved"]))
+      const projected = project(sessions, [madeIn("made")])
 
-    expect(projected.agents.map(({ id }) => id)).toEqual([
-      "aster",
-      "bram",
-      creator.id,
-      draftAgentId("unresolved"),
-    ])
-    expect(projected.sessions[0]).toEqual(sessions[0])
-    expect(projected.sessions[2]).toEqual(sessions[2])
-  })
+      expect(projected.agents.map(({ id }) => id)).toEqual([
+        "aster",
+        "bram",
+        creator.id,
+        "sora",
+        ...(kept ? [draftAgentId("made")] : []),
+        draftAgentId("unmade"),
+      ])
+      expect(projected.sessions[0]?.agentId).toBe(
+        kept ? draftAgentId("made") : creator.id
+      )
+      expect(projected.sessions[2]).toEqual(sessions[2])
+    }
+  )
 
   it("appends drafts after the provider roster in Session order", () => {
     const projected = project([
@@ -191,12 +209,7 @@ describe("projectDraftAgents", () => {
       session("interview", creator.id, 0),
     ]
 
-    const projected = project(
-      sessions,
-      new Set<string>(),
-      creator,
-      PENDING_DRAFT_AGENT_ID
-    )
+    const projected = project(sessions, [], creator, PENDING_DRAFT_AGENT_ID)
 
     expect(projected.agents.map(({ id }) => id)).toEqual([
       "aster",
@@ -217,31 +230,35 @@ describe("projectDraftAgents", () => {
     ])
   })
 
-  it("keeps one row when the pending interview names its own listed Session", () => {
-    const sessions = [session("interview", creator.id, 0)]
+  it.each([
+    { case: "its one row", made: [], drafts: [draftAgentId("interview")] },
+    {
+      case: "no row once it made its Agent",
+      made: [madeIn("interview")],
+      drafts: [],
+    },
+  ])(
+    "gives a pending interview that names its own listed Session $case",
+    ({ made, drafts }) => {
+      const sessions = [session("interview", creator.id, 0)]
 
-    const projected = project(
-      sessions,
-      new Set<string>(),
-      creator,
-      draftAgentId("interview")
-    )
+      const projected = project(
+        sessions,
+        made,
+        creator,
+        draftAgentId("interview")
+      )
 
-    expect(projected.agents.map(({ id }) => id)).toEqual([
-      "aster",
-      "bram",
-      creator.id,
-      draftAgentId("interview"),
-    ])
-  })
+      expect(
+        projected.agents
+          .filter(({ id }) => isDraftAgentId(id))
+          .map(({ id }) => id)
+      ).toEqual(drafts)
+    }
+  )
 
   it("carries a promoted interview that metadata has not listed yet", () => {
-    const projected = project(
-      [],
-      new Set<string>(),
-      creator,
-      draftAgentId("interview")
-    )
+    const projected = project([], [], creator, draftAgentId("interview"))
 
     expect(projected.agents.map(({ id }) => id)).toEqual([
       "aster",
@@ -264,7 +281,6 @@ describe("projectDraftAgents", () => {
         creator: undefined,
         agents: roster,
         sessions,
-        resolvedThreadIds: new Set(),
         now,
         ...copy,
         titles: new Map(),
@@ -300,50 +316,5 @@ describe("nextDraftExpiry", () => {
         now
       )
     ).toBeUndefined()
-  })
-})
-
-describe("resolved draft storage", () => {
-  function memoryStorage(): Storage {
-    const entries = new Map<string, string>()
-    return {
-      get length() {
-        return entries.size
-      },
-      clear: () => entries.clear(),
-      getItem: (key) => entries.get(key) ?? null,
-      key: (index) => [...entries.keys()][index] ?? null,
-      removeItem: (key) => entries.delete(key),
-      setItem: (key, value) => void entries.set(key, value),
-    }
-  }
-
-  it("round-trips thread ids", () => {
-    const storage = memoryStorage()
-
-    writeResolvedDrafts(storage, new Set(["one", "two"]))
-
-    expect([...readResolvedDrafts(storage)]).toEqual(["one", "two"])
-  })
-
-  it("reads an empty set from missing content", () => {
-    expect(readResolvedDrafts(memoryStorage()).size).toBe(0)
-  })
-
-  it("survives unusable content and an unavailable store", () => {
-    const corrupt: Storage = { ...memoryStorage(), getItem: () => "{oops" }
-    expect(readResolvedDrafts(corrupt).size).toBe(0)
-
-    const blocked: Storage = {
-      ...memoryStorage(),
-      getItem: () => {
-        throw new Error("blocked")
-      },
-      setItem: () => {
-        throw new Error("blocked")
-      },
-    }
-    expect(readResolvedDrafts(blocked).size).toBe(0)
-    expect(() => writeResolvedDrafts(blocked, new Set(["one"]))).not.toThrow()
   })
 })

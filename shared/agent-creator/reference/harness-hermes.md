@@ -45,16 +45,33 @@ as `'\''`.
    If your own profile has no `aos-ui`, skip this and tell the operator the new
    Agent will have no charts, maps, stats, or Artifacts.
 
-4. Write the confirmed instructions to `~/.hermes/profiles/<id>/SOUL.md`,
+4. Stamp the profile with this Session's id, so AOS retires the draft. Skip
+   this step when `$HERMES_SESSION_ID` is empty. No `hermes` command sets it:
+   edit `~/.hermes/profiles/<id>/profile.yaml` (not `config.yaml`) with your
+   file tool, keeping every key already there, so that it holds:
+
+   ```yaml
+   ui_meta:
+     aos:
+       creatorSessionId: <the value of $HERMES_SESSION_ID>
+   _ui_meta_revisions:
+     aos: <one more than before, or 1 if absent>
+   ```
+
+   Raising the revision makes Hermes refuse an icon write AOS prepared before
+   yours, which would otherwise erase the stamp. Read the file back to check
+   both keys.
+
+5. Write the confirmed instructions to `~/.hermes/profiles/<id>/SOUL.md`,
    replacing the seeded default. Persona and instructions belong there; Hermes
    reads no other persona file.
-5. Link each approved skill; never copy it:
+6. Link each approved skill; never copy it:
 
    ```bash
    ln -s <skill-dir> ~/.hermes/profiles/<id>/skills/<skill-name>
    ```
 
-6. Set only operator-approved configuration, through the CLI:
+7. Set only operator-approved configuration, through the CLI:
 
    ```bash
    hermes -p <id> config get <dotted.key>      # the key must exist
@@ -63,7 +80,7 @@ as `'\''`.
 
    Change `model.default` only when the operator named a model.
 
-7. Leave tool progress on, which AOS needs: with `display.tool_progress` set
+8. Leave tool progress on, which AOS needs: with `display.tool_progress` set
    to `off`, Hermes streams no tool calls live, and they appear in AOS only
    after a reload. It defaults to `all`; set it back only if it was changed:
 
@@ -71,7 +88,7 @@ as `'\''`.
    hermes -p <id> config set display.tool_progress all
    ```
 
-8. Verify: `hermes profile show <id>`, `hermes -p <id> skills list`, and
+9. Verify: `hermes profile show <id>`, `hermes -p <id> skills list`, and
    `hermes -p <id> config get display.tool_progress`, which prints `all` or
    nothing.
 

@@ -93,11 +93,12 @@ the guest lane. An external TLS reverse proxy is optional.
   and `reportFocus`. Session Todos arrive
   as ACP `plan_update` notifications carrying `_meta.hgw.todos`. Creation opens
   an ordinary creator-owned Session through `New Agent` that the browser alone
-  projects as a `New Agent` draft row until a creator run ends with a new Agent
-  in the refreshed catalog; the hidden creator stays out of the roster and
-  management surfaces, and creation never transfers ownership or starts the
-  created Agent's first Session. The creator writes the Agent with its
-  harness's own CLI or files, following `shared/agent-creator/reference/`.
+  projects as a `New Agent` draft row until the catalog lists an Agent the
+  creator stamped with that Session's id (`_meta.aos.creatorSessionId`) and
+  nothing in the Session is still open; the hidden creator stays out of the
+  roster and management surfaces, and creation never transfers ownership or
+  starts the created Agent's first Session. The creator writes the Agent with
+  its harness's own CLI or files, following `shared/agent-creator/reference/`.
 - Provider data is authoritative. Every Session belongs to one Agent; delayed
   events stay scoped to their originating Agent and Session. Todos are
   Session-scoped.
