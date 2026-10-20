@@ -37,6 +37,11 @@ export type ReadyAgentSummary = {
   visibility?: AgentVisibility
   /** The aos adapter reads it from the harness's own Agent metadata. */
   role?: "creator"
+  /**
+   * The creator Session that made this Agent, which the creator stamps in the
+   * harness's own Agent metadata; absent on an Agent made any other way.
+   */
+  creatorSessionId?: string
   /** The operator silenced this Agent's notifications; absent when not. */
   muted?: true
 }

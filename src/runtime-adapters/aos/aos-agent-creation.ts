@@ -8,7 +8,6 @@ import { getAgentCreator } from "@/runtime-adapters/agent-identity"
 import type {
   AgentCatalogEntry,
   AgentSummary,
-  SessionCreationOptions,
   WorkspaceActivityEvent,
 } from "@/runtime-adapters/contracts"
 
@@ -18,10 +17,7 @@ type CreationClient = Pick<
   | "listAgents"
   | "refreshAgents"
   | "listAgentCatalog"
-  | "createSession"
-  | "subscribeSession"
   | "subscribeActivity"
-  | "knownAgentIdOf"
   | "dispose"
 >
 
@@ -32,25 +28,28 @@ type ClientAgentSummary = Awaited<
 type ActivityListener = (event: WorkspaceActivityEvent) => void
 
 /**
- * Hermes marks the creator in its profile's `ui_meta.aos`, which the gateway
- * passes through unread as `_meta.aos`; the workspace reads only `role`.
+ * A harness marks the creator, and each Agent the creator made, in the Agent's
+ * own metadata, which the gateway passes through unread as `_meta.aos`; the
+ * workspace reads only `role` and `creatorSessionId`.
  */
 function summaryOf({ _meta, ...summary }: ClientAgentSummary): AgentSummary {
   const aos = _meta?.aos
-  const creator =
-    typeof aos === "object" &&
-    aos !== null &&
-    !Array.isArray(aos) &&
-    aos.role === "creator"
-  return creator ? { ...summary, role: "creator" } : summary
+  if (typeof aos !== "object" || aos === null || Array.isArray(aos))
+    return summary
+  if (aos.role === "creator") return { ...summary, role: "creator" }
+  const { creatorSessionId } = aos
+  return typeof creatorSessionId === "string" && creatorSessionId !== ""
+    ? { ...summary, creatorSessionId }
+    : summary
 }
 
 /**
  * New Agent belongs to aos-ui alone. The creator makes Agents with its
- * harness's own means, so creation is observable only in the catalog: an Agent
- * that was not listed when the creator Session opened, and is listed once one
- * of its turns ends. A visible one is ready; a hidden one still needs its
- * operator. Disposing this disposes the client it wraps.
+ * harness's own means and stamps each with its own Session's id, so creation is
+ * observable only in the catalog: when a creator turn ends, every listed Agent
+ * stamped with that Session and not yet reported is reported once. A visible
+ * one is ready; a hidden one still needs its operator. Disposing this disposes
+ * the client it wraps.
  */
 export function withAgentCreation<Client extends CreationClient>(
   client: Client,
@@ -60,14 +59,12 @@ export function withAgentCreation<Client extends CreationClient>(
   }: { now?: () => number; logger?: Logger } = {}
 ) {
   let creatorId: string | undefined
-  let listedAgentIds: ReadonlySet<string> = new Set()
-  /** The Agent ids each creator Session's catalog held when it opened. */
-  const baselines = new Map<string, Set<string>>()
+  /** The created Agents this tab has reported, so each is reported once. */
+  const reported = new Set<string>()
   const listeners = new Set<ActivityListener>()
 
   function remember(summaries: AgentSummary[]) {
     creatorId = getAgentCreator(summaries)?.id
-    listedAgentIds = new Set(summaries.map(({ id }) => id))
     return summaries
   }
 
@@ -83,15 +80,6 @@ export function withAgentCreation<Client extends CreationClient>(
     return entries
   }
 
-  function watchCreator(sessionId: string, agentId: string | undefined) {
-    if (
-      agentId !== undefined &&
-      agentId === creatorId &&
-      !baselines.has(sessionId)
-    )
-      baselines.set(sessionId, new Set(listedAgentIds))
-  }
-
   function emit(event: WorkspaceActivityEvent) {
     for (const listener of [...listeners])
       try {
@@ -102,12 +90,11 @@ export function withAgentCreation<Client extends CreationClient>(
   }
 
   async function reportCreatedAgents(sessionId: string) {
-    const baseline = baselines.get(sessionId)
-    if (!baseline) return
     // A catalog that cannot be read reports nothing; the caller logs why.
     for (const { summary, visibility } of await listAgentCatalog()) {
-      if (baseline.has(summary.id)) continue
-      baseline.add(summary.id)
+      if (summary.creatorSessionId !== sessionId || reported.has(summary.id))
+        continue
+      reported.add(summary.id)
       emit({
         id: `${sessionId}:${summary.id}`,
         type:
@@ -119,8 +106,15 @@ export function withAgentCreation<Client extends CreationClient>(
     }
   }
 
+  // A turn end replayed on connect happened while this tab was away, and an
+  // Agent made then is no news: the roster already shows it.
   const stopWatching = client.subscribeActivity((event) => {
-    if (event.type === "turn-finished" || event.type === "turn-failed")
+    if (
+      (event.type === "turn-finished" || event.type === "turn-failed") &&
+      !event.replayed &&
+      creatorId !== undefined &&
+      event.agentId === creatorId
+    )
       reportCreatedAgents(event.sessionId).catch((err: unknown) =>
         logger.warn({ err }, "agent.report_created_failed")
       )
@@ -130,16 +124,6 @@ export function withAgentCreation<Client extends CreationClient>(
     listAgents: () => readAgents(client.listAgents()),
     refreshAgents: () => readAgents(client.refreshAgents()),
     listAgentCatalog,
-    async createSession(agentId: string, options?: SessionCreationOptions) {
-      const created = await client.createSession(agentId, options)
-      watchCreator(created.sessionId, agentId)
-      return created
-    },
-    subscribeSession(sessionId: string) {
-      const release = client.subscribeSession(sessionId)
-      watchCreator(sessionId, client.knownAgentIdOf(sessionId))
-      return release
-    },
     /** The client's own activity, and the Agents its creator Sessions made. */
     subscribeActivity(listener: ActivityListener) {
       const leave = client.subscribeActivity(listener)

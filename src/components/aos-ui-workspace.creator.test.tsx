@@ -504,7 +504,9 @@ describe("AosUiApp fixture composition", () => {
     expect(view.nav.selectedAgentId).toBe("agent-aster")
   })
 
-  it("shows no draft after a reload of an interview that already created its Agent", async () => {
+  // The provider's stamp is all a reload has: nothing in the browser
+  // remembers that the interview made its Agent.
+  it("opens the created Agent, and shows no draft, when a reload follows the link of an interview that made it", async () => {
     const view = renderNavigation(creatorFixture(), fixtureClock)
     const workspace = view.runtime.workspace as FixtureWorkspace
     const interview = await openInterview(view, () => workspace)
@@ -514,13 +516,18 @@ describe("AosUiApp fixture composition", () => {
     await waitFor(() => expect(draftAgents(view.nav)).toEqual([]))
 
     cleanup()
-    window.history.replaceState({}, "", "/")
+    window.history.replaceState(
+      {},
+      "",
+      `/draft%3A${interview.sessionId}/${interview.sessionId}`
+    )
     const reloaded = renderNavigation(
       creatorFixture(workspace, interview.sessionId),
       fixtureClock
     )
 
-    await waitFor(() => expect(agentIds(reloaded.nav)).toContain("agent-sora"))
+    await waitFor(() => expect(reloaded.nav.selectedAgentId).toBe("agent-sora"))
+    await waitFor(() => expect(window.location.pathname).toBe("/agent-sora"))
     expect(draftAgents(reloaded.nav)).toEqual([])
   })
 

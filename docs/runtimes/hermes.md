@@ -267,8 +267,11 @@ hold a path, token, or other private value.
 The marker grants no authority. After the user confirms a definition, the
 creator writes the new profile with `hermes profile create` and the other
 steps in the skill's `reference/harness-hermes.md`, so it needs Hermes's
-terminal tool. AOS shows the new Agent once Hermes lists it, and the draft
-**New Agent** row resolves into it. A freshly provisioned profile has no
+terminal tool. Right after creating the profile, it stamps that profile's
+`ui_meta.aos.creatorSessionId` with its own Session id (`$HERMES_SESSION_ID`),
+which reaches AOS as `_meta.aos` like the creator's marker. AOS shows the new
+Agent once Hermes lists it, and the draft **New Agent** row of the stamped
+Session resolves into it. A freshly provisioned profile has no
 credentials for its model: Hermes copies a new profile's model block but not
 its credential pool, so sign it in with `hermes -p <name> auth add`. Never copy
 another profile's tokens into it.

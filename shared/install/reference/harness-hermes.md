@@ -84,6 +84,16 @@ _ui_meta_revisions:
 Every key in `ui_meta.aos` reaches the operator's browser, so never put a path,
 token, or other private value there.
 
+When the operator's household runs the aos capability kit, the creator builds
+through its `capability-build` skill, which the kit installs only into the
+default profile. Give the creator the kit's build path too: link
+`capability-lifecycle`, `capability-build`, `capability-install`,
+`capability-onboard`, and `skill-creator` into its `skills/`, record the links
+under the `capability-lifecycle` entry with `aos-cap record`, and add a
+household rule naming the creator to the root `MOD.md` through
+`capability-evolve`, so the kit's upgrade keeps the links. Without the kit,
+skip this: the creator builds with the `hermes` CLI alone.
+
 The creator writes Agents through the `hermes` CLI, so its profile must keep
 Hermes's terminal tool. A new profile has no model credentials of its own:
 the operator signs it in with `hermes -p aos-agent-creator auth add`. Never

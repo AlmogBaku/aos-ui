@@ -11,9 +11,6 @@ export const DRAFT_AGENT_WINDOW_MS = 48 * 60 * 60 * 1000
 
 const DRAFT_PREFIX = "draft:"
 
-/** Resolved drafts are content-free thread ids, safe to keep in the browser. */
-const RESOLVED_DRAFTS_KEY = "aos-ui.resolved-drafts"
-
 export const draftAgentId = (sessionId: string) => `${DRAFT_PREFIX}${sessionId}`
 
 /**
@@ -33,14 +30,29 @@ export const draftSessionId = (agentId: string) =>
 export const isDraftAgentId = (agentId: string) =>
   agentId === PENDING_DRAFT_AGENT_ID || draftSessionId(agentId) !== undefined
 
+/** The Agent a creator Session made, once the catalog lists it stamped. */
+export function agentCreatedBy(
+  agents: readonly AgentSummary[],
+  sessionId: string
+) {
+  return agents.find(({ creatorSessionId }) => creatorSessionId === sessionId)
+}
+
 function isEligible(
   session: SessionMetadata,
   creatorId: string,
-  resolvedThreadIds: ReadonlySet<string>,
+  agents: readonly AgentSummary[],
   now: number
 ) {
   if (session.agentId !== creatorId) return false
-  if (resolvedThreadIds.has(session.sessionId)) return false
+  // An interview is done once the Agent it made is listed, but a turn still
+  // running or a question still open keeps its row until that settles.
+  if (
+    session.status !== "running" &&
+    session.status !== "waiting-for-input" &&
+    agentCreatedBy(agents, session.sessionId)
+  )
+    return false
   return now - Date.parse(session.updatedAt) < DRAFT_AGENT_WINDOW_MS
 }
 
@@ -48,7 +60,6 @@ type ProjectDraftAgentsInput = {
   creator: AgentSummary | undefined
   agents: readonly AgentSummary[]
   sessions: readonly SessionMetadata[]
-  resolvedThreadIds: ReadonlySet<string>
   now: number
   /** The generic name of a draft whose Session has no title of its own. */
   name: string
@@ -91,23 +102,16 @@ function draftDescription(
 }
 
 /**
- * Presents every unresolved creator interview as its own temporary Agent that
- * owns exactly that one Session, so the workspace never exposes the creator.
+ * Presents every creator interview whose Agent is not made yet as its own
+ * temporary Agent that owns exactly that one Session, so the workspace never
+ * exposes the creator.
  */
 export function projectDraftAgents(input: ProjectDraftAgentsInput): {
   agents: AgentSummary[]
   sessions: SessionMetadata[]
 } {
-  const {
-    creator,
-    agents,
-    sessions,
-    resolvedThreadIds,
-    now,
-    name,
-    titles,
-    pendingDraftAgentId,
-  } = input
+  const { creator, agents, sessions, now, name, titles, pendingDraftAgentId } =
+    input
   if (!creator) return { agents: [...agents], sessions: [...sessions] }
 
   const draftAgent = (id: string, createdAt?: string): AgentSummary => {
@@ -122,16 +126,18 @@ export function projectDraftAgents(input: ProjectDraftAgentsInput): {
   }
   const drafts: AgentSummary[] = []
   const projected = sessions.map((session) => {
-    if (!isEligible(session, creator.id, resolvedThreadIds, now)) return session
+    if (!isEligible(session, creator.id, agents, now)) return session
     const id = draftAgentId(session.sessionId)
     drafts.push(draftAgent(id, session.createdAt))
     return { ...session, agentId: id }
   })
-  // The pending interview is a row without a Session, never a Session itself,
-  // and never a second row once its Session is listed.
+  // The pending interview is a row without a Session, never a Session itself:
+  // once its Session is listed, that Session alone decides whether it has a row.
+  const pendingSessionId =
+    pendingDraftAgentId && draftSessionId(pendingDraftAgentId)
   if (
     pendingDraftAgentId &&
-    !drafts.some(({ id }) => id === pendingDraftAgentId)
+    !sessions.some(({ sessionId }) => sessionId === pendingSessionId)
   )
     drafts.push(draftAgent(pendingDraftAgentId))
 
@@ -153,32 +159,4 @@ export function nextDraftExpiry(
     if (next === undefined || expiry < next) next = expiry
   }
   return next
-}
-
-export function readResolvedDrafts(storage: Storage): Set<string> {
-  let raw: string | null
-  try {
-    raw = storage.getItem(RESOLVED_DRAFTS_KEY)
-  } catch {
-    return new Set()
-  }
-  if (!raw) return new Set()
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return new Set()
-    return new Set(parsed.filter((id): id is string => typeof id === "string"))
-  } catch {
-    return new Set()
-  }
-}
-
-export function writeResolvedDrafts(
-  storage: Storage,
-  ids: ReadonlySet<string>
-): void {
-  try {
-    storage.setItem(RESOLVED_DRAFTS_KEY, JSON.stringify([...ids]))
-  } catch {
-    // A full or blocked store only costs draft cleanup after a reload.
-  }
 }
