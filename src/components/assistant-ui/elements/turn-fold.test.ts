@@ -35,6 +35,7 @@ describe("turnLayout", () => {
     expect(turnLayout(parts, "running")).toEqual({
       settled: false,
       terminalIndex: 2,
+      questionContext: [],
     })
   })
 
@@ -54,6 +55,7 @@ describe("turnLayout", () => {
     expect(turnLayout(parts, "complete")).toEqual({
       settled: true,
       terminalIndex: 2,
+      questionContext: [],
     })
   })
 
@@ -63,6 +65,7 @@ describe("turnLayout", () => {
     expect(turnLayout(parts, "incomplete")).toEqual({
       settled: true,
       terminalIndex: undefined,
+      questionContext: [],
     })
   })
 })
@@ -112,6 +115,30 @@ describe("createTurnGroupBy", () => {
 
     expect(paths(parts, "complete")).toEqual([
       ["group-working", "group-tool"],
+      [],
+      ["group-working", "group-tool"],
+      [],
+    ])
+  })
+
+  it("keeps the prose a question follows beside it once the turn goes on", () => {
+    const parts = [
+      text("Let me check the model first."),
+      tool("terminal"),
+      tool("question"),
+      text("Here's the draft for you to confirm."),
+      reasoning(),
+      tool("question"),
+      tool("terminal"),
+      text("Created it."),
+    ]
+
+    expect(paths(parts, "complete")).toEqual([
+      ["group-working"],
+      ["group-working", "group-tool"],
+      [],
+      [],
+      ["group-working", "group-reasoning"],
       [],
       ["group-working", "group-tool"],
       [],

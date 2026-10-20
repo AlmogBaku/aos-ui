@@ -486,8 +486,10 @@ assistant's answer.
   final answer folds too, into its own disclosure after that answer, named by
   what it ran. Rich tool views, question and
   permission flows, subagent activity, and attached data, media or sources stay
-  outside the fold. Nothing folds while the turn is still running: a live turn
-  offers only the elapsed time.
+  outside the fold. A question keeps the prose it directly follows outside the
+  fold too: the turn goes on after the answer, but that prose is what the
+  question asked about. Nothing folds while the turn is still running: a live
+  turn offers only the elapsed time.
 - **Tool facts live in the trace:** a tool row reads by the provider's ACP
   kind when it declares one and by the tool's name otherwise, and carries its
   paths and duration. Diffs sit folded inside the edit tool's details, with

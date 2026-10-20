@@ -3,7 +3,7 @@
 // single "Worked for …" disclosure that keeps its contents in that same order;
 // while the turn runs, nothing folds.
 
-import { isAosRichTool } from "@/components/tool-ui"
+import { isAosRichTool, richToolRegistry } from "@/components/tool-ui"
 import type {
   ToolUiActionKind,
   ToolUiLocale,
@@ -47,6 +47,11 @@ export type TurnLayout = {
   readonly settled: boolean
   /** Position of the turn's final answer: its last text part. */
   readonly terminalIndex: number | undefined
+  /**
+   * Positions of the prose each question follows, reasoning aside: what the
+   * question asks about, which stays beside its record rather than folding.
+   */
+  readonly questionContext: readonly number[]
 }
 
 const OUTSIDE: readonly TurnGroupKey[] = []
@@ -134,6 +139,25 @@ export function isSubagentPart(part: TurnPart): boolean {
   )
 }
 
+/** A question call, whichever name the provider gives it. */
+function isQuestionPart(part: TurnPart): boolean {
+  return (
+    part.type === "tool-call" &&
+    part.toolName !== undefined &&
+    richToolRegistry[part.toolName] === richToolRegistry.question
+  )
+}
+
+/** The text part a question at `index` follows, with only reasoning between. */
+function questionContextIndex(parts: readonly TurnPart[], index: number) {
+  for (let before = index - 1; before >= 0; before -= 1) {
+    const type = parts[before]?.type
+    if (type === "text") return before
+    if (type !== "reasoning") return undefined
+  }
+  return undefined
+}
+
 /** Parts a settled fold absorbs: mid-turn prose, reasoning, ordinary tools. */
 export function isFoldablePart(
   part: TurnPart,
@@ -172,7 +196,13 @@ export function turnLayout(
   const settled = status !== "running" && status !== "requires-action"
   const lastText = parts.findLastIndex((part) => part.type === "text")
   const terminalIndex = lastText === -1 ? undefined : lastText
-  return { settled, terminalIndex }
+  const questionContext = parts.flatMap((part, index) => {
+    const context = isQuestionPart(part)
+      ? questionContextIndex(parts, index)
+      : undefined
+    return context === undefined ? [] : [context]
+  })
+  return { settled, terminalIndex, questionContext }
 }
 
 /**
@@ -189,11 +219,16 @@ export function answerText(
 
 /**
  * Whether the part at `index` folds: once the turn settles, every foldable part
- * but the final answer does. Search reads this too, because a closed fold
- * renders none of its text.
+ * but the final answer and a question's prose does. Search reads this too,
+ * because a closed fold renders none of its text.
  */
 export function isFoldedAt(layout: TurnLayout, index: number | undefined) {
-  return layout.settled && index !== undefined && index !== layout.terminalIndex
+  return (
+    layout.settled &&
+    index !== undefined &&
+    index !== layout.terminalIndex &&
+    !layout.questionContext.includes(index)
+  )
 }
 
 /**
@@ -207,9 +242,11 @@ export function isFoldedAt(layout: TurnLayout, index: number | undefined) {
  *
  * - Nothing folds while the turn runs.
  * - Consecutive subagent rows form one `group-subagents`, outside the fold.
- * - A first-class part or the final answer splits the fold into adjacent
- *   `group-working` runs; only the run that opens the turn's work reports the
- *   turn's duration, and a later run names what it ran.
+ * - The prose a question follows stays outside with the question, since the
+ *   turn went on after the answer and that prose is what was asked about.
+ * - A first-class part, a question's prose, or the final answer splits the fold
+ *   into adjacent `group-working` runs; only the run that opens the turn's work
+ *   reports the turn's duration, and a later run names what it ran.
  * - Work after the final answer — a turn that kept going after its last prose
  *   and never wrote another — folds into its own run after that prose.
  * - A turn that ended mid-work has no text at all, so its whole trace folds.
@@ -235,7 +272,7 @@ export function createTurnGroupBy(
     }
   }
   return Object.assign(groupBy, {
-    [GROUPBY_MEMO_KEY]: `aos-turn:${layout.settled}:${layout.terminalIndex}`,
+    [GROUPBY_MEMO_KEY]: `aos-turn:${layout.settled}:${layout.terminalIndex}:${layout.questionContext.join(",")}`,
   })
 }
 
