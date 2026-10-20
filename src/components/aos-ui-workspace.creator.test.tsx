@@ -324,20 +324,26 @@ describe("AosUiApp fixture composition", () => {
     await waitFor(() => expect(view.nav.selectedAgentId).toBe(draftId))
   })
 
-  it("replaces a resolved draft with the created Agent and creates it no Session", async () => {
+  it("keeps the operator in a finished interview, retires its row once they leave, and creates its Agent no Session", async () => {
     const view = renderNavigation(creatorFixture(), fixtureClock)
     const provider = () => view.runtime.workspace as FixtureWorkspace
     await waitFor(() => expect(view.nav.selectedAgentId).toBe("agent-aster"))
     const createSession = vi.spyOn(provider(), "createSession")
     const interview = await openInterview(view, provider)
+    const draftId = draftAgentId(interview.sessionId)
 
     await act(async () =>
       provider().completeAgentCreation(interview.sessionId, sora)
     )
 
-    await waitFor(() => expect(view.nav.selectedAgentId).toBe("agent-sora"))
-    expect(view.nav.selectedAgentIsDraft).toBe(false)
-    expect(draftAgents(view.nav)).toEqual([])
+    await waitFor(() => expect(agentIds(view.nav)).toContain("agent-sora"))
+    expect(view.nav.selectedAgentId).toBe(draftId)
+    expect(window.location.pathname).toContain("draft%3A")
+    expect(draftAgents(view.nav).map(({ id }) => id)).toEqual([draftId])
+
+    await act(() => view.nav.selectAgent("agent-aster"))
+
+    await waitFor(() => expect(draftAgents(view.nav)).toEqual([]))
     expect(createSession).toHaveBeenCalledTimes(1)
     expect(
       provider()
@@ -399,8 +405,7 @@ describe("AosUiApp fixture composition", () => {
       view.runtime.provider.completeAgentCreation(interview.sessionId, sora)
     )
 
-    await waitFor(() => expect(view.nav.selectedAgentId).toBe("agent-sora"))
-    expect(draftAgents(view.nav)).toEqual([])
+    await waitFor(() => expect(agentIds(view.nav)).toContain("agent-sora"))
     expect(view.nav.creatorNotice).not.toBe(en.creator.createdPending)
   })
 
@@ -461,7 +466,7 @@ describe("AosUiApp fixture composition", () => {
     expect(view.nav.actionError).toBeNull()
   })
 
-  it("retires the draft and explains an Agent that still needs operator setup", async () => {
+  it("explains an Agent that still needs operator setup without moving the operator", async () => {
     const view = renderNavigation(creatorFixture(), fixtureClock)
     const provider = () => view.runtime.workspace as FixtureWorkspace
     const interview = await openInterview(view, provider)
@@ -473,15 +478,12 @@ describe("AosUiApp fixture composition", () => {
     await waitFor(() =>
       expect(view.nav.creatorNotice).toBe(en.creator.createdHidden)
     )
-    await waitFor(() => expect(draftAgents(view.nav)).toEqual([]))
     // The rail leaves hidden Agents out.
     expect(
       view.nav.displayAgents.find(({ id }) => id === "agent-sora")
     ).toMatchObject({ visibility: "hidden" })
-    expect(view.nav.selectedAgentId).not.toBe("agent-sora")
-    await waitFor(() =>
-      expect(window.location.pathname).not.toContain("draft%3A")
-    )
+    expect(view.nav.selectedAgentId).toBe(draftAgentId(interview.sessionId))
+    expect(window.location.pathname).toContain("draft%3A")
   })
 
   it("ignores a created Agent reported from a Session the creator does not own", async () => {
@@ -506,30 +508,49 @@ describe("AosUiApp fixture composition", () => {
 
   // The provider's stamp is all a reload has: nothing in the browser
   // remembers that the interview made its Agent.
-  it("opens the created Agent, and shows no draft, when a reload follows the link of an interview that made it", async () => {
-    const view = renderNavigation(creatorFixture(), fixtureClock)
-    const workspace = view.runtime.workspace as FixtureWorkspace
-    const interview = await openInterview(view, () => workspace)
-    await act(async () =>
-      workspace.completeAgentCreation(interview.sessionId, sora)
-    )
-    await waitFor(() => expect(draftAgents(view.nav)).toEqual([]))
+  it.each([
+    { opens: "the workspace", path: () => "/", draftRow: false },
+    {
+      opens: "the interview's own link",
+      path: (id: string) => `/draft%3A${id}/${id}`,
+      draftRow: true,
+    },
+  ])(
+    "after a reload, gives an interview that made its Agent no row, unless $opens names it",
+    async ({ path, draftRow }) => {
+      const view = renderNavigation(creatorFixture(), fixtureClock)
+      const workspace = view.runtime.workspace as FixtureWorkspace
+      const interview = await openInterview(view, () => workspace)
+      await act(async () =>
+        workspace.completeAgentCreation(interview.sessionId, sora)
+      )
+      await waitFor(() => expect(agentIds(view.nav)).toContain("agent-sora"))
 
-    cleanup()
-    window.history.replaceState(
-      {},
-      "",
-      `/draft%3A${interview.sessionId}/${interview.sessionId}`
-    )
-    const reloaded = renderNavigation(
-      creatorFixture(workspace, interview.sessionId),
-      fixtureClock
-    )
+      cleanup()
+      window.history.replaceState({}, "", path(interview.sessionId))
+      const reloaded = renderNavigation(
+        creatorFixture(workspace, interview.sessionId),
+        fixtureClock
+      )
 
-    await waitFor(() => expect(reloaded.nav.selectedAgentId).toBe("agent-sora"))
-    await waitFor(() => expect(window.location.pathname).toBe("/agent-sora"))
-    expect(draftAgents(reloaded.nav)).toEqual([])
-  })
+      await waitFor(() =>
+        expect(agentIds(reloaded.nav)).toContain("agent-sora")
+      )
+      const draftId = draftAgentId(interview.sessionId)
+      await waitFor(() =>
+        expect(reloaded.nav.selectedAgentId).toBe(
+          draftRow ? draftId : "agent-aster"
+        )
+      )
+      expect(draftAgents(reloaded.nav).map(({ id }) => id)).toEqual(
+        draftRow ? [draftId] : []
+      )
+      if (draftRow)
+        await waitFor(() =>
+          expect(reloaded.nav.visibleThreadId).toBe(interview.sessionId)
+        )
+    }
+  )
 
   it("refreshes the Agent catalog only after provider-signaled Builder completion", async () => {
     const view = renderNavigation(useBuilderSignalRuntime, fixtureClock)

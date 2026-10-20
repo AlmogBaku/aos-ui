@@ -71,12 +71,14 @@ describe("projectDraftAgents", () => {
     made: readonly AgentSummary[] = [],
     creatorAgent: AgentSummary | undefined = creator,
     pendingDraftAgentId: string | undefined = undefined,
-    titles: ReadonlyMap<string, string> = new Map()
+    titles: ReadonlyMap<string, string> = new Map(),
+    openSessionId: string | undefined = undefined
   ) =>
     projectDraftAgents({
       creator: creatorAgent,
       agents: [...roster, ...(creatorAgent ? [creatorAgent] : []), ...made],
       sessions,
+      openSessionId,
       now,
       ...copy,
       titles,
@@ -157,20 +159,28 @@ describe("projectDraftAgents", () => {
   })
 
   it.each([
-    { status: "idle", kept: false },
-    { status: "failed", kept: false },
-    { status: "running", kept: true },
-    { status: "waiting-for-input", kept: true },
+    { status: "idle", open: false, kept: false },
+    { status: "failed", open: false, kept: false },
+    { status: "running", open: false, kept: true },
+    { status: "waiting-for-input", open: false, kept: true },
+    { status: "idle", open: true, kept: true },
   ] as const)(
-    "retires an $status interview whose Agent is listed only once nothing in it is open, and leaves other Sessions untouched",
-    ({ status, kept }) => {
+    "retires an $status interview whose Agent is listed (operator on it: $open) only once nothing keeps it, and leaves other Sessions untouched",
+    ({ status, open, kept }) => {
       const sessions = [
         session("made", creator.id, 0, undefined, status),
         session("unmade", creator.id, 0),
         session("work", "aster", 0),
       ]
 
-      const projected = project(sessions, [madeIn("made")])
+      const projected = project(
+        sessions,
+        [madeIn("made")],
+        creator,
+        undefined,
+        new Map(),
+        open ? "made" : undefined
+      )
 
       expect(projected.agents.map(({ id }) => id)).toEqual([
         "aster",

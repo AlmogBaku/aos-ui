@@ -52,7 +52,6 @@ import {
   isRosterAgent,
 } from "@/runtime-adapters/agent-identity"
 import {
-  agentCreatedBy,
   draftAgentId,
   draftSessionId,
   isDraftAgentId,
@@ -178,10 +177,12 @@ export function useWorkspaceNavigation({
   const [preferredAgentId, setPreferredAgentId] = useState<string | null>(
     () => parseWorkspacePathname(pathname)?.agentId ?? null
   )
-  const [creatorNotice, setCreatorNotice] = useState<string | undefined>(
-    undefined
-  )
-  const noticeOutlivesRoute = useRef(false)
+  // A notice belongs to the place it was raised.
+  const [raisedNotice, setRaisedNotice] = useState<
+    { text: string; pathname: string } | undefined
+  >(undefined)
+  const creatorNotice =
+    raisedNotice?.pathname === pathname ? raisedNotice.text : undefined
   const [manuallyOpened, setManuallyOpened] = useState<
     Record<string, string[]>
   >({})
@@ -296,6 +297,9 @@ export function useWorkspaceNavigation({
         creator: agentCreator,
         agents,
         sessions: publishedSessions,
+        openSessionId: preferredAgentId
+          ? draftSessionId(preferredAgentId)
+          : undefined,
         now: eligibilityNow.getTime(),
         name: dictionary.actions.newAgent,
         draftLabel: dictionary.creator.draftDescription,
@@ -307,6 +311,7 @@ export function useWorkspaceNavigation({
       agentCreator,
       agents,
       pendingDraftAgentId,
+      preferredAgentId,
       dictionary.actions.newAgent,
       dictionary.creator.draftDescription,
       eligibilityNow,
@@ -337,25 +342,11 @@ export function useWorkspaceNavigation({
   })
   const navigableAgents = draftProjection.agents
   const defaultAgentId = agents.find(isRosterAgent)?.id ?? null
-  const preferredIsNavigable = navigableAgents.some(
+  const selectedAgentId = navigableAgents.some(
     ({ id }) => id === preferredAgentId
   )
-  // A finished interview's row hands its place to the Agent it made, whether
-  // the operator watched it finish or follows a link to it afterwards.
-  const preferredDraftSessionId =
-    preferredAgentId && !preferredIsNavigable
-      ? draftSessionId(preferredAgentId)
-      : undefined
-  const preferredDraftAgent = preferredDraftSessionId
-    ? agentCreatedBy(agents, preferredDraftSessionId)
-    : undefined
-  const createdFromPreferredDraft =
-    preferredDraftAgent && isRosterAgent(preferredDraftAgent)
-      ? preferredDraftAgent.id
-      : undefined
-  const selectedAgentId = preferredIsNavigable
     ? preferredAgentId
-    : (createdFromPreferredDraft ?? defaultAgentId)
+    : defaultAgentId
   const selectedAgentIsDraft = selectedAgentId
     ? isDraftAgentId(selectedAgentId)
     : false
@@ -538,24 +529,6 @@ export function useWorkspaceNavigation({
     readNow,
     sessions,
   ])
-
-  // Selection already follows the created Agent; the route catches up here.
-  useEffect(() => {
-    if (!createdFromPreferredDraft) return
-    // The created Agent owns no Session yet, and creation never invents one.
-    lastSelected.current.set(createdFromPreferredDraft, null)
-    updateRoute(
-      { agentId: createdFromPreferredDraft, sessionId: null },
-      "replace"
-    )
-  }, [createdFromPreferredDraft, updateRoute])
-
-  // A notice belongs to the place it was raised, except when retiring a draft
-  // moves the route itself: that explanation outlives its own navigation.
-  useEffect(() => {
-    if (noticeOutlivesRoute.current) noticeOutlivesRoute.current = false
-    else setCreatorNotice(undefined)
-  }, [pathname])
 
   const refreshAgentCatalog = useCallback(async () => {
     const next = await workspace.refreshAgents()
@@ -1200,9 +1173,8 @@ export function useWorkspaceNavigation({
 
   /**
    * A created Agent is one the provider owns. The catalog decides when the
-   * draft is done: until the created Agent is listed, the interview stays
-   * exactly where the operator left it. Once it is, the draft row hands its
-   * place to that Agent, or to the default Agent when it is hidden.
+   * draft is done, but never moves the operator: the interview stays exactly
+   * where they left it, and its row leaves the rail once they leave it.
    */
   const acceptCreatedAgent = useEffectEvent(
     async (event: WorkspaceActivityEvent) => {
@@ -1219,16 +1191,11 @@ export function useWorkspaceNavigation({
       // stays exactly where the operator left it.
       if (!catalog) return
       if (!catalog.some(({ id }) => id === event.agentId)) {
-        setCreatorNotice(dictionary.creator.createdPending)
+        setRaisedNotice({ text: dictionary.creator.createdPending, pathname })
         return
       }
-      if (event.type !== "agent-activation-failed") return
-      setCreatorNotice(dictionary.creator.createdHidden)
-      // A retired draft keeps neither the selection nor the route it owned.
-      if (selectedAgentId === draftAgentId(event.sessionId) && defaultAgentId) {
-        noticeOutlivesRoute.current = true
-        await selectAgent(defaultAgentId)
-      }
+      if (event.type === "agent-activation-failed")
+        setRaisedNotice({ text: dictionary.creator.createdHidden, pathname })
     }
   )
 
