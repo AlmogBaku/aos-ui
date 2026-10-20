@@ -31,6 +31,7 @@ import {
 } from "@harness-gw/sdk/protocol"
 import {
   createAcpApprovals,
+  createAcpInteractions,
   type AcpConnection,
   type AcpPendingRequest,
   type AcpHistoryPage,
@@ -263,7 +264,11 @@ function createFakeConnection(
      * The gateway asks to run the call `toolCallId` names, in the opened
      * Session or in a child Session `sessionId` names.
      */
-    requestPermission: (toolCallId: string, sessionId = SESSION_ID) => {
+    requestPermission: (
+      toolCallId: string,
+      sessionId = SESSION_ID,
+      expiresAt?: string
+    ) => {
       const respond = vi.fn<(response: RequestPermissionResponse) => void>()
       const pending: AcpPendingRequest = {
         kind: "permission",
@@ -277,13 +282,45 @@ function createFakeConnection(
             { optionId: "once", name: "Allow once", kind: "allow_once" },
             { optionId: "deny", name: "Deny", kind: "reject_once" },
           ],
-          _meta: { hgw: { requestId: "interrupt-1" } },
+          _meta: { hgw: { requestId: "interrupt-1", expiresAt } },
         },
         respond,
         signal: new AbortController().signal,
       }
       for (const listener of pendingListeners) listener(pending)
       return respond
+    },
+    /** The gateway asks the opened Session a question, and may withdraw it. */
+    askQuestion: () => {
+      const withdrawal = new AbortController()
+      const pending: AcpPendingRequest = {
+        kind: "elicitation",
+        sessionId: SESSION_ID,
+        request: {
+          mode: "form",
+          sessionId: SESSION_ID,
+          message: "The runtime needs an answer",
+          requestedSchema: {
+            type: "object",
+            properties: { q0: { type: "string", enum: ["Yes", "No"] } },
+          },
+          _meta: {
+            hgw: {
+              requestId: "question-1",
+              questions: [
+                {
+                  prompt: "Continue the migration?",
+                  options: [{ label: "Yes" }, { label: "No" }],
+                },
+              ],
+            },
+          },
+        },
+        respond: vi.fn(),
+        signal: withdrawal.signal,
+      }
+      for (const listener of pendingListeners) listener(pending)
+      return { withdraw: () => withdrawal.abort() }
     },
   }
 }
@@ -318,6 +355,7 @@ async function mount(
   options?: Pick<
     UseAcpRuntimeOptions,
     | "approvals"
+    | "interactions"
     | "subscribeSession"
     | "enableMessageQueue"
     | "onComposerPrefill"
@@ -1299,6 +1337,7 @@ describe("useAcpRuntime approvals", () => {
 
     await queue(result.current, "Also check the logs")
     expect(fake.prompt).not.toHaveBeenCalled()
+    expect(result.current.thread.getState().isRunning).toBe(false)
 
     await act(async () => {
       await callPart(result.current).respondToToolApproval({
@@ -1311,6 +1350,47 @@ describe("useAcpRuntime approvals", () => {
     expect(callPart(result.current).getState()).toMatchObject({
       approval: { optionId: "once", approved: true },
     })
+    // The run goes on from the answer, before the gateway restates it.
+    expect(result.current.thread.getState().isRunning).toBe(true)
+  })
+
+  it("runs on from an answered question before the gateway restates it", async () => {
+    const fake = createFakeConnection()
+    const interactions = createAcpInteractions({ connection: fake.connection })
+    const { result } = await mount(fake, { interactions })
+    act(() => {
+      blockOnCall(fake)
+      fake.askQuestion()
+    })
+    const question = interactions.getPending(SESSION_ID)
+    expect(question).toBeDefined()
+    expect(result.current.thread.getState().isRunning).toBe(false)
+
+    await act(async () => {
+      await interactions.respond(question!, {
+        kind: "question",
+        answers: [["Yes"]],
+      })
+    })
+    expect(result.current.thread.getState().isRunning).toBe(true)
+  })
+
+  it("leaves a wait whose permission expired to the gateway", async () => {
+    const fake = createFakeConnection()
+    const approvals = createAcpApprovals({ connection: fake.connection })
+    const { result } = await mount(fake, { approvals })
+    act(() => {
+      blockOnCall(fake)
+      fake.requestPermission("t1", SESSION_ID, "2026-01-01T00:00:00.000Z")
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(approvals.list(SESSION_ID)).toMatchObject([
+      { resolution: "expired" },
+    ])
+    expect(result.current.thread.getState().isRunning).toBe(false)
   })
 
   it("records the verdict Assistant UI settles on", async () => {

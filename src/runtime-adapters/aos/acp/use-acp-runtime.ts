@@ -46,7 +46,10 @@ import {
 } from "@harness-gw/sdk"
 import { tabAcpLogger } from "@/runtime-adapters/aos/acp/tab"
 
-import type { TodoItem } from "@/runtime-adapters/contracts"
+import type {
+  RuntimeInteractionAdapter,
+  TodoItem,
+} from "@/runtime-adapters/contracts"
 import {
   queueControlsExtras,
   type QueueControlsExtras,
@@ -82,6 +85,7 @@ import {
   prependMessages,
   renameMessage,
   replacedTurns,
+  resumeWait,
   retainMessages,
   toThreadMessages,
   type ProjectorExecution,
@@ -128,6 +132,8 @@ export type UseAcpRuntimeOptions = {
    * approvals. They outlive the thread, since the gateway sends each one once.
    */
   approvals?: AcpApprovals
+  /** The connection's questions, followed so an answered wait reads as running. */
+  interactions?: SessionQuestions
   sessionId: string | undefined
   agentId: string
   isDisabled?: boolean
@@ -253,9 +259,16 @@ function refusalText(
   return describe?.(code, reported) ?? reported
 }
 
+/** What a Session's question shows: only whether one is pending. */
+type SessionQuestions = Pick<
+  RuntimeInteractionAdapter,
+  "getPending" | "subscribe"
+>
+
 type ControllerOptions = {
   connection: AcpConnection
   approvals: AcpApprovals | undefined
+  interactions: SessionQuestions | undefined
   /** The Session this thread opened with; a local draft has none yet. */
   sessionId: string | undefined
 }
@@ -282,6 +295,7 @@ function createAcpController({
   sessionId: openedWith,
   connection,
   approvals,
+  interactions,
 }: ControllerOptions) {
   let callbacks: ControllerCallbacks = {}
   let state = initialProjectorState
@@ -441,6 +455,26 @@ function createAcpController({
       if (approvals) commit(applyApprovals(state, approvals.list(next)))
     }
     takeApprovals()
+    // What the run waits on: a pending question, or a permission nobody has
+    // answered, expired ones included since the gateway decides what those
+    // end. An answer, given here or elsewhere, or a withdrawal releases it.
+    const waitsOn = () =>
+      interactions?.getPending(next) !== undefined ||
+      (approvals
+        ?.list(next)
+        .some(
+          ({ optionId, resolution }) =>
+            optionId === undefined && resolution !== "cancelled"
+        ) ??
+        false)
+    let waiting = waitsOn()
+    // The run goes on once nothing holds it, which the gateway restates only
+    // after the provider takes the answer.
+    const followWait = () => {
+      const was = waiting
+      waiting = waitsOn()
+      if (was && !waiting) commit(resumeWait(state))
+    }
     // A child Session's requests are asked under its own id, so each child the
     // Session announces is followed for them as long as the thread binds it.
     const childApprovals = new Map<string, () => void>()
@@ -458,7 +492,11 @@ function createAcpController({
     }
     const subscriptions = [
       callbacks.subscribeSession?.(next) ?? (() => {}),
-      approvals?.subscribe(next, takeApprovals) ?? (() => {}),
+      approvals?.subscribe(next, () => {
+        takeApprovals()
+        followWait()
+      }) ?? (() => {}),
+      interactions?.subscribe(next, followWait) ?? (() => {}),
       connection.subscribe(next, {
         update: (update, meta) => {
           const before = state
@@ -921,6 +959,7 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
   const {
     connection,
     approvals,
+    interactions,
     sessionId,
     enableMessageQueue,
     isDisabled,
@@ -933,8 +972,14 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
   // around that one and the later binding moves underneath it.
   const [openedWith] = useState(sessionId)
   const controller = useMemo(
-    () => createAcpController({ connection, approvals, sessionId: openedWith }),
-    [approvals, connection, openedWith]
+    () =>
+      createAcpController({
+        connection,
+        approvals,
+        interactions,
+        sessionId: openedWith,
+      }),
+    [approvals, connection, interactions, openedWith]
   )
   // Ordered before the binding so the first binding already holds the
   // caller's projection, and before the subscription so a replayed update

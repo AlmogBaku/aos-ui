@@ -483,6 +483,7 @@ function ReadyGuestAosSurface({
   const runtime = useAcpRuntime({
     connection,
     approvals,
+    interactions,
     sessionId,
     agentId,
     stageAttachments,

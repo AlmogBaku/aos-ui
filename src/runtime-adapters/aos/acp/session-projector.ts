@@ -1187,6 +1187,20 @@ function answered(running: ProjectorState) {
   )
 }
 
+/**
+ * A wait whose last request was answered or withdrawn: the run goes on, so its
+ * turn reads as running from that moment rather than once the provider takes
+ * the answer and the gateway restates the run. The gateway's next state
+ * replaces this one, whatever it says.
+ */
+export function resumeWait(state: ProjectorState): ProjectorState {
+  if (state.execution.status !== "waiting-for-input") return state
+  return answered({
+    ...state,
+    execution: { ...state.execution, status: "running" },
+  })
+}
+
 /** Notes a live turn streaming while this view knows of no run. */
 function noteStreamedTurn(state: ProjectorState, meta: unknown) {
   const { status } = state.execution

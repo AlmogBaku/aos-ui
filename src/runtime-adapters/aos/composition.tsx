@@ -256,6 +256,7 @@ function ReadyAosRuntimeProvider({
       const runtime = useAcpRuntime({
         connection,
         approvals,
+        interactions,
         sessionId: remoteId,
         agentId: agentId ?? "",
         // A locally-created draft has an Agent before it has a remote Session.
@@ -282,6 +283,7 @@ function ReadyAosRuntimeProvider({
       connection,
       describeRunError,
       drafts,
+      interactions,
       locale,
       media,
       stageAttachments,
