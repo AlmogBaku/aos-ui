@@ -9,6 +9,7 @@ import { AosToolPresentation } from "@/components/tool-ui"
 import { he } from "@/lib/i18n/dictionaries/he"
 import {
   LocalThread,
+  PagedThread,
   resetThreadTestEnvironment,
 } from "./thread.aui.test-helpers"
 
@@ -149,6 +150,52 @@ describe("turn failure detail", () => {
 
     expect(within(screen.getByRole("alert")).queryByText(/·/u)).toBeNull()
   })
+})
+
+describe("running dot", () => {
+  const summary = [{ type: "text", text: "The summary." }] as const
+  const finished = { type: "complete", reason: "stop" } as const
+  // A running reply draws its own dot after its text in CSS, so it counts none.
+  it.each([
+    [1, "the Session runs past a finished reply", true, finished, summary],
+    [1, "the Session runs past an empty finished reply", true, finished, []],
+    [
+      1,
+      "the Session runs past a stopped reply",
+      true,
+      { type: "incomplete", reason: "cancelled" },
+      summary,
+    ],
+    [
+      1,
+      "the Session runs on after a wait",
+      true,
+      { type: "requires-action", reason: "interrupt" },
+      summary,
+    ],
+    [0, "the Session is idle", false, finished, summary],
+    [0, "the reply itself is running", true, { type: "running" }, summary],
+    [
+      0,
+      "the reply failed and awaits Stop",
+      true,
+      { type: "incomplete", reason: "error" },
+      summary,
+    ],
+  ] as const)(
+    "shows %i thread dot when %s",
+    async (dots, _, running, status, content) => {
+      render(
+        <PagedThread
+          running={running}
+          initialMessages={turn(content, status)}
+        />
+      )
+
+      await screen.findByText("Go")
+      expect(screen.queryAllByText("●")).toHaveLength(dots)
+    }
+  )
 })
 
 describe("settled fold headline", () => {

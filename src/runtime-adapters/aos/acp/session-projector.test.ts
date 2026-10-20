@@ -873,6 +873,15 @@ describe("applyUpdate execution", () => {
     expect(toThreadMessages(blocked)[3]).toMatchObject({
       status: { type: "requires-action", reason: "interrupt" },
     })
+
+    // Once answered, the gateway restates the run dated where it began, and
+    // the turn that waited is live again.
+    const answered = fold([liveStart], blocked)
+    expect(answered.execution.status).toBe("running")
+    expect(toThreadMessages(answered)[3]).toMatchObject({
+      id: "a2",
+      status: { type: "running" },
+    })
   })
 
   it("hosts an interrupt that arrives before the run's first turn", () => {

@@ -1173,6 +1173,20 @@ function announced(before: ProjectorState, running: ProjectorState) {
   }
 }
 
+/**
+ * A run going on once its wait is answered or withdrawn: the turn that waited
+ * is live again, so it reads as running rather than as still waiting.
+ */
+function answered(running: ProjectorState) {
+  const id = activeAssistantId(running)
+  const waiting = running.messages.find((message) => message.id === id)
+  if (id === undefined || waiting?.status?.type !== "requires-action")
+    return running
+  return onMessage(running, id, "assistant", (message) =>
+    withStatus(message, { type: "running" })
+  )
+}
+
 /** Notes a live turn streaming while this view knows of no run. */
 function noteStreamedTurn(state: ProjectorState, meta: unknown) {
   const { status } = state.execution
@@ -1211,6 +1225,7 @@ function applyState(
         ...(reported === undefined ? {} : { error: reported }),
       },
     }
+    if (state.execution.status === "waiting-for-input") return answered(running)
     if (aos?.at === undefined) return resumed(state, running)
     return state.streamedTurnId === turnId ? announced(state, running) : running
   }

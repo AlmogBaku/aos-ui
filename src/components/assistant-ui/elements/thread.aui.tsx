@@ -437,6 +437,22 @@ const selectTurnParts = (state: AssistantState) =>
 
 const selectTurnStatus = (state: AssistantState) => state.message.status?.type
 
+/**
+ * Whether the thread's run goes on past this last message while the message
+ * itself is not running, as before the run has written a turn of its own. A
+ * running message shows Assistant UI's own dot instead, after its text or as
+ * the indicator part, and a failed one awaits Stop rather than more work.
+ */
+const selectRunPastTurn = (state: AssistantState) => {
+  const { status } = state.message
+  return (
+    state.thread.isRunning &&
+    state.message.isLast &&
+    status?.type !== "running" &&
+    !(status?.type === "incomplete" && status.reason === "error")
+  )
+}
+
 const ThreadHistorySkeleton: FC = () => {
   const labels = useContext(ThreadLabelsContext)
   return (
@@ -2106,6 +2122,16 @@ const TurnText: FC = () => {
   )
 }
 
+const RunningDot: FC = () => (
+  <span
+    data-slot="aui_assistant-message-indicator"
+    className="animate-pulse font-sans motion-reduce:animate-none"
+    aria-hidden="true"
+  >
+    {"●"}
+  </span>
+)
+
 /**
  * An assistant turn's content: its working status, its parts grouped by the
  * turn fold, its sources, and why it failed or stopped, with nothing that acts
@@ -2115,6 +2141,7 @@ export const AssistantMessageBody: FC = () => {
   const reading = useVoiceMessageReading()
   const turnParts = useAuiState(selectTurnParts)
   const turnStatus = useAuiState(selectTurnStatus)
+  const runPastTurn = useAuiState(selectRunPastTurn)
   const groupBy = useMemo(
     () => createTurnGroupBy(turnParts, turnLayout(turnParts, turnStatus)),
     [turnParts, turnStatus]
@@ -2189,15 +2216,7 @@ export const AssistantMessageBody: FC = () => {
                 </div>
               )
             case "indicator":
-              return (
-                <span
-                  data-slot="aui_assistant-message-indicator"
-                  className="animate-pulse font-sans motion-reduce:animate-none"
-                  aria-hidden="true"
-                >
-                  {"●"}
-                </span>
-              )
+              return <RunningDot />
             default:
               return null
           }
@@ -2223,6 +2242,7 @@ export const AssistantMessageBody: FC = () => {
       </MessagePrimitive.Parts>
       <MessageError />
       <MessageStopNotice />
+      {runPastTurn ? <RunningDot /> : null}
     </div>
   )
 }
@@ -2233,6 +2253,8 @@ const AssistantMessage: FC = () => {
       state.message.status?.type === "complete" &&
       state.message.content.length === 0
   )
+  // An empty turn stays while the run goes on past it, to carry its dot.
+  const runPastTurn = useAuiState(selectRunPastTurn)
   const labels = useContext(ThreadLabelsContext)
   const direction = useContext(ThreadDirectionContext)
   const messageRewind = useContext(MessageRewindContext)
@@ -2243,7 +2265,7 @@ const AssistantMessage: FC = () => {
   // Keep the action bar inside the root's box, then cancel its reserved space in flow.
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`
 
-  if (completedWithoutContent) return null
+  if (completedWithoutContent && !runPastTurn) return null
 
   return (
     <MessageContextMenu
