@@ -15,7 +15,11 @@ import {
 
 type McpAppClient = Pick<
   HgwRemoteClient,
-  "openMcpApp" | "callMcpAppTool" | "readMcpAppResource" | "renewMcpAppFiles"
+  | "openMcpApp"
+  | "callMcpAppTool"
+  | "readMcpAppResource"
+  | "renewMcpAppFiles"
+  | "updateMcpAppModelContext"
 >
 
 /** A client error no retry fixes: every 4xx but the rate limit's 429. */
@@ -40,7 +44,7 @@ function subjectOf(target: McpAppTarget): McpAppSubject {
  * A tool call id or a published Artifact id is all an App request names: the
  * gateway resolves the view's resource and MCP server from the Session this
  * client authorizes, so the browser never addresses a server or a resource
- * URI of its own. An Artifact's view calls no tool.
+ * URI of its own. An Artifact's view calls no tool and tells the model nothing.
  */
 export class AosMcpAppAdapter implements McpAppAdapter {
   constructor(private readonly client: McpAppClient) {}
@@ -85,4 +89,15 @@ export class AosMcpAppAdapter implements McpAppAdapter {
           ? new McpAppFilesRefusedError(error.message)
           : error
       })
+
+  updateModelContext: McpAppAdapter["updateModelContext"] = async (input) => {
+    if (!("toolCallId" in input))
+      throw new Error("A published Artifact's view has no model context")
+    const { content, structuredContent } = input
+    await this.client.updateMcpAppModelContext(
+      input.sessionId,
+      input.toolCallId,
+      { content, structuredContent }
+    )
+  }
 }

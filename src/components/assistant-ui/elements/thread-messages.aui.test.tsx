@@ -101,6 +101,7 @@ describe("settled turn fold", () => {
       callTool: vi.fn(),
       readResource: vi.fn(),
       renewFiles: vi.fn(),
+      updateModelContext: vi.fn(),
     } satisfies McpAppAdapter
     render(
       <McpAppHostProvider adapter={apps} agentId="agent" sessionId="thread">

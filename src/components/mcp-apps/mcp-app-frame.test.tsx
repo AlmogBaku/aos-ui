@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event"
 import type { McpUiHostContext } from "@modelcontextprotocol/ext-apps/app-bridge"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { HgwClientError } from "@harness-gw/sdk"
 import type { McpUiCsp } from "@harness-gw/sdk/protocol"
 import { ToolUiLocaleProvider } from "@/components/tool-ui"
 import {
@@ -41,6 +42,7 @@ const { FakeBridge, bridges } = vi.hoisted(() => {
     onopenlink?: (params: { url: string }) => Promise<Answer>
     ondownloadfile?: (params: { contents: unknown[] }) => Promise<Answer>
     onreadresource?: (params: { uri: string }) => Promise<unknown>
+    onupdatemodelcontext?: (params: Record<string, unknown>) => Promise<unknown>
     readonly contexts: McpUiHostContext[] = []
     constructor(
       _client: unknown,
@@ -104,6 +106,7 @@ const adapter: McpAppAdapter = {
   callTool: vi.fn(),
   readResource: vi.fn(),
   renewFiles: vi.fn(),
+  updateModelContext: vi.fn(),
 }
 const target = {
   agentId: "researcher",
@@ -121,7 +124,9 @@ const LANE = {
 
 function renderFrame(
   locale: "en" | "he" = "en",
-  placed: Pick<McpAppFrameProps, "placement" | "onMove"> = {}
+  props: Partial<
+    Pick<McpAppFrameProps, "placement" | "onMove" | "adapter">
+  > = {}
 ) {
   render(
     <ToolUiLocaleProvider locale={locale}>
@@ -132,7 +137,7 @@ function renderFrame(
         target={target}
         adapter={adapter}
         title="show_board app"
-        {...placed}
+        {...props}
       />
     </ToolUiLocaleProvider>
   )
@@ -355,6 +360,40 @@ describe("MCP App tool data", () => {
         ["tool-cancelled", { reason: "The tool call failed" }],
       ])
     )
+  })
+})
+
+describe("MCP App model context", () => {
+  it("hands the runtime the view's update as the view sent it, and answers one the runtime cannot take with the spec's error", async () => {
+    const update = {
+      content: [{ type: "text", text: "3 of 5 launch tasks are done." }],
+      structuredContent: { board: "launch", done: 3 },
+    }
+    const updateModelContext = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(
+        new HgwClientError(
+          "gateway-failure",
+          "This runtime takes no model context",
+          "unsupported",
+          400
+        )
+      )
+    const { bridge } = renderFrame("en", {
+      adapter: { ...adapter, updateModelContext },
+    })
+    // A call the view names beside its update never replaces its own.
+    const send = () =>
+      bridge.onupdatemodelcontext?.({ ...update, toolCallId: "t2" })
+
+    await expect(send()).resolves.toEqual({})
+    expect(updateModelContext.mock.calls).toEqual([[{ ...target, ...update }]])
+    // The view's request rejects with the JSON-RPC error the bridge sends it.
+    await expect(send()).rejects.toMatchObject({
+      code: -32000,
+      message: expect.stringContaining("This runtime takes no model context"),
+    })
   })
 })
 

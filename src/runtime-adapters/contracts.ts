@@ -9,6 +9,7 @@ import type {
 import type {
   McpAppFileReadFailure,
   McpAppFiles,
+  McpAppModelContextRequest,
   McpAppView,
   SessionPlatform,
 } from "@harness-gw/sdk/protocol"
@@ -345,6 +346,13 @@ export type McpAppAdapter = {
   ): Promise<ReadResourceResult>
   /** Fresh absolute addresses for the files `open` withheld, under new passes. */
   renewFiles(input: McpAppTarget): Promise<McpAppFiles>
+  /**
+   * What the view tells the model, which replaces what it told it before, for
+   * the Session's next turn. Rejects where the runtime takes none.
+   */
+  updateModelContext(
+    input: McpAppTarget & McpAppModelContextRequest
+  ): Promise<void>
 }
 
 /**
