@@ -270,8 +270,8 @@ steps in the skill's `reference/harness-hermes.md`, so it needs Hermes's
 terminal tool. Right after creating the profile, it stamps that profile's
 `ui_meta.aos.creatorSessionId` with its own Session id (`$HERMES_SESSION_ID`),
 which reaches AOS as `_meta.aos` like the creator's marker. AOS shows the new
-Agent once Hermes lists it, and the draft **New Agent** row of the stamped
-Session resolves into it. A freshly provisioned profile has no
+Agent once Hermes lists it, and the stamped interview's draft **New Agent** row
+leaves the rail once the operator leaves it. A freshly provisioned profile has no
 credentials for its model: Hermes copies a new profile's model block but not
 its credential pool, so sign it in with `hermes -p <name> auth add`. Never copy
 another profile's tokens into it.

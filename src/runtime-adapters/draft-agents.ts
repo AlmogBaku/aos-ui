@@ -30,27 +30,23 @@ export const draftSessionId = (agentId: string) =>
 export const isDraftAgentId = (agentId: string) =>
   agentId === PENDING_DRAFT_AGENT_ID || draftSessionId(agentId) !== undefined
 
-/** The Agent a creator Session made, once the catalog lists it stamped. */
-export function agentCreatedBy(
-  agents: readonly AgentSummary[],
-  sessionId: string
-) {
-  return agents.find(({ creatorSessionId }) => creatorSessionId === sessionId)
-}
-
 function isEligible(
   session: SessionMetadata,
   creatorId: string,
   agents: readonly AgentSummary[],
+  openSessionId: string | undefined,
   now: number
 ) {
   if (session.agentId !== creatorId) return false
-  // An interview is done once the Agent it made is listed, but a turn still
-  // running or a question still open keeps its row until that settles.
+  // An interview is done once the Agent it made is listed, but the operator
+  // being on it, a turn still running, or a question still open keeps its row.
   if (
+    session.sessionId !== openSessionId &&
     session.status !== "running" &&
     session.status !== "waiting-for-input" &&
-    agentCreatedBy(agents, session.sessionId)
+    agents.some(
+      ({ creatorSessionId }) => creatorSessionId === session.sessionId
+    )
   )
     return false
   return now - Date.parse(session.updatedAt) < DRAFT_AGENT_WINDOW_MS
@@ -60,6 +56,8 @@ type ProjectDraftAgentsInput = {
   creator: AgentSummary | undefined
   agents: readonly AgentSummary[]
   sessions: readonly SessionMetadata[]
+  /** The interview the operator is on, which keeps its row however done. */
+  openSessionId?: string
   now: number
   /** The generic name of a draft whose Session has no title of its own. */
   name: string
@@ -110,8 +108,16 @@ export function projectDraftAgents(input: ProjectDraftAgentsInput): {
   agents: AgentSummary[]
   sessions: SessionMetadata[]
 } {
-  const { creator, agents, sessions, now, name, titles, pendingDraftAgentId } =
-    input
+  const {
+    creator,
+    agents,
+    sessions,
+    openSessionId,
+    now,
+    name,
+    titles,
+    pendingDraftAgentId,
+  } = input
   if (!creator) return { agents: [...agents], sessions: [...sessions] }
 
   const draftAgent = (id: string, createdAt?: string): AgentSummary => {
@@ -126,7 +132,8 @@ export function projectDraftAgents(input: ProjectDraftAgentsInput): {
   }
   const drafts: AgentSummary[] = []
   const projected = sessions.map((session) => {
-    if (!isEligible(session, creator.id, agents, now)) return session
+    if (!isEligible(session, creator.id, agents, openSessionId, now))
+      return session
     const id = draftAgentId(session.sessionId)
     drafts.push(draftAgent(id, session.createdAt))
     return { ...session, agentId: id }
