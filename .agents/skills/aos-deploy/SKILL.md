@@ -178,7 +178,10 @@ which Compose always publishes on `127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`
 widen its bind. Register `http://127.0.0.1:4110/mcp` as the `aos-ui` MCP server
 in each Hermes profile's `mcp_servers` and confirm it with
 `hermes -p PROFILE mcp test aos-ui`; a running `hermes serve` picks it up
-without a restart. The gateway reads the chart, map, and stats views from that
+without a restart. Set the AOS note in every Hermes profile too, with or
+without the tools, as `shared/install/reference/harness-hermes.md` shows under
+**Set the AOS note**; without it, a Session a schedule or the terminal began
+keeps that surface's rules when the person continues it in AOS. The gateway reads the chart, map, and stats views from that
 URL too, but a gateway container does not share the host's loopback: its
 config sets `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp`.
 For file reads, the `tools-mcp` service fetches from the gateway's file route
@@ -258,7 +261,9 @@ private operator endpoint from its intended private network and the guest root
 over its public origin. Confirm unauthenticated `GET /api/v1/runtime` on the
 guest host returns `401`, operator-only routes such as
 `POST /api/v1/guest-invitations` return `404` there, and guest attempts to
-reach `/hermes/` and `/auth/` do not reach the native runtime.
+reach `/hermes/` and `/auth/` do not reach the native runtime. On Hermes,
+confirm `hermes -p PROFILE config get platform_hints.aos-ui.append` prints the
+AOS note for every profile, and report each profile that prints none.
 
 Verify that both gateway listeners resolve the same configured Runtime instance while
 retaining distinct route and projection policies. Exercise one normalized

@@ -35,15 +35,17 @@ as `'\''`.
    hermes -p <id> mcp test aos-ui    # must list present_artifact
    ```
 
-   Copy your own file delivery note too, which points the Agent at
-   `present_artifact` in AOS Sessions:
+   If your own profile has no `aos-ui` server, skip these two and tell the
+   operator the new Agent will have no charts, maps, stats, or Artifacts.
+
+   Copy your own AOS note in either case. It tells the Agent what AOS renders
+   and how to show files there, including in a Session begun elsewhere:
 
    ```bash
    hermes -p <id> config set platform_hints.aos-ui.append "$(hermes config get platform_hints.aos-ui.append)"
    ```
 
-   If your own profile has no `aos-ui`, skip this and tell the operator the new
-   Agent will have no charts, maps, stats, or Artifacts.
+   If your own profile prints no note, tell the operator the new Agent has none.
 
 4. Stamp the profile with this Session's id, so AOS retires the draft. Skip
    this step when `$HERMES_SESSION_ID` is empty. No `hermes` command sets it:

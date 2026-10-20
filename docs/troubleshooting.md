@@ -405,7 +405,7 @@ For PDFs:
 - `MEDIA:` takes an absolute path. AOS refuses a relative path, a path that traverses with `..`, and any path naming a credential file such as `.env`, `auth.json`, or `config.yaml`.
 - Artifacts larger than 25 MiB are not read back.
 - Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
-- An Agent that keeps publishing with `MEDIA:` lines, or naming bare paths, instead of calling `present_artifact` lacks the profile's file delivery note; see [Run Hermes](runtimes/hermes.md#file-delivery-note). A Session opened before the note was set keeps its old prompt, so check in a new Session.
+- An Agent that keeps publishing with `MEDIA:` lines, naming bare paths, or writing `::preview{...}` instead of calling `present_artifact` lacks the profile's AOS note; see [Run Hermes](runtimes/hermes.md#aos-note). A Session opened before the note was set keeps its old prompt, so check in a new Session. Hermes's agent log records `switched surface <old> -> <new>` for each Session that changes surface; an AOS turn that lands on any surface but `aos-ui` means the Session was opened without the AOS platform.
 
 ## A route points to missing work
 

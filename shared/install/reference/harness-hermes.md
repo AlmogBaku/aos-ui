@@ -16,12 +16,7 @@ does not need it. For each of those profiles:
 ```bash
 hermes -p <profile> config set mcp_servers.aos-ui.url http://127.0.0.1:4110/mcp
 hermes -p <profile> mcp test aos-ui
-hermes -p <profile> config set platform_hints.aos-ui.append \
-  "When the mcp__aos_ui__present_artifact tool is available, directly or through tool_call, show every file you deliver with it instead of a MEDIA: line or a bare path."
 ```
-
-The last command points the model at `present_artifact` in AOS Sessions, which
-Hermes runs as the `aos-ui` platform; that platform has no note of its own.
 
 `hermes mcp add` is interactive, so prefer `config set`. The tools reach the
 model as `mcp__aos_ui__render_chart` and so on. The harness-gw gateway reads the chart,
@@ -29,9 +24,26 @@ map, and stats views from the same URL, so it must be one the gateway can reach
 too; ask the operator when the gateway runs in a container. In a Session that is already
 open, `/reload-mcp` picks them up; a new Session loads them on its own.
 
-A profile created later needs the same three commands. The Agent creator runs
-them for every Agent it builds; anything else that creates a user-facing
-profile must run them too.
+A profile created later needs the same commands. The Agent creator runs them
+for every Agent it builds; anything else that creates a user-facing profile
+must run them too.
+
+## Set the AOS note
+
+Hermes runs every AOS Session as the `aos-ui` platform, including a Session a
+schedule, the terminal, or a messaging channel began and the person continues
+in AOS. That platform has no note of its own, so without one the model keeps
+the rules it started with: plain text, and files as bare paths. Set the note in
+every profile, the default one included, with or without the tools:
+
+```bash
+hermes -p <profile> config set platform_hints.aos-ui.append \
+  "You are chatting in AOS UI, a web chat. Markdown renders with GitHub flavor: headings, tables, task lists, highlighted code, and mermaid diagrams. Show every file you deliver with the mcp__aos_ui__present_artifact tool, directly or through tool_call, when it is available; otherwise write MEDIA:/absolute/path on its own line. Never deliver a file as a bare path or a ::preview{...} directive; AOS shows neither."
+hermes -p <profile> config get platform_hints.aos-ui.append
+```
+
+The last command must print the note back. A profile created later needs it
+too; the Agent creator copies its own to every Agent it builds.
 
 ## Install the skills
 
@@ -58,6 +70,9 @@ ln -s <checkout>/shared/agent-creator \
   ~/.hermes/profiles/aos-agent-creator/skills/aos-agent-creator
 hermes -p aos-agent-creator config set mcp_servers.aos-ui.url http://127.0.0.1:4110/mcp
 ```
+
+Set the [AOS note](#set-the-aos-note) on `aos-agent-creator` as well: the
+creator copies its own note to every Agent it builds.
 
 Never pass `--clone`, `--clone-all`, or `--clone-from`. Replace the seeded
 `~/.hermes/profiles/aos-agent-creator/SOUL.md` with: "You are AOS's Agent

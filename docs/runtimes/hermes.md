@@ -136,7 +136,7 @@ path. The first three are [MCP Apps](../mcp-apps.md) whose views draw the
 chart, map, or stats in the message; `present_artifact` has an App view that
 shows the file, which the gateway reads through Hermes. Each tool's description
 carries its usage guidance; there is no AOS system prompt to install, only the
-one-line [file delivery note](#file-delivery-note) below.
+[AOS note](#aos-note) below.
 
 Run it on the Hermes host, bound to loopback:
 
@@ -179,24 +179,30 @@ and refreshes a Session's tool list between turns, so no restart is needed.
 When `aos-ui` is the profile's first MCP server, run `/reload-mcp` in the
 Session, or start a new Session, to pick the tools up.
 
-### File delivery note
+### AOS note
 
-Hermes adds the note of the platform a Session runs as to its prompt, and the
-gateway runs every Session it creates as the platform `aos-ui`, which has no
-built-in note. Set one in every profile that registers `aos-ui`, so the model
-shows files with `present_artifact`:
+Hermes adds the note of the platform a Session runs as to its prompt. The
+gateway opens every Session as the platform `aos-ui`, both when it creates one
+and when it resumes one, and that platform has no built-in note. Set one in
+every profile AOS shows, with or without the AOS UI tools, so the model knows
+what AOS renders and shows files as Artifacts:
 
 ```bash
 hermes -p PROFILE config set platform_hints.aos-ui.append \
-  "When the mcp__aos_ui__present_artifact tool is available, directly or through tool_call, show every file you deliver with it instead of a MEDIA: line or a bare path."
+  "You are chatting in AOS UI, a web chat. Markdown renders with GitHub flavor: headings, tables, task lists, highlighted code, and mermaid diagrams. Show every file you deliver with the mcp__aos_ui__present_artifact tool, directly or through tool_call, when it is available; otherwise write MEDIA:/absolute/path on its own line. Never deliver a file as a bare path or a ::preview{...} directive; AOS shows neither."
 ```
 
-The note reaches AOS Sessions only; Hermes's desktop app, terminal, and
-messaging channels keep their own notes. Hermes also hides MCP tools behind
-tool search and lists each by its first sentence, clipped to 60 characters,
-which is why `present_artifact`'s description opens with "use it instead of a
-MEDIA: line". Hermes keeps an open Session's prompt and tool list, so the note
-and a changed tool description reach new Sessions.
+A Session begun on another surface, such as one a schedule opened from the
+terminal, keeps the prompt it started with. On its first AOS turn Hermes adds
+this note to the turn and tells the model it supersedes the earlier surface's
+guidance, so a profile without the note leaves that Session on the terminal's
+or messaging channel's rules. Hermes's desktop app, terminal, and messaging
+channels keep their own notes. Hermes also hides MCP tools behind tool search
+and lists each by its first sentence, clipped to 60 characters, which is why
+`present_artifact`'s description opens with "use it instead of a MEDIA:
+line". Hermes keeps an AOS Session's prompt and tool list until it compacts
+the Session, so a changed note reaches new Sessions and Sessions arriving from
+another surface.
 
 ### Skills
 
