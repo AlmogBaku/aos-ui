@@ -340,6 +340,8 @@ export const en = {
     request_failed: "The request could not be completed.",
   },
   turnFailed: "This turn did not complete.",
+  turnReturned:
+    "Your message was not saved, so it is back in the message box to send again.",
   turnStopped: {
     length: "The answer stopped at the length limit.",
     contentFilter: "The model declined to answer.",

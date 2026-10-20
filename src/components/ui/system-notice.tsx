@@ -30,6 +30,7 @@ const TONES = {
 export function SystemNotice({
   tone,
   title,
+  note,
   detail,
   attribution,
   locale,
@@ -38,6 +39,8 @@ export function SystemNotice({
 }: {
   tone: SystemNoticeTone
   title: string
+  /** AOS's own word on what it did about the failure, under the headline. */
+  note?: string
   detail?: string
   /**
    * Who answered, such as "Provider · Model". Provider-named, so it keeps its
@@ -71,6 +74,11 @@ export function SystemNotice({
         <p id={titleId} dir="auto" className="mt-0.5 text-sm">
           {title}
         </p>
+        {note && (
+          <p dir="auto" className="mt-1 text-sm">
+            {note}
+          </p>
+        )}
         {detail && (
           <p
             dir="auto"

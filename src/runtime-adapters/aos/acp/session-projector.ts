@@ -88,6 +88,8 @@ export type TurnFailure = {
   /** The provider and model that failed, shown as the notice's attribution. */
   readonly provider?: string
   readonly model?: string
+  /** The message the failed turn sent was never kept, and is back in the composer. */
+  readonly returned?: boolean
 }
 
 export type ProjectorExecution = {

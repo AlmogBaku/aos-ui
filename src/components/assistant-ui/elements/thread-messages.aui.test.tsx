@@ -242,7 +242,10 @@ describe("failed turn presentation", () => {
   // A live run reports the normalized failure shape; a replayed turn carries the
   // durable description the protocol stores as a plain string.
   const failedTurn = (
-    error: { code?: string; message?: string } | string | undefined
+    error:
+      | { code?: string; message?: string; returned?: boolean }
+      | string
+      | undefined
   ): readonly ThreadMessageLike[] => [
     { id: "u1", role: "user", content: [{ type: "text", text: "Summarize" }] },
     {
@@ -258,6 +261,7 @@ describe("failed turn presentation", () => {
     error: Parameters<typeof failedTurn>[0]
     name: string
     detail?: string
+    note?: string
   }>([
     {
       failure: "a normalized code as localized AOS copy, not the Agent's words",
@@ -294,15 +298,28 @@ describe("failed turn presentation", () => {
       error: "The provider rejected this turn.",
       name: "AOS The provider rejected this turn.",
     },
+    {
+      failure: "a message the provider never kept as back in the composer",
+      error: {
+        code: "HGW_RESET_REQUIRED",
+        message: "Hermes history must be reconciled.",
+        returned: true,
+      },
+      name: `AOS ${en.runErrors.HGW_RESET_REQUIRED}`,
+      detail: "Hermes history must be reconciled.",
+      note: en.turnReturned,
+    },
   ])(
     "reads $failure, keeping retry out of the notice",
-    ({ error, name, detail }) => {
+    ({ error, name, detail, note }) => {
       render(<LocalThread initialMessages={failedTurn(error)} />)
 
       const notice = screen.getByRole("alert", { name })
       expect(notice).toBeVisible()
       expect(within(notice).queryByRole("button")).not.toBeInTheDocument()
       if (detail) expect(within(notice).getByText(detail)).toBeVisible()
+      if (note) expect(within(notice).getByText(note)).toBeVisible()
+      else expect(within(notice).queryByText(en.turnReturned)).toBeNull()
     }
   )
 

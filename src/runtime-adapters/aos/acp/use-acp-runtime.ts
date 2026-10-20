@@ -6,7 +6,6 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
   ExportedMessageRepository,
-  isMessageNotSentError,
   MessageNotSentError,
 } from "@assistant-ui/core"
 import type {
@@ -20,6 +19,7 @@ import type {
   FeedbackAdapter,
   RealtimeVoiceAdapter,
   SpeechSynthesisAdapter,
+  ThreadComposerRuntime,
   ThreadMessage,
   ThreadMessageLike,
 } from "@assistant-ui/core"
@@ -64,7 +64,7 @@ import {
   type ChildSessionExtras,
 } from "@/runtime-adapters/child-sessions"
 
-import { createQueue, isBusyRefusal } from "./acp-message-queue"
+import { createQueue, isBusyRefusal, joinedText } from "./acp-message-queue"
 
 // Lazy logger for background error reporting.
 let _runtimeLog: Logger | undefined
@@ -412,22 +412,45 @@ function createAcpController({
     return outcome
   }
 
+  /** Where a message the provider never kept goes back to: the composer. */
+  let handBack: ((message: AppendMessage) => void) | undefined
+  /** Hands the message back, saying whether anything took it. */
+  const returnUnsent = (message: AppendMessage) => {
+    if (!handBack) return false
+    handBack(message)
+    return true
+  }
+  /** The latest message sent here, under the id the gateway assigned its turn. */
+  let sent: { readonly id: string; readonly message: AppendMessage } | undefined
+
   /**
    * A run that failed before it wrote a reply has no turn to show the failure
    * on, and an edit it carried has already dropped turns the provider may still
    * hold. The failure reads where a refusal does, and the Session reloads so the
    * thread matches what the provider kept; the reload rebuilds the thread, so
-   * the failure is shown again on the thread it rebuilt.
+   * the failure is shown again on the thread it rebuilt. A message sent here
+   * that the provider never kept goes back to the composer, so the operator's
+   * words outlive the turn that lost them.
    */
   const failUnanswered = (
     session: string,
     generation: number,
     error: TurnFailure | undefined
   ) => {
+    const latest = state.messages.findLast(({ role }) => role === "user")
+    const failed =
+      sent !== undefined && sent.id === latest?.id ? sent : undefined
+    sent = undefined
     commit(failLatestTurn(state, error))
     replaySession(session, generation).then(
-      () => {
-        if (isBound(session, generation)) commit(failLatestTurn(state, error))
+      (outcome) => {
+        if (!isBound(session, generation)) return
+        const lost =
+          failed !== undefined &&
+          outcome === "replayed" &&
+          !state.messages.some(({ id }) => id === failed.id)
+        const returned = lost && returnUnsent(failed.message)
+        commit(failLatestTurn(state, returned ? { ...error, returned } : error))
       },
       (err: unknown) => runtimeLog().warn({ err }, "session.replay_failed")
     )
@@ -599,22 +622,29 @@ function createAcpController({
   /**
    * Reports a turn that never ran. Nothing is recoverable from the thread, so
    * the error is the signal Assistant UI hands back to the composer with the
-   * operator's text and attachments.
+   * operator's text and attachments; a caller Assistant UI does not restore
+   * for passes the message, and it goes back to the composer here.
    */
-  const refuse = (error: unknown) => {
+  const refuse = (error: unknown, unsent?: AppendMessage) => {
     const reported = refusalText(error, callbacks.describeRunError)
+    const returned = unsent !== undefined && returnUnsent(unsent)
     // The refusal arrives already worded for the operator, so it fills the
     // description half of the one failure shape every failed turn carries.
-    commit(failLatestTurn(state, { message: reported }))
+    commit(
+      failLatestTurn(state, {
+        message: reported,
+        ...(returned && { returned }),
+      })
+    )
     return new MessageNotSentError(reported)
   }
 
+  /** Prompts the turn and answers the id the gateway assigned it. */
   const prompt = async (
     sessionId: string,
     blocks: readonly ContentBlock[],
     meta: PromptMeta,
-    rewoundFrom?: string,
-    holdBusy = false
+    rewoundFrom?: string
   ) => {
     locals += 1
     const localId = `${LOCAL_PROMPT_PREFIX}${locals}`
@@ -642,14 +672,13 @@ function createAcpController({
         cursorStale = true
         transcripts += 1
       }
+      return messageId
     } catch (error) {
       const kept = state.messages
         .filter((message) => message.id !== localId)
         .map((message) => message.id)
       commit(retainMessages(state, kept))
-      // A caller that sends again later is handed the busy refusal unshown.
-      if (holdBusy && isBusyRefusal(error)) throw error
-      throw refuse(error)
+      throw error
     }
   }
 
@@ -759,6 +788,13 @@ function createAcpController({
     setCallbacks: (next: ControllerCallbacks) => {
       callbacks = next
     },
+    /** Sends what the provider never kept to `take`, until the returned call. */
+    handBackTo: (take: (message: AppendMessage) => void) => {
+      handBack = take
+      return () => {
+        if (handBack === take) handBack = undefined
+      }
+    },
     subscribe: (listener: () => void) => {
       listeners.add(listener)
       return () => {
@@ -790,8 +826,16 @@ function createAcpController({
       unsubscribe = undefined
       bound = undefined
     },
-    /** `holdBusy` hands a busy refusal back unshown, for a caller that retries. */
-    send: async (message: AppendMessage, { holdBusy = false } = {}) => {
+    /**
+     * `holdBusy` hands a busy refusal back unshown, for a caller that retries;
+     * `handBack` returns any other refusal's message to the composer.
+     */
+    send: async (
+      message: AppendMessage,
+      { holdBusy = false, handBack = false } = {}
+    ) => {
+      sent = undefined
+      const unsent = handBack ? message : undefined
       // A Session the provider could not create, or bytes it could not stage,
       // sent nothing either.
       let sessionId: string
@@ -800,25 +844,31 @@ function createAcpController({
         sessionId = await boundSession()
         staged = await stage(sessionId, message)
       } catch (error) {
-        throw refuse(error)
+        throw refuse(error, unsent)
       }
       // Every send carries a fresh clientId, so the gateway can recognize the
       // same turn delivered twice.
       const clientId = crypto.randomUUID()
       const rewound = rewindFor(message.sourceId)
-      await prompt(
-        sessionId,
-        promptBlocks(message, staged),
-        {
-          ...rewound?.meta,
-          ...(staged === undefined
-            ? {}
-            : { attachmentStageId: staged.stageId }),
-          clientId,
-        },
-        rewound?.sourceId,
-        holdBusy
-      )
+      try {
+        const id = await prompt(
+          sessionId,
+          promptBlocks(message, staged),
+          {
+            ...rewound?.meta,
+            ...(staged === undefined
+              ? {}
+              : { attachmentStageId: staged.stageId }),
+            clientId,
+          },
+          rewound?.sourceId
+        )
+        sent = { id, message }
+      } catch (error) {
+        // A caller that sends again later is handed the busy refusal unshown.
+        if (holdBusy && isBusyRefusal(error)) throw error
+        throw refuse(error, unsent)
+      }
     },
     reload: async (parentId: string | null) => {
       // Only the turn's text is resent: its uploads were consumed when it was
@@ -832,6 +882,7 @@ function createAcpController({
       const rewound = rewindFor(parentId)
       if (!parentId || (blocks.length === 0 && rewound === undefined))
         throw new Error("An ACP retry needs the user turn it replaces")
+      sent = undefined
       const sessionId = await boundSession()
       // Assistant UI's Retry is fire-and-forget, so no caller can observe a
       // rejection here. The refusal reaches the operator on the turn the prompt
@@ -843,7 +894,7 @@ function createAcpController({
         { ...rewound?.meta, clientId },
         rewound?.sourceId
       ).catch((error: unknown) => {
-        if (!isMessageNotSentError(error)) throw error
+        refuse(error)
       })
     },
     cancel: () => {
@@ -1092,5 +1143,35 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
     version,
   ])
 
-  return useExternalStoreRuntime(store)
+  const runtime = useExternalStoreRuntime(store)
+  useEffect(
+    () =>
+      controller.handBackTo((message) =>
+        returnToComposer(runtime.thread.composer, message)
+      ),
+    [controller, runtime]
+  )
+  return runtime
+}
+
+/**
+ * Puts a message the provider never kept back in the composer: its text ahead
+ * of whatever was written since, as editing the queue joins them, and the
+ * attachments it carried.
+ */
+function returnToComposer(
+  composer: ThreadComposerRuntime,
+  message: AppendMessage
+) {
+  const { text, attachments } = composer.getState()
+  composer.setText([joinedText([message]), text].filter(Boolean).join("\n\n"))
+  const held = new Set(attachments.map(({ id }) => id))
+  for (const { id, type, name, contentType, content } of message.attachments ??
+    [])
+    if (!held.has(id))
+      composer
+        .addAttachment({ id, type, name, contentType, content })
+        .catch((err: unknown) =>
+          runtimeLog().warn({ err }, "composer.attachment_return_failed")
+        )
 }

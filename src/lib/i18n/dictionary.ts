@@ -283,6 +283,8 @@ export type Dictionary = {
    * normalized code nor provider text named the failure.
    */
   turnFailed: string
+  /** Said under a failure whose message the provider never kept. */
+  turnReturned: string
   /** The warning System Notice under a turn the model ended early. */
   turnStopped: {
     length: string

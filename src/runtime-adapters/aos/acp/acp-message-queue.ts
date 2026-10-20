@@ -9,10 +9,14 @@ import type { ProjectorExecution } from "./session-projector"
 
 /** The part of the ACP controller the queue drives and follows. */
 export type QueueSession = {
-  /** `holdBusy` hands a busy refusal back unshown, for a caller that retries. */
+  /**
+   * `holdBusy` hands a busy refusal back unshown, for a caller that retries;
+   * `handBack` returns a refused message to the composer, which Assistant UI
+   * does only for a send it made itself.
+   */
   readonly send: (
     message: AppendMessage,
-    options: { holdBusy: boolean }
+    options: { holdBusy: boolean; handBack: boolean }
   ) => Promise<unknown>
   readonly getState: () => { readonly execution: ProjectorExecution }
   readonly subscribe: (listener: () => void) => () => void
@@ -60,7 +64,7 @@ const withText = (message: AppendMessage, text: string): AppendMessage =>
   }) as AppendMessage
 
 /** The waiting messages' texts in queue order, one paragraph each. */
-const joinedText = (messages: readonly AppendMessage[]) =>
+export const joinedText = (messages: readonly AppendMessage[]) =>
   messages
     .flatMap(({ content }) =>
       content.flatMap((part) =>
@@ -139,7 +143,7 @@ export function createQueue(session: QueueSession) {
         }
         dispatch = sent
         const holdBusy = Date.now() < until
-        session.send(message, { holdBusy }).then(
+        session.send(message, { holdBusy, handBack: true }).then(
           () => {
             sent.accepted = true
             settle()

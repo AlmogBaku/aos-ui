@@ -1988,6 +1988,7 @@ function turnFailure(state: AssistantState): {
   code?: string
   message?: string
   attribution?: string
+  returned?: boolean
 } {
   const status = state.message.status
   if (status?.type !== "incomplete" || status.reason !== "error") return {}
@@ -2001,6 +2002,7 @@ function turnFailure(state: AssistantState): {
     ...(typeof error.code === "string" ? { code: error.code } : {}),
     ...(typeof error.message === "string" ? { message: error.message } : {}),
     ...(attribution ? { attribution } : {}),
+    ...(error.returned === true ? { returned: true } : {}),
   }
 }
 
@@ -2008,17 +2010,22 @@ const turnFailureCode = (state: AssistantState) => turnFailure(state).code
 const turnFailureMessage = (state: AssistantState) => turnFailure(state).message
 const turnFailureAttribution = (state: AssistantState) =>
   turnFailure(state).attribution
+const turnFailureReturned = (state: AssistantState) =>
+  turnFailure(state).returned === true
 
 /**
  * A failed turn is AOS reporting on the run, never the Agent's own words, so it
  * renders as a System Notice: the normalized code carries the localized
- * headline, and the provider's description stays beside it as detail.
+ * headline, and the provider's description stays beside it as detail. A
+ * message the provider never kept is back in the composer, and a note under
+ * the headline says so.
  */
 const MessageErrorNotice: FC = () => {
   const { locale } = useToolUiLocale()
   const code = useAuiState(turnFailureCode)
   const message = useAuiState(turnFailureMessage)
   const attribution = useAuiState(turnFailureAttribution)
+  const returned = useAuiState(turnFailureReturned)
   const dictionary = RUN_FAILURE_DICTIONARIES[locale]
   const title = runErrorMessage(
     dictionary,
@@ -2029,6 +2036,7 @@ const MessageErrorNotice: FC = () => {
     <SystemNotice
       tone="error"
       title={title}
+      {...(returned ? { note: dictionary.turnReturned } : {})}
       {...(message !== undefined && message !== title
         ? { detail: message }
         : {})}

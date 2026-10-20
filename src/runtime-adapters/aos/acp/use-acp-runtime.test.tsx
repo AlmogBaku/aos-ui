@@ -872,31 +872,67 @@ describe("useAcpRuntime", () => {
       index: number
     ) => runtime.thread.getState().messages[index]?.status
 
-    it("reloads the Session and keeps the failure in view", async () => {
-      const { fake, result } = await mountWithHistory()
-      await queue(result.current, "Again")
-      await waitFor(() => {
-        expect(fake.prompt).toHaveBeenCalled()
-      })
-      await fail(fake)
-      // The provider never saved the prompt, so the reloaded thread drops it.
-      await waitFor(() => {
-        expect(fake.replay).toHaveBeenCalledTimes(2)
-      })
-      await waitFor(() => {
-        expect(statusOf(result.current, 1)).toEqual({
-          type: "incomplete",
-          reason: "error",
-          error: FAILURE,
-        })
-      })
-      expect(visible(result.current)).toEqual([
-        { id: "u1", role: "user", text: "Ship it" },
-        { id: "a1", role: "assistant", text: "On it" },
-      ])
-    })
+    const AGAIN = { id: "u2", role: "user", text: "Again" }
 
-    it("brings back the turns a failed edit replaced", async () => {
+    it.each([
+      {
+        provider: "never kept it, into an empty composer",
+        replayed: HISTORY,
+        written: "",
+        composer: "Again",
+        error: { ...FAILURE, returned: true },
+        thread: [],
+      },
+      {
+        provider: "never kept it, ahead of what was written since",
+        replayed: HISTORY,
+        written: "Meanwhile",
+        composer: "Again\n\nMeanwhile",
+        error: { ...FAILURE, returned: true },
+        thread: [],
+      },
+      {
+        provider: "kept it, leaving the composer alone",
+        replayed: [...HISTORY, textUpdate("user_message", "u2", "Again")],
+        written: "",
+        composer: "",
+        error: FAILURE,
+        thread: [AGAIN],
+      },
+    ])(
+      "reloads the Session, keeps the failure in view, and hands the message back when the provider $provider",
+      async ({ replayed, written, composer, error, thread }) => {
+        const { fake, result } = await mountWithHistory()
+        await queue(result.current, "Again")
+        await waitFor(() => {
+          expect(fake.prompt).toHaveBeenCalled()
+        })
+        fake.replayOnResume(replayed)
+        act(() => {
+          result.current.thread.composer.setText(written)
+        })
+        await fail(fake)
+        await waitFor(() => {
+          expect(fake.replay).toHaveBeenCalledTimes(2)
+        })
+        await waitFor(() => {
+          expect(statusOf(result.current, 1)).toEqual({
+            type: "incomplete",
+            reason: "error",
+            error,
+          })
+        })
+        // The reloaded thread holds only what the provider kept.
+        expect(visible(result.current)).toEqual([
+          { id: "u1", role: "user", text: "Ship it" },
+          { id: "a1", role: "assistant", text: "On it" },
+          ...thread,
+        ])
+        expect(result.current.thread.composer.getState().text).toBe(composer)
+      }
+    )
+
+    it("brings back the turns a failed edit replaced, and the edit to the composer", async () => {
       const { fake, result } = await mountWithHistory()
       await act(async () => {
         result.current.thread.append({
@@ -920,11 +956,14 @@ describe("useAcpRuntime", () => {
           { id: "a1", role: "assistant", text: "On it" },
         ])
       })
-      expect(statusOf(result.current, 1)).toEqual({
-        type: "incomplete",
-        reason: "error",
-        error: FAILURE,
+      await waitFor(() => {
+        expect(statusOf(result.current, 1)).toEqual({
+          type: "incomplete",
+          reason: "error",
+          error: { ...FAILURE, returned: true },
+        })
       })
+      expect(result.current.thread.composer.getState().text).toBe("Ship it now")
     })
 
     it("does not reload a failure the replay itself restates", async () => {
@@ -1245,10 +1284,52 @@ describe("useAcpRuntime", () => {
       [{ type: "text", text: "Queued" }],
       expect.objectContaining({})
     )
-    // The refusal never reached the thread.
+    // The refusal never reached the thread, nor the composer.
     expect(result.current.thread.getState().messages[0]?.status).toMatchObject({
       type: "complete",
     })
+    expect(result.current.thread.composer.getState().text).toBe("")
+  })
+
+  it("hands a queued turn the gateway refused back to the composer, attachments and all", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake, {
+      enableMessageQueue: true,
+      stageAttachments: async () => ({
+        stageId: "stage-1",
+        attachments: [
+          { id: "att-1", name: "chart.png", contentType: "image/png" },
+        ],
+      }),
+    })
+    fake.prompt.mockRejectedValueOnce(
+      Object.assign(new Error("unavailable"), {
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
+      })
+    )
+    act(() => {
+      fake.emit(textUpdate("agent_message", "a1", "Done"))
+    })
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Read this" }],
+        attachments: [CHART],
+      })
+    })
+    await waitFor(() => {
+      expect(result.current.thread.composer.getState().text).toBe("Read this")
+    })
+    expect(result.current.thread.composer.getState().attachments).toEqual([
+      CHART,
+    ])
+    expect(result.current.thread.getState().messages[0]?.status).toMatchObject({
+      type: "incomplete",
+      reason: "error",
+      error: { returned: true },
+    })
+    // A refusal other than busy is not sent again.
+    expect(fake.prompt).toHaveBeenCalledTimes(1)
   })
 
   it("sends the next queued turn once the accepted one fails before it runs, even ahead of the reply", async () => {
