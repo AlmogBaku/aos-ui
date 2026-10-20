@@ -32,6 +32,14 @@ describe("activeSessionsForAgent", () => {
     ])
   })
 
+  it("keeps a Session updated after the clock reading", () => {
+    const sessions = [session("since", "aster", "2026-09-03T13:00:00.000Z")]
+
+    expect(activeSessionsForAgent(sessions, "aster", now, new Set())).toEqual(
+      sessions
+    )
+  })
+
   it("keeps running, waiting, and manually opened history sessions", () => {
     const sessions = [
       session("idle-old", "aster", "2026-08-01T12:00:00.000Z"),
@@ -100,7 +108,16 @@ describe("nextSessionEligibilityBoundary", () => {
     )
   })
 
-  it("ignores live, invalid, future, and already ineligible Sessions", () => {
+  it("schedules the boundary of a Session updated after the clock reading", () => {
+    expect(
+      nextSessionEligibilityBoundary(
+        [session("since", "aster", "2026-09-03T13:00:00.000Z")],
+        now
+      )
+    ).toBe(Date.parse("2026-09-04T01:00:00.000Z"))
+  })
+
+  it("ignores live, invalid, and already ineligible Sessions", () => {
     expect(
       nextSessionEligibilityBoundary(
         [
@@ -111,7 +128,6 @@ describe("nextSessionEligibilityBoundary", () => {
             "waiting-for-input"
           ),
           session("invalid", "aster", "not-a-date"),
-          session("future", "aster", "2026-09-03T13:00:00.000Z"),
           session("old", "aster", "2026-08-01T00:00:00.000Z"),
         ],
         now

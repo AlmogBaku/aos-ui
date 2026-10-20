@@ -21,7 +21,6 @@ export function nextSessionEligibilityBoundary(
     const boundary = updatedAt + ACTIVE_SESSION_WINDOW_MS
     if (
       Number.isFinite(updatedAt) &&
-      updatedAt <= nowMs &&
       boundary > nowMs &&
       boundary < nextBoundary
     ) {
@@ -61,9 +60,10 @@ export function activeSessionsForAgent(
     sessions.filter((session) => {
       if (session.agentId !== agentId) return false
 
+      // `now` is a reading taken at the last boundary, so a Session active
+      // since then reads as newer than it; that Session is the most recent.
       const age = nowMs - Date.parse(session.updatedAt)
-      const isRecent =
-        Number.isFinite(age) && age >= 0 && age < ACTIVE_SESSION_WINDOW_MS
+      const isRecent = Number.isFinite(age) && age < ACTIVE_SESSION_WINDOW_MS
       const isLive =
         session.status === "running" || session.status === "waiting-for-input"
       // A pin keeps its Session open however old it is; History never lists one.
