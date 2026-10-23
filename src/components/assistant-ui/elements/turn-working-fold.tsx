@@ -138,17 +138,23 @@ export function TurnWorkingStatus() {
   }, [running, startedAt])
 
   if (!running || !working) return null
+  const label = labels.assistant.fold.working(
+    startedAt === undefined
+      ? undefined
+      : formatTurnDuration(elapsed, labels.assistant.duration)
+  )
   return (
     <div data-slot="turn-working-status" className={cn(TRACE_ROW, "mb-1.5")}>
+      {/* Chrome can repaint text that changes under `background-clip: text`
+          only in part, leaving the count half drawn, so every count gets a
+          fresh element; the negative delay keeps the sweep where it was. */}
       <ShimmerLabel
+        key={label}
         aria-live="off"
         className="inline-block leading-none tabular-nums"
+        style={{ animationDelay: `-${elapsed}ms` }}
       >
-        {labels.assistant.fold.working(
-          startedAt === undefined
-            ? undefined
-            : formatTurnDuration(elapsed, labels.assistant.duration)
-        )}
+        {label}
       </ShimmerLabel>
     </div>
   )
