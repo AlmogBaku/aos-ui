@@ -59,7 +59,7 @@ describe("buildOffice", () => {
   it("builds each Office script into one classic script under the resource limit", async () => {
     const files = await buildOffice()
 
-    expect([...files.keys()]).toEqual(["sheet.worker.js"])
+    expect([...files.keys()]).toEqual(["sheet.worker.js", "docx-preview.js"])
     for (const [name, bytes] of files) {
       expect(bytes.length, name).toBeLessThan(MAX_DOCUMENT_BYTES)
       expect(new TextDecoder().decode(bytes), name).not.toMatch(

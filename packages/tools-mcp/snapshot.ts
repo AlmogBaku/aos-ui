@@ -6,6 +6,7 @@ import {
 } from "@modelcontextprotocol/client"
 
 import {
+  DOCX_RENDERER_FILE,
   GRAMMAR_RESOURCE_URI,
   MAPLIBRE_RESOURCE_URI,
   MAPLIBRE_WORKER_FILE,
@@ -55,8 +56,8 @@ const FIXTURE_MAPLIBRE_URIS = [
   `${MAPLIBRE_RESOURCE_URI}${MAPLIBRE_WORKER_FILE}`,
 ]
 
-/** The script the fixture's workbook is read with. */
-const FIXTURE_OFFICE_URIS = [SHEET_WORKER_FILE].map(
+/** The scripts the fixture's workbook and Word document are read with. */
+const FIXTURE_OFFICE_URIS = [SHEET_WORKER_FILE, DOCX_RENDERER_FILE].map(
   (file) => `${OFFICE_RESOURCE_URI}${file}`
 )
 

@@ -212,6 +212,50 @@ test("the artifact view reads crm-pipeline.xlsx in its worker and shows its shee
   await expect(grid.getByRole("cell", { name: "2026-11-14" })).toBeVisible()
 })
 
+test("the artifact view draws sales-proposal.docx as pages in a frame that runs no script of the document's own", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  await ready(page)
+
+  await send(page, "Show a word document artifact")
+  await artifactFrame(page, "sales-proposal.docx")
+    .getByRole("button", { name: "View sales-proposal.docx" })
+    .click()
+  const word = panelView(page, "sales-proposal.docx").frameLocator(
+    'iframe[title="Word document"]'
+  )
+  await expect(word.getByText("Sales proposal")).toBeVisible()
+  // The picture arrives as a data: address, the only one the view allows.
+  await expect
+    .poll(() =>
+      word
+        .getByRole("img")
+        .first()
+        .evaluate(
+          (image: HTMLImageElement) => image.complete && image.naturalWidth > 0
+        )
+    )
+    .toBe(true)
+  // The embedded HTML part is never drawn, so its script never runs.
+  await expect(word.getByText("embedded part")).toHaveCount(0)
+  await expect(word.locator("iframe")).toHaveCount(0)
+
+  // Its https link opens in a new tab, kept off the network here.
+  await page
+    .context()
+    .route("https://example.invalid/**", (route) => route.fulfill())
+  const opened = page.waitForEvent("popup")
+  await word.getByRole("link", { name: "Read the pricing page" }).click()
+  await expect(await opened).toHaveURL("https://example.invalid/pricing")
+  // The policy runs only the frame's own scripts, so a script link is refused.
+  const refused = page.waitForEvent("console", (message) =>
+    message.text().startsWith("Running the JavaScript URL violates")
+  )
+  await word.getByRole("link", { name: "Run the macro" }).click()
+  await refused
+})
+
 test("the artifact view runs test.html sandboxed with storage, opening its link in a new tab and refusing its fetch and its navigation", async ({
   page,
 }) => {

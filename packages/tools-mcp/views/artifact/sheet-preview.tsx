@@ -28,10 +28,9 @@ function SheetGrid({
   label: string
   labels: Labels
   limits: SheetLimits
-  height: number
+  height: number | string
 }) {
-  if (sheet.rows.length === 0)
-    return <Status>{labels.sheetEmpty}</Status>
+  if (sheet.rows.length === 0) return <Status>{labels.sheetEmpty}</Status>
   return (
     <DataTable
       header={sheet.columns}
@@ -50,9 +49,9 @@ function SheetGrid({
 
 /**
  * A spreadsheet, read by the sheet worker up to `limits`, as a grid of the
- * sheet it was saved on; with more than one sheet, tabs among the view's
- * controls switch between them. A workbook that cannot be read shows no
- * preview.
+ * sheet it was saved on; with more than one sheet, a row of tabs above it,
+ * which scrolls sideways when the sheets outnumber its width, switches between
+ * them. A workbook that cannot be read shows no preview.
  */
 export function SheetPreview({
   blob,
@@ -99,9 +98,8 @@ export function SheetPreview({
       />
     )
   return (
-    <div className="flex flex-col" style={{ height: room.height }}>
+    <div className="flex flex-col gap-2" style={{ height: room.height }}>
       <Tabs
-        toolbar
         label={labels.sheets}
         tabs={sheets.map(({ name }, at) => ({ name: String(at), label: name }))}
         selected={String(index)}
@@ -113,7 +111,7 @@ export function SheetPreview({
           label={`${filename}: ${sheet.name}`}
           labels={labels}
           limits={limits}
-          height={room.height}
+          height="100%"
         />
       </Tabs>
     </div>

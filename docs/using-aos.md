@@ -71,6 +71,7 @@ An Agent shows a file with `present_artifact` from the AOS UI tools MCP server, 
 - **Audio and video**, with a Play control; the file is read only when Play is pressed
 - **Plain text**
 - **Spreadsheets** (`.xlsx` and `.xls`) as a grid of each sheet's cells as Excel shows them, number formats applied and each formula's saved value, under column letters and beside row numbers; with more than one visible sheet, tabs switch between them, starting on the sheet the file was saved on (an `.xls` starts on its first). A sheet shows its first 500 rows and 100 columns, counted from A1. Nothing is recalculated, and colors, fonts, merged-cell layout, charts, and pictures are not shown
+- **Word documents** (`.docx`) as their pages, with Word's fonts, colors, tables, pictures, headers, footers, and footnotes, in a sandboxed frame that runs no script from the document; the pages fit the width of the view, and Ctrl and the wheel or a trackpad pinch zoom in from there. Pages break where the document has a page or section break, or where Word last laid one out, so a document written by a program that saves no layout may show one long page. `https:` link clicks open in a new tab. An older Word 97 `.doc` has no preview
 - **Agent-written HTML** with its own scripts, in a sandboxed frame with an opaque origin that reaches no network directly and loads no outside or relative files; web storage is available in memory for the preview, and `https:` link clicks are relayed to the workspace to open in a new tab; beside its source highlighted as HTML
 - **Anything else** as "No preview is available for this file."
 
@@ -78,7 +79,7 @@ PDFs and images zoom with a pinch, Ctrl and the wheel or a trackpad pinch, the +
 
 The card's controls are Refresh, Download, Full screen, Open in new tab, and pip, on one row with the preview's own controls; in the side panel and in full screen, whose header names the file, the view does not repeat the name. Open in new tab appears only for a PDF, an image, audio, or video, which the browser shows itself; any other file opens there as its plain text, so read it in the card, the side panel, or full screen. Esc leaves full screen for where the view was.
 
-A file over its kind's preview limit (64 MiB for a PDF, an image, audio, or video; 25 MiB for HTML; 10 MiB for a spreadsheet; 2 MiB for text) shows "This file is too large to preview.", Download, and Open in new tab where the browser shows that kind, instead of a preview.
+A file over its kind's preview limit (64 MiB for a PDF, an image, audio, or video; 25 MiB for HTML or a Word document; 10 MiB for a spreadsheet; 2 MiB for text) shows "This file is too large to preview.", Download, and Open in new tab where the browser shows that kind, instead of a preview.
 
 The tool's description tells the Agent to use it for every file it shows, instead of a `MEDIA:` line, and to call it again after each change to the file. One path is one Artifact however the Agent titles it: every open view of that file, in its message, in the side panel, or in full screen, re-reads it when a later call presents it again, and the inspector's Outputs list names the file once, at its latest call, under the latest title. Earlier cards stay in the conversation as history and show the current file on Refresh.
 

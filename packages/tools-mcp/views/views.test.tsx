@@ -21,6 +21,7 @@ import { useState } from "react"
 import { utils, write } from "xlsx"
 
 import { Code } from "./artifact/code"
+import { DOCX_FAILED, docxPolicy } from "./artifact/docx-frame"
 import { AGENT_STORAGE, agentStorage } from "./artifact/html-preview"
 import { PREVIEW_LIMITS, knownType, textFormat } from "./artifact/file"
 import { keyAction } from "./artifact/zoom"
@@ -33,6 +34,13 @@ import { MapView } from "./map-view"
 import { StatsView } from "./stats-view"
 import { Tabs } from "./ui/tabs"
 import { presentationValue, resultValue, type ViewApp } from "./view"
+import { render_chartSchema } from "../../../shared/presentation/tools"
+import {
+  ARTIFACT_VIEW_HOST_META,
+  DOCX_RENDERER_FILE,
+  GRAMMAR_RESOURCE_URI,
+  OFFICE_RESOURCE_URI,
+} from "../../../shared/presentation/views"
 
 // The sheet worker's thread hop alone: jsdom starts no worker, so the workbook
 // is read here, by the same reader the worker runs.
@@ -43,11 +51,6 @@ vi.mock("./artifact/sheet-worker", async () => {
       readWorkbook(await file.arrayBuffer(), limits),
   }
 })
-import { render_chartSchema } from "../../../shared/presentation/tools"
-import {
-  ARTIFACT_VIEW_HOST_META,
-  GRAMMAR_RESOURCE_URI,
-} from "../../../shared/presentation/views"
 
 afterEach(() => {
   cleanup()
@@ -388,6 +391,80 @@ describe("artifact view", () => {
 
     cleanup()
     shown("broken.xlsx", bytes.slice(0, 40))
+    expect(
+      await screen.findByText("No preview is available for this file.")
+    ).toBeVisible()
+  })
+
+  it("draws a Word document in a frame that runs only its own scripts, sends it the file once as it first loads, and shows no preview when it cannot", async () => {
+    const docx = Uint8Array.of(0x50, 0x4b, 3, 4, 20, 0)
+    const address = "https://aos.test/files/proposal.docx?pass=one"
+    const renderer = "/* the Word renderer */"
+    let refuse = true
+    const view = props({ filename: "proposal.docx" }, "en", async (uri) => {
+      if (uri !== `${OFFICE_RESOURCE_URI}${DOCX_RENDERER_FILE}`)
+        return uri === address ? fileRead(uri, docx) : { contents: [] }
+      if (refuse) throw refusedRead()
+      return { contents: [{ uri, mimeType: "text/javascript", text: renderer }] }
+    })
+    const shown = (next: McpUiHostContext = {}) => (
+      <ArtifactView {...view} context={{ ...files(address), ...PIP, ...next }} />
+    )
+    // jsdom draws no frame, so a port stands in for the frame's window.
+    const { port1: frameWindow } = new MessageChannel()
+    const post = vi
+      .spyOn(frameWindow, "postMessage")
+      .mockImplementation(() => undefined)
+    const contentWindow = vi
+      .spyOn(HTMLIFrameElement.prototype, "contentWindow", "get")
+      .mockReturnValue(frameWindow as unknown as Window)
+    onTestFinished(() => contentWindow.mockRestore())
+
+    // A renderer the server could not give shows no preview, and the next
+    // view reads it again.
+    render(shown())
+    expect(
+      await screen.findByText("No preview is available for this file.")
+    ).toBeVisible()
+    cleanup()
+    refuse = false
+    const { rerender } = render(shown())
+    const frame = (await screen.findByTitle(
+      "Word document"
+    )) as HTMLIFrameElement
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts")
+    const page = new DOMParser().parseFromString(frame.srcdoc, "text/html")
+    const nonce = page.scripts[0]?.getAttribute("nonce") ?? ""
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]{22}==$/u)
+    expect(
+      page
+        .querySelector('meta[http-equiv="Content-Security-Policy"]')
+        ?.getAttribute("content")
+    ).toBe(docxPolicy(nonce))
+    expect([...page.scripts].map((script) => script.getAttribute("nonce"))).toEqual(
+      [nonce, nonce, nonce]
+    )
+    expect(page.scripts[2]?.textContent).toBe(renderer)
+
+    fireEvent.load(frame)
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+    const [[message]] = post.mock.calls as unknown as [[{ bytes: ArrayBuffer }]]
+    expect(new Uint8Array(message.bytes)).toEqual(docx)
+    // A render keeps the frame's page, and a later load sends nothing more.
+    const srcdoc = frame.srcdoc
+    rerender(shown({ theme: "dark" }))
+    fireEvent.load(frame)
+    await Promise.resolve()
+    expect(frame.srcdoc).toBe(srcdoc)
+    expect(post).toHaveBeenCalledTimes(1)
+
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        source: frameWindow,
+        data: { type: DOCX_FAILED },
+      })
+    )
     expect(
       await screen.findByText("No preview is available for this file.")
     ).toBeVisible()
@@ -889,6 +966,7 @@ describe("artifact view", () => {
       0,
     ],
     ["a type it is read as and has none for", { filename: "export" }, 1],
+    ["a Word 97 file, unread", { filename: "report.doc" }, 0],
   ])("shows no preview for %s", async (_case, file, reads) => {
     const address = `https://aos.test/files/${file.filename}?pass=one`
     const view = props(file, "en", async (uri) => fileRead(uri, "PK"))

@@ -364,7 +364,7 @@ own stderr as `aos-ui: the file read at <path> failed: <reason>`. The card shows
 | ------------------------- | -------- | ----------------------------------------------------------------------------------- |
 | "Can't reach this file."  | `unreachable` | The file route answered neither 2xx nor 403 (an expired pass's 401, a missing file's 404, 429, 5xx), gave no answer within 30 s, or the server already had 32 reads waiting for its 4 at a time, or one waited 30 s |
 | "Showing this file isn't allowed." | `denied` | The file route answered 403                                             |
-| "This file is too large to preview." | `tooLarge` | The file exceeds 64 MiB, or its kind's own preview limit (25 MiB for HTML, 10 MiB for a spreadsheet, 2 MiB for text) |
+| "This file is too large to preview." | `tooLarge` | The file exceeds 64 MiB, or its kind's own preview limit (25 MiB for HTML or a Word document, 10 MiB for a spreadsheet, 2 MiB for text) |
 | "Preview isn't available here." | `unavailable` | The gateway could not forward the read (OpenClaw, no server or viewer, no answer) |
 | "No preview is available for this file." | — | The file's type has no preview; Download and Open still work |
 

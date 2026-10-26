@@ -26,7 +26,10 @@ function isExpectedConsoleError(message: string) {
     // The artifact view's HTML fixture tries a fetch its policy refuses;
     // Chrome reports the refusal as console errors, which is the expected
     // behavior.
-    message.includes("https://files.invalid/")
+    message.includes("https://files.invalid/") ||
+    // The Word fixture's script link, which the Word frame's policy refuses.
+    (message.startsWith("Running the JavaScript URL violates") &&
+      message.includes("(about:srcdoc:"))
   )
 }
 

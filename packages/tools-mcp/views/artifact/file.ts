@@ -19,7 +19,7 @@ export type TextFormat =
 export type MediaPreview = { kind: "audio" | "video"; url: string }
 
 export type FilePreview =
-  | { kind: "pdf" | "sheet"; blob: Blob }
+  | { kind: "pdf" | "sheet" | "document"; blob: Blob }
   | { kind: "image"; url: string }
   | { kind: "html"; text: string }
   | ({ kind: "text"; text: string } & TextFormat)
@@ -56,6 +56,8 @@ export const PREVIEW_LIMITS: PreviewLimits = {
   html: 25 * MIB,
   text: 2 * MIB,
   sheet: 10 * MIB,
+  // A Word document carries its pictures, which an HTML page only links to.
+  document: 25 * MIB,
 }
 
 /** The most of each sheet a spreadsheet preview lays out. */
@@ -65,6 +67,9 @@ const SHEET_TYPES: ReadonlySet<string> = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-excel",
 ])
+
+const DOCUMENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 const TEXT_EXTENSIONS = "log tsv txt"
 
@@ -89,6 +94,9 @@ const EXTENSION_TYPES: Record<string, string> = {
   json: "application/json",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   xls: "application/vnd.ms-excel",
+  docx: DOCUMENT_TYPE,
+  // Word 97, which no browser library reads, so a `.doc` is never read.
+  doc: "application/msword",
   aac: "audio/aac",
   flac: "audio/flac",
   m4a: "audio/mp4",
@@ -125,6 +133,7 @@ function extensionType(filename: string) {
 export function kindOf(type: string | undefined): FileKind | undefined {
   if (type === "application/pdf") return "pdf"
   if (type !== undefined && SHEET_TYPES.has(type)) return "sheet"
+  if (type === DOCUMENT_TYPE) return "document"
   if (type === "text/html" || type === "application/xhtml+xml") return "html"
   if (type?.startsWith("image/")) return "image"
   if (type?.startsWith("audio/")) return "audio"
@@ -191,7 +200,7 @@ function preview(kind: FileKind, type: string, blob: string): FilePreview {
   if (kind === "image" || kind === "audio" || kind === "video")
     return { kind, url: `data:${type};base64,${blob}` }
   const bytes = decode(blob)
-  if (kind === "pdf" || kind === "sheet")
+  if (kind === "pdf" || kind === "sheet" || kind === "document")
     return { kind, blob: new Blob([bytes], { type }) }
   const text = new TextDecoder().decode(bytes)
   if (kind === "html") return { kind, text }

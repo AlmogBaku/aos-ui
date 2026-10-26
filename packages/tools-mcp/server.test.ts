@@ -40,6 +40,7 @@ const maplibre = new Map([
 ])
 const office = new Map([
   ["sheet.worker.js", new TextEncoder().encode("self.onmessage = null")],
+  ["docx-preview.js", new TextEncoder().encode("addEventListener()")],
 ])
 
 beforeAll(async () => {
@@ -232,6 +233,9 @@ describe("view files", () => {
     const sheetWorker = await client.readResource({
       uri: "ui://aos-ui/office/sheet.worker.js",
     })
+    const renderer = await client.readResource({
+      uri: "ui://aos-ui/office/docx-preview.js",
+    })
     const decoder = await client.readResource({
       uri: "ui://aos-ui/pdfjs/wasm/jbig2.wasm",
     })
@@ -255,6 +259,13 @@ describe("view files", () => {
         uri: "ui://aos-ui/office/sheet.worker.js",
         mimeType: "text/javascript",
         text: "self.onmessage = null",
+      },
+    ])
+    expect(renderer.contents).toEqual([
+      {
+        uri: "ui://aos-ui/office/docx-preview.js",
+        mimeType: "text/javascript",
+        text: "addEventListener()",
       },
     ])
     expect(decoder.contents).toEqual([

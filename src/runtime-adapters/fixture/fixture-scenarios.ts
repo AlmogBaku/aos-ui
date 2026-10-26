@@ -28,6 +28,7 @@ export const fixtureScenarioNames = [
   "artifact-audio",
   "artifact-video",
   "artifact-spreadsheet",
+  "artifact-word-document",
   "image",
   "audio",
   "video",
@@ -973,6 +974,13 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
           data: FIXTURE_ARTIFACT_CATALOG.examples.image,
         } as AssistantPart,
       ],
+    }
+  }
+
+  if (input.includes("word document")) {
+    return {
+      name: "artifact-word-document",
+      parts: [fixturePresentationPart("fixture-present_artifact-docx")],
     }
   }
 

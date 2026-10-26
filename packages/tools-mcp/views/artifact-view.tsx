@@ -40,6 +40,7 @@ import {
 import { Code } from "./artifact/code"
 import { CopyButton } from "./artifact/copy-button"
 import { CsvTable } from "./artifact/csv-table"
+import { DocxPreview } from "./artifact/docx-preview"
 import { HtmlPreview } from "./artifact/html-preview"
 import { Markdown } from "./artifact/markdown"
 import { MediaPlayer } from "./artifact/media-player"
@@ -250,6 +251,16 @@ function Preview({
           limits={sheetLimits}
         />
       )
+    case "document":
+      return (
+        <DocxPreview
+          blob={preview.blob}
+          read={app.readServerResource}
+          openLink={app.openLink}
+          labels={labels}
+          height={room.height}
+        />
+      )
     case "image":
       return (
         <ImagePreview
@@ -294,6 +305,7 @@ const KIND_ICONS: Record<FileKind, LucideIcon> = {
   audio: FileMusic,
   video: FileVideoCamera,
   sheet: FileSpreadsheet,
+  document: FileText,
 }
 
 /**

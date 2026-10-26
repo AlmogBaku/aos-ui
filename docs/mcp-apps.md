@@ -185,6 +185,18 @@ reads who asked, so a page that loads from them signals nothing; a host anyone
 may publish to, such as an npm mirror, stays out. Because the inherited view CSP
 grants images and media `data:` only, `blob:` images stay blank.
 
+The `artifact` view draws a Word `.docx` the same way, in a Word frame
+sandboxed with `allow-scripts` alone, under a stricter policy that names no
+host: its scripts must carry a nonce the view draws fresh for each frame, so
+only the frame's own three run (the zoom script, the link stand-ins, and the
+docx-preview renderer, read from the server's `ui://aos-ui/office/` folder),
+and neither an inline handler, a `javascript:` link, nor any script a document
+carries does. Styles stay inline, and pictures and fonts arrive as `data:`
+addresses; `connect-src` and `frame-src` are `'none'`. The renderer never
+draws a document's embedded HTML part. The view posts the file's bytes into
+the frame once, as it first loads, and `https:` link clicks are relayed as
+Agent HTML's are.
+
 Even though the Agent HTML frame is opaque, it has two capabilities:
 
 - **Storage.** `localStorage` is kept per file on the artifact view's stable

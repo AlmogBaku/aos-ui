@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 
 import { FIXTURE_ARTIFACT_VIEW_DOMAIN } from "../../../../shared/presentation/views"
+import { DOCX_FAILED } from "./docx-frame"
 import {
+  AGENT_HTML_MESSAGES,
   AGENT_LINK,
   AGENT_STORAGE,
   agentMessage,
@@ -122,15 +124,26 @@ describe("agentMessage", () => {
   const { port1: frame, port2: elsewhere } = new MessageChannel()
   const link = { type: AGENT_LINK, url: "https://example.invalid/report" }
   const storage = { type: AGENT_STORAGE, items: { ticks: "[1,3]" } }
+  const from = (data: unknown) => ({ source: frame, data })
 
   it.each([
     ["opens the https address", link],
     ["saves the values", storage],
   ])("%s the view's own file frame sends", (_case, data) => {
-    expect(agentMessage({ source: frame, data }, frame)).toEqual(data)
+    expect(
+      agentMessage({ source: frame, data }, frame, AGENT_HTML_MESSAGES)
+    ).toEqual(data)
   })
 
-  const from = (data: unknown) => ({ source: frame, data })
+  it("takes from each frame only the types it sends: no values from the Word frame, no failure from Agent HTML", () => {
+    const failed = { type: DOCX_FAILED }
+    const word = [AGENT_LINK, DOCX_FAILED] as const
+
+    expect(agentMessage(from(storage), frame, word)).toBeUndefined()
+    expect(agentMessage(from(failed), frame, AGENT_HTML_MESSAGES)).toBeUndefined()
+    expect(agentMessage(from(failed), frame, word)).toEqual(failed)
+    expect(agentMessage(from(link), frame, word)).toEqual(link)
+  })
 
   it.each([
     ["a message from another frame", { source: elsewhere, data: link }, frame],
@@ -147,7 +160,7 @@ describe("agentMessage", () => {
     ],
     ["another message type", from({ ...link, type: "ui/open-link" }), frame],
   ])("ignores %s", (_, message, ownFrame) => {
-    expect(agentMessage(message, ownFrame)).toBeUndefined()
+    expect(agentMessage(message, ownFrame, AGENT_HTML_MESSAGES)).toBeUndefined()
   })
 })
 

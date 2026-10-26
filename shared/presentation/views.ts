@@ -139,8 +139,10 @@ export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files"
  * The synthetic fixture files served at `FIXTURE_MCP_APP_FILES_PATH/<name>`
  * for exercising the artifact view in fixture mode: a PDF with a CCITT Group 4
  * image, a PNG, an HTML file whose visible effect confirms that its
- * scripts run and its fetch is refused, a tone, colour bars, and a two-sheet
- * workbook, which the preview's artifact tool calls show; and the Markdown,
+ * scripts run and its fetch is refused, a tone, colour bars, a two-sheet
+ * workbook, and a Word document carrying a script link and an embedded HTML
+ * part its frame must refuse, which the preview's artifact tool calls show;
+ * and the Markdown,
  * CSV, JSON, code, and HTML files its published attachments carry.
  */
 export const FIXTURE_MCP_APP_FILES = {
@@ -155,6 +157,7 @@ export const FIXTURE_MCP_APP_FILES = {
   code: "growth-rate.ts",
   page: "market-summary.html",
   sheet: "crm-pipeline.xlsx",
+  document: "sales-proposal.docx",
 } as const
 
 /**
@@ -185,6 +188,7 @@ export const FIXTURE_MCP_APP_FILE_IDS: ReadonlyMap<string, string> = new Map(
       ["code", "aa845e2768a8c3f0"],
       ["page", "19ca46590f90e9d6"],
       ["sheet", "dffccb69c3bffd1c"],
+      ["document", "9b419a596a79c8d0"],
     ] as const satisfies ReadonlyArray<
       readonly [keyof typeof FIXTURE_MCP_APP_FILES, string]
     >

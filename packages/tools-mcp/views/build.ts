@@ -8,6 +8,7 @@ import { build, type Rolldown } from "vite"
 
 import { SYNTAX_LANGUAGES } from "../../../shared/syntax-language"
 import {
+  DOCX_RENDERER_FILE,
   MAPLIBRE_WORKER_FILE,
   PDFJS_WORKER_FILE,
   presentationViewNames,
@@ -207,6 +208,13 @@ export async function buildOffice(): Promise<Map<string, Uint8Array>> {
       SHEET_WORKER_FILE,
       new TextEncoder().encode(
         await script("sheet-worker-main.ts", "sheetWorker")
+      ),
+    ],
+    // The view inlines the renderer into its frame's own <script>.
+    [
+      DOCX_RENDERER_FILE,
+      new TextEncoder().encode(
+        inlineScript(await script("docx-frame-main.ts", "docxRenderer"))
       ),
     ],
   ])
