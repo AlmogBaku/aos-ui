@@ -162,7 +162,8 @@ the guest lane. An external TLS reverse proxy is optional.
   Tailwind's Play CDN). Add a host there only if no one but its owner publishes
   to it and no one else can read who asked. A `.docx` is drawn by docx-preview
   in a frame sandboxed the same way, under a nonce policy that names no host,
-  so no script from the document runs and it reaches nothing.
+  so no script from the document runs and it reaches nothing directly; its
+  `https:` link clicks are relayed as Agent HTML's are.
 - Preserve the separation between compact, inspectable execution history and
   first-class assistant outcomes. Final prose and meaningful rich UI remain
   visible message content; follow `DESIGN.md` for the governing principles.

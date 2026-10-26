@@ -27,9 +27,12 @@ function refit() {
   fit = next
 }
 
-/** The widest page in `container` and its wrapper's margins, at zoom 1. */
+/**
+ * The widest page in `container` and its wrapper's margins, at zoom 1. The
+ * container holds docx-preview's styles before its wrapper.
+ */
 function measure(container: HTMLElement) {
-  const wrapper = container.firstElementChild
+  const wrapper = container.querySelector(":scope > .docx-wrapper")
   const pages = [...container.querySelectorAll("section")]
   const widest = Math.max(0, ...pages.map((page) => page.offsetWidth))
   const margin =

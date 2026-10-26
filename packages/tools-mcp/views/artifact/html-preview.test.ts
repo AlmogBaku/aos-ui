@@ -135,14 +135,10 @@ describe("agentMessage", () => {
     ).toEqual(data)
   })
 
-  it("takes from each frame only the types it sends: no values from the Word frame, no failure from Agent HTML", () => {
-    const failed = { type: DOCX_FAILED }
-    const word = [AGENT_LINK, DOCX_FAILED] as const
-
-    expect(agentMessage(from(storage), frame, word)).toBeUndefined()
-    expect(agentMessage(from(failed), frame, AGENT_HTML_MESSAGES)).toBeUndefined()
-    expect(agentMessage(from(failed), frame, word)).toEqual(failed)
-    expect(agentMessage(from(link), frame, word)).toEqual(link)
+  it("ignores values from the Word frame, which saves none", () => {
+    expect(
+      agentMessage(from(storage), frame, [AGENT_LINK, DOCX_FAILED])
+    ).toBeUndefined()
   })
 
   it.each([

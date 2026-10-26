@@ -18,7 +18,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist"
 import { bundledLanguagesInfo } from "shiki/langs"
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest"
 import { useState } from "react"
-import { utils, write } from "xlsx"
+import { utils, write, type WorkSheet } from "xlsx"
 
 import { Code } from "./artifact/code"
 import { DOCX_FAILED, docxPolicy } from "./artifact/docx-frame"
@@ -283,7 +283,7 @@ describe("artifact view", () => {
    */
   function showFile(
     file: { filename: string; mimeType?: string; fileId?: string },
-    body: string | Uint8Array,
+    body: string,
     context: McpUiHostContext = {}
   ) {
     const address = `https://aos.test/files/${file.filename}?pass=one`
@@ -355,14 +355,19 @@ describe("artifact view", () => {
     ]
     utils.book_append_sheet(book, utils.aoa_to_sheet(leads), "Leads")
     utils.book_append_sheet(book, utils.aoa_to_sheet([["Total", 2]]), "Summary")
-    const bytes = new Uint8Array(write(book, { type: "array", bookType: "xlsx" }))
+    // One cell at E1, its used range starting there, as Excel records it.
+    const archive: WorkSheet = { "!ref": "E1", E1: { t: "s", v: "Archived" } }
+    utils.book_append_sheet(book, archive, "Archive")
+    const bytes = new Uint8Array(
+      write(book, { type: "array", bookType: "xlsx" })
+    )
     const shown = (filename: string, body: Uint8Array) => {
       const address = `https://aos.test/files/${filename}?pass=one`
       render(
         <ArtifactView
           {...props({ filename }, "en", async (uri) => fileRead(uri, body))}
           context={{ ...files(address), ...PIP }}
-          sheetLimits={{ rows: 2, columns: 100 }}
+          sheetLimits={{ rows: 2, columns: 3 }}
         />
       )
     }
@@ -374,12 +379,14 @@ describe("artifact view", () => {
     expect(
       within(leadsGrid).getByRole("columnheader", { name: "B" })
     ).toBeVisible()
-    expect(within(leadsGrid).getByRole("rowheader", { name: "2" })).toBeVisible()
+    expect(
+      within(leadsGrid).getByRole("rowheader", { name: "2" })
+    ).toBeVisible()
     expect(within(leadsGrid).getByRole("cell", { name: "Acme" })).toBeVisible()
     expect(within(leadsGrid).queryByRole("cell", { name: "Globex" })).toBeNull()
     expect(
       within(leadsGrid).getByText(
-        "Showing the first 2 rows and 100 columns. Download the file for the rest."
+        "Showing the first 2 rows and 3 columns. Download the file for the rest."
       )
     ).toBeVisible()
     await user.click(screen.getByRole("tab", { name: "Summary" }))
@@ -388,6 +395,15 @@ describe("artifact view", () => {
     })
     expect(within(summary).getByRole("cell", { name: "Total" })).toBeVisible()
     expect(within(summary).queryByText(/Showing the first/u)).toBeNull()
+    // A sheet whose cells all lie past the column limit says so, never that
+    // it is empty.
+    await user.click(screen.getByRole("tab", { name: "Archive" }))
+    expect(
+      screen.getByText(
+        "Showing the first 2 rows and 3 columns. Download the file for the rest."
+      )
+    ).toBeVisible()
+    expect(screen.queryByText("This sheet is empty.")).toBeNull()
 
     cleanup()
     shown("broken.xlsx", bytes.slice(0, 40))
@@ -405,10 +421,15 @@ describe("artifact view", () => {
       if (uri !== `${OFFICE_RESOURCE_URI}${DOCX_RENDERER_FILE}`)
         return uri === address ? fileRead(uri, docx) : { contents: [] }
       if (refuse) throw refusedRead()
-      return { contents: [{ uri, mimeType: "text/javascript", text: renderer }] }
+      return {
+        contents: [{ uri, mimeType: "text/javascript", text: renderer }],
+      }
     })
     const shown = (next: McpUiHostContext = {}) => (
-      <ArtifactView {...view} context={{ ...files(address), ...PIP, ...next }} />
+      <ArtifactView
+        {...view}
+        context={{ ...files(address), ...PIP, ...next }}
+      />
     )
     // jsdom draws no frame, so a port stands in for the frame's window.
     const { port1: frameWindow } = new MessageChannel()
@@ -441,9 +462,9 @@ describe("artifact view", () => {
         .querySelector('meta[http-equiv="Content-Security-Policy"]')
         ?.getAttribute("content")
     ).toBe(docxPolicy(nonce))
-    expect([...page.scripts].map((script) => script.getAttribute("nonce"))).toEqual(
-      [nonce, nonce, nonce]
-    )
+    expect(
+      [...page.scripts].map((script) => script.getAttribute("nonce"))
+    ).toEqual([nonce, nonce, nonce])
     expect(page.scripts[2]?.textContent).toBe(renderer)
 
     fireEvent.load(frame)

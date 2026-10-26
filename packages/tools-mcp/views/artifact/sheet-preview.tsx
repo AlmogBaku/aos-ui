@@ -30,7 +30,15 @@ function SheetGrid({
   limits: SheetLimits
   height: number | string
 }) {
-  if (sheet.rows.length === 0) return <Status>{labels.sheetEmpty}</Status>
+  // A sheet whose cells all lie past the limits holds more than it shows.
+  if (sheet.rows.length === 0)
+    return (
+      <Status>
+        {sheet.truncated
+          ? labels.sheetTruncated(limits.rows, limits.columns)
+          : labels.sheetEmpty}
+      </Status>
+    )
   return (
     <DataTable
       header={sheet.columns}

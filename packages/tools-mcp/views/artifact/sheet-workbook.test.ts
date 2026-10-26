@@ -100,13 +100,4 @@ describe("readWorkbook", () => {
       }).sheets
     ).toEqual([{ name: "Empty", columns: [], rows: [], truncated: false }])
   })
-
-  it("refuses a file whose zip is broken", () => {
-    expect(() =>
-      readWorkbook(new Uint8Array([0x50, 0x4b, 3, 4, 1, 2, 3]), {
-        rows: 500,
-        columns: 100,
-      })
-    ).toThrow()
-  })
 })
