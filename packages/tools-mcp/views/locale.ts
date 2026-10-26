@@ -53,6 +53,10 @@ export type ViewLabels = {
     copied: string
     copyFailed: string
     csvTruncated: (rows: number) => string
+    sheets: string
+    sheetTruncated: (rows: number, columns: number) => string
+    sheetEmpty: string
+    documentTitle: string
     pdfTitle: string
     previousPage: string
     nextPage: string
@@ -113,6 +117,11 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       copied: "Copied",
       copyFailed: "Copy failed",
       csvTruncated: (rows) => `Showing the first ${rows} rows.`,
+      sheets: "Sheets",
+      sheetTruncated: (rows, columns) =>
+        `Showing the first ${rows} rows and ${columns} columns. Download the file for the rest.`,
+      sheetEmpty: "This sheet is empty.",
+      documentTitle: "Word document",
       pdfTitle: "PDF preview",
       previousPage: "Previous page",
       nextPage: "Next page",
@@ -171,6 +180,11 @@ export const VIEW_LABELS: Record<ViewLocale, ViewLabels> = {
       copied: "הועתק",
       copyFailed: "ההעתקה נכשלה",
       csvTruncated: (rows) => `מוצגות ${rows} השורות הראשונות.`,
+      sheets: "גיליונות",
+      sheetTruncated: (rows, columns) =>
+        `מוצגות ${rows} השורות ו-${columns} העמודות הראשונות. להמשך, יש להוריד את הקובץ.`,
+      sheetEmpty: "הגיליון הזה ריק.",
+      documentTitle: "מסמך Word",
       pdfTitle: "תצוגה מקדימה של PDF",
       previousPage: "העמוד הקודם",
       nextPage: "העמוד הבא",

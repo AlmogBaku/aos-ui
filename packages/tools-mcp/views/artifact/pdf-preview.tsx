@@ -1,4 +1,3 @@
-import type { ReadResourceResult } from "@modelcontextprotocol/client"
 import { ChevronLeft, ChevronRight, PanelLeft } from "lucide-react"
 import {
   PDFWorker,
@@ -26,6 +25,7 @@ import { IconButton } from "../ui/icon-button"
 import { Status } from "../ui/status"
 import { Compact } from "../ui/toolbar"
 import type { ViewApp } from "../view"
+import { bytesOf } from "./file"
 import { PdfSidebar } from "./pdf-sidebar"
 import styles from "./pdf-preview.module.css"
 import type { Room } from "./room"
@@ -45,16 +45,6 @@ type DataKind = keyof typeof DATA_URLS
 
 /** The largest canvas iOS Safari draws, which pdf.js's own viewer keeps to. */
 const MAX_CANVAS_PIXELS = 2 ** 24
-
-function bytesOf({ contents: [content] }: ReadResourceResult) {
-  if (content && "blob" in content && typeof content.blob === "string")
-    return Uint8Array.from(atob(content.blob), (character) =>
-      character.charCodeAt(0)
-    )
-  if (content && "text" in content && typeof content.text === "string")
-    return new TextEncoder().encode(content.text)
-  throw new Error(`No pdf.js file came back for ${content?.uri}`)
-}
 
 /**
  * The factory pdf.js asks for its data by name. The sandbox fetches nothing,

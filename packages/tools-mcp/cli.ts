@@ -10,6 +10,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
 import {
   MAPLIBRE_WORKER_FILE,
   PDFJS_WORKER_FILE,
+  SHEET_WORKER_FILE,
   presentationViewNames,
 } from "../../shared/presentation/views"
 import {
@@ -145,12 +146,14 @@ if (import.meta.main) {
     loadFolder(directory, "pdfjs", PDFJS_WORKER_FILE),
     loadFolder(directory, "grammars", "typescript.json"),
     loadFolder(directory, "maplibre", MAPLIBRE_WORKER_FILE),
+    loadFolder(directory, "office", SHEET_WORKER_FILE),
   ]).then(
-    ([views, pdfjs, grammars, maplibre]) => ({
+    ([views, pdfjs, grammars, maplibre, office]) => ({
       views,
       pdfjs,
       grammars,
       maplibre,
+      office,
     }),
     (error: Error) => {
       console.error(error.message)

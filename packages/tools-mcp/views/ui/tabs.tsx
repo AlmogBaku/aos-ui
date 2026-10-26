@@ -7,10 +7,9 @@ const TAB_CLASS =
 
 /**
  * A row of tabs over one panel showing the selected tab. The arrow keys move
- * to the neighbouring tab, wrapping, and Home and End to the first and last;
- * only the selected tab is in the Tab order. With two tabs, either arrow
- * reaches the other, so neither needs to mirror in RTL. With `toolbar`, the
- * tabs sit among the view's header controls.
+ * to the neighbouring tab in reading order, mirrored in RTL, wrapping, and
+ * Home and End to the first and last; only the selected tab is in the Tab
+ * order. With `toolbar`, the tabs sit among the view's header controls.
  */
 export function Tabs<Name extends string>({
   label,
@@ -33,9 +32,10 @@ export function Tabs<Name extends string>({
   const buttons = useRef<Partial<Record<Name, HTMLButtonElement | null>>>({})
   const move = (event: KeyboardEvent) => {
     const at = tabs.findIndex((tab) => tab.name === selected)
+    const forward = document.documentElement.dir === "rtl" ? -1 : 1
     const keys: Partial<Record<string, number>> = {
-      ArrowLeft: at - 1,
-      ArrowRight: at + 1,
+      ArrowLeft: at - forward,
+      ArrowRight: at + forward,
       Home: 0,
       End: tabs.length - 1,
     }

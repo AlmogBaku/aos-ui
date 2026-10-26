@@ -193,6 +193,25 @@ test("the artifact view shows preview.png alone in its message", async ({
   )
 })
 
+test("the artifact view reads crm-pipeline.xlsx in its worker and shows its sheet as a grid in the side panel", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  await ready(page)
+
+  await send(page, "Show a spreadsheet artifact")
+  await artifactFrame(page, "crm-pipeline.xlsx")
+    .getByRole("button", { name: "View crm-pipeline.xlsx" })
+    .click()
+  // The sheet worker starts from the server's script inside the sandbox and
+  // answers with the cells as Excel shows them.
+  const grid = panelView(page, "crm-pipeline.xlsx").getByRole("region", {
+    name: "crm-pipeline.xlsx: Leads",
+  })
+  await expect(grid.getByRole("cell", { name: "Northwind Traders" })).toBeVisible()
+  await expect(grid.getByRole("cell", { name: "2026-11-14" })).toBeVisible()
+})
+
 test("the artifact view runs test.html sandboxed with storage, opening its link in a new tab and refusing its fetch and its navigation", async ({
   page,
 }) => {

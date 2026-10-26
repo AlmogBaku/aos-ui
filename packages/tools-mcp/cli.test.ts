@@ -74,6 +74,8 @@ beforeAll(async () => {
   writeGrammars(views)
   mkdirSync(join(views, "maplibre"))
   writeFileSync(join(views, "maplibre/maplibre-gl-worker.mjs"), "export {}")
+  mkdirSync(join(views, "office"))
+  writeFileSync(join(views, "office/sheet.worker.js"), "self.onmessage = null")
   child = start(views)
   const lines = createInterface({ input: child.stdout! })
   const [line] = (await Promise.race([

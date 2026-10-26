@@ -47,6 +47,7 @@ import {
 import {
   buildGrammars,
   buildMaplibre,
+  buildOffice,
   buildPdfjs,
   buildViews,
 } from "./packages/tools-mcp/views/build.ts"
@@ -286,16 +287,17 @@ function mcpAppSandboxPlugin(originsOf: DeploymentOriginsOf): Plugin {
  * preview has, so it keeps Agent HTML storage in memory everywhere.
  */
 async function recordToolsServer(stablePort: string | undefined) {
-  const [views, pdfjs, grammars, maplibre] = await Promise.all([
+  const [views, pdfjs, grammars, maplibre, office] = await Promise.all([
     buildViews(),
     buildPdfjs(),
     buildGrammars(),
     buildMaplibre(),
+    buildOffice(),
   ])
   const domain = FIXTURE_ARTIFACT_VIEW_DOMAIN
   return JSON.stringify(
     await snapshotToolsServer(
-      { views, pdfjs, grammars, maplibre },
+      { views, pdfjs, grammars, maplibre, office },
       {
         artifactStableOrigin: {
           domain,

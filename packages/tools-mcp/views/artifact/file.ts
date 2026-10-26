@@ -2,11 +2,13 @@ import {
   MAX_MCP_APP_FILE_BYTES,
   McpAppFileReadErrorDataSchema,
 } from "@harness-gw/sdk/protocol"
+import type { ReadResourceResult } from "@modelcontextprotocol/client"
 import { z } from "zod"
 
 import { syntaxLanguageFromFilename } from "../../../../shared/syntax-language"
 import type { ViewApp } from "../view"
 import { codeLanguage } from "./code"
+import type { SheetLimits } from "./sheet-workbook"
 
 /** How a text file lays out: as prose, a table, or highlighted source. */
 export type TextFormat =
@@ -17,7 +19,7 @@ export type TextFormat =
 export type MediaPreview = { kind: "audio" | "video"; url: string }
 
 export type FilePreview =
-  | { kind: "pdf"; blob: Blob }
+  | { kind: "pdf" | "sheet"; blob: Blob }
   | { kind: "image"; url: string }
   | { kind: "html"; text: string }
   | ({ kind: "text"; text: string } & TextFormat)
@@ -53,7 +55,16 @@ export const PREVIEW_LIMITS: PreviewLimits = {
   video: MAX_MCP_APP_FILE_BYTES,
   html: 25 * MIB,
   text: 2 * MIB,
+  sheet: 10 * MIB,
 }
+
+/** The most of each sheet a spreadsheet preview lays out. */
+export const SHEET_LIMITS: SheetLimits = { rows: 500, columns: 100 }
+
+const SHEET_TYPES: ReadonlySet<string> = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+])
 
 const TEXT_EXTENSIONS = "log tsv txt"
 
@@ -76,6 +87,8 @@ const EXTENSION_TYPES: Record<string, string> = {
   md: "text/markdown",
   csv: "text/csv",
   json: "application/json",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls: "application/vnd.ms-excel",
   aac: "audio/aac",
   flac: "audio/flac",
   m4a: "audio/mp4",
@@ -111,6 +124,7 @@ function extensionType(filename: string) {
 
 export function kindOf(type: string | undefined): FileKind | undefined {
   if (type === "application/pdf") return "pdf"
+  if (type !== undefined && SHEET_TYPES.has(type)) return "sheet"
   if (type === "text/html" || type === "application/xhtml+xml") return "html"
   if (type?.startsWith("image/")) return "image"
   if (type?.startsWith("audio/")) return "audio"
@@ -177,10 +191,25 @@ function preview(kind: FileKind, type: string, blob: string): FilePreview {
   if (kind === "image" || kind === "audio" || kind === "video")
     return { kind, url: `data:${type};base64,${blob}` }
   const bytes = decode(blob)
-  if (kind === "pdf") return { kind, blob: new Blob([bytes], { type }) }
+  if (kind === "pdf" || kind === "sheet")
+    return { kind, blob: new Blob([bytes], { type }) }
   const text = new TextDecoder().decode(bytes)
   if (kind === "html") return { kind, text }
   return { kind, text, ...textFormat(type) }
+}
+
+/**
+ * The bytes of the one file a server resource read came back with: a binary
+ * one as its base64, a script or other text as its text.
+ */
+export function bytesOf({ contents: [content] }: ReadResourceResult) {
+  if (content && "blob" in content && typeof content.blob === "string")
+    return Uint8Array.from(atob(content.blob), (character) =>
+      character.charCodeAt(0)
+    )
+  if (content && "text" in content && typeof content.text === "string")
+    return new TextEncoder().encode(content.text)
+  throw new Error(`No file came back for ${content?.uri}`)
 }
 
 /** A read's JSON-RPC error that names why it failed. */
