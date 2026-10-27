@@ -208,11 +208,13 @@ test("the artifact view reads crm-pipeline.xlsx in its worker and shows its shee
   const grid = panelView(page, "crm-pipeline.xlsx").getByRole("region", {
     name: "crm-pipeline.xlsx: Leads",
   })
-  await expect(grid.getByRole("cell", { name: "Northwind Traders" })).toBeVisible()
+  await expect(
+    grid.getByRole("cell", { name: "Northwind Traders" })
+  ).toBeVisible()
   await expect(grid.getByRole("cell", { name: "2026-11-14" })).toBeVisible()
 })
 
-test("the artifact view draws sales-proposal.docx as pages in a frame that runs no script of the document's own", async ({
+test("the artifact view draws sales-proposal.docx as pages in a frame that runs no script of the document's own and never leaves it", async ({
   page,
 }) => {
   await page.goto("/en")
@@ -248,12 +250,21 @@ test("the artifact view draws sales-proposal.docx as pages in a frame that runs 
   const opened = page.waitForEvent("popup")
   await word.getByRole("link", { name: "Read the pricing page" }).click()
   await expect(await opened).toHaveURL("https://example.invalid/pricing")
-  // The policy runs only the frame's own scripts, so a script link is refused.
-  const refused = page.waitForEvent("console", (message) =>
-    message.text().startsWith("Running the JavaScript URL violates")
-  )
+  // A link that is not https leaves the document in place.
   await word.getByRole("link", { name: "Run the macro" }).click()
+  await expect(word.getByText("Sales proposal")).toBeVisible()
+  // The policy runs only the frame's own scripts, so a script that reaches the
+  // drawn page is refused.
+  const refused = page.waitForEvent("console", (message) =>
+    message.text().startsWith("Executing inline script violates")
+  )
+  await word.locator("body").evaluate((body) => {
+    const script = document.createElement("script")
+    script.textContent = "document.body.append('script ran')"
+    body.append(script)
+  })
   await refused
+  await expect(word.getByText("script ran")).toHaveCount(0)
 })
 
 test("the artifact view runs test.html sandboxed with storage, opening its link in a new tab and refusing its fetch and its navigation", async ({

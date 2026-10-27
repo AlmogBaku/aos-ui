@@ -89,6 +89,27 @@ describe("readWorkbook", () => {
     }
   )
 
+  // SheetJS's own .xls writer keeps no formulas, so this reads an .xlsx.
+  it("shows a formula the file saved no value for as its formula, and an error it saved as that error", () => {
+    const sheet = utils.aoa_to_sheet([["Seats", 40]])
+    sheet.B2 = { t: "n", f: "SUM(B1:B1)" }
+    sheet.B3 = { t: "e", v: 7, f: "1/0", w: "#DIV/0!" }
+    sheet["!ref"] = "A1:B3"
+    const book = utils.book_new()
+    utils.book_append_sheet(book, sheet, "Totals")
+
+    expect(
+      readWorkbook(write(book, { type: "array", bookType: "xlsx" }), {
+        rows: 500,
+        columns: 100,
+      }).sheets[0]?.rows
+    ).toEqual([
+      { number: 1, cells: ["Seats", "40"] },
+      { number: 2, cells: ["", "=SUM(B1:B1)"] },
+      { number: 3, cells: ["", "#DIV/0!"] },
+    ])
+  })
+
   it("reads a sheet with no cells as one with no rows", () => {
     const book = utils.book_new()
     utils.book_append_sheet(book, utils.aoa_to_sheet([]), "Empty")

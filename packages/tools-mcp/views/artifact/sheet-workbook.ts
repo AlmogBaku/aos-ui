@@ -1,4 +1,10 @@
-import { read, utils, type WorkBook, type WorkSheet } from "xlsx"
+import {
+  read,
+  utils,
+  type CellObject,
+  type WorkBook,
+  type WorkSheet,
+} from "xlsx"
 
 /**
  * The most of each sheet the view lays out, counted from A1, as Excel
@@ -37,11 +43,23 @@ function savedTab(workbook: WorkBook) {
 }
 
 /**
- * The part of `sheet`'s used range inside `limits`, each cell as the text
- * Excel shows for it: its number format applied, and a formula's value as the
- * file saved it.
+ * A cell as Excel shows it: its number format applied, a formula's value as
+ * the file saved it, and an error as its code. A formula the file saved no
+ * value for, as openpyxl writes them, shows as itself, since nothing here
+ * recalculates it.
  */
-function sheetOf(name: string, sheet: WorkSheet, limits: SheetLimits): Sheet {
+function cellText(cell: CellObject | undefined) {
+  if (cell === undefined) return ""
+  // SheetJS's types promise a string, which a bare formula does not have.
+  const shown: string | undefined = utils.format_cell(cell)
+  return shown ?? (cell.f === undefined ? "" : `=${cell.f}`)
+}
+
+/** The rows of cells a sheet read in dense mode holds. */
+type DenseSheet = WorkSheet & { "!data"?: (CellObject | undefined)[][] }
+
+/** The part of `sheet`'s used range inside `limits`, each cell as Excel shows it. */
+function sheetOf(name: string, sheet: DenseSheet, limits: SheetLimits): Sheet {
   const used = sheet["!ref"]
   if (!used) return { name, columns: [], rows: [], truncated: false }
   const range = utils.decode_range(used)
@@ -54,24 +72,21 @@ function sheetOf(name: string, sheet: WorkSheet, limits: SheetLimits): Sheet {
   const truncated = whole.e.r > end.r || whole.e.c > end.c
   if (end.r < range.s.r || end.c < range.s.c)
     return { name, columns: [], rows: [], truncated }
-  const shown = { s: range.s, e: end }
-  const rows = utils.sheet_to_json<string[]>(sheet, {
-    header: 1,
-    raw: false,
-    defval: "",
-    blankrows: true,
-    range: shown,
-  })
-  const width = end.c - range.s.c + 1
+  const data = sheet["!data"] ?? []
+  const columns = Array.from(
+    { length: end.c - range.s.c + 1 },
+    (_, index) => range.s.c + index
+  )
   return {
     name,
-    columns: Array.from({ length: width }, (_, index) =>
-      utils.encode_col(range.s.c + index)
-    ),
-    rows: rows.map((cells, index) => ({
-      number: range.s.r + index + 1,
-      cells: Array.from({ length: width }, (_, column) => cells[column] ?? ""),
-    })),
+    columns: columns.map((column) => utils.encode_col(column)),
+    rows: Array.from({ length: end.r - range.s.r + 1 }, (_, index) => {
+      const row = range.s.r + index
+      return {
+        number: row + 1,
+        cells: columns.map((column) => cellText(data[row]?.[column])),
+      }
+    }),
     truncated,
   }
 }

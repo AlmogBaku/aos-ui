@@ -6,8 +6,9 @@ import { DOCX_CONTAINER_ID, DOCX_FAILED } from "./docx-frame"
  * The Word renderer, built as one classic script the artifact view inlines
  * into a Word frame. It draws the one document its parent posts with
  * docx-preview, never an embedded HTML part, with pictures and fonts as
- * `data:` addresses, and keeps the pages fitted to the frame's width; a
- * document it cannot draw it reports to the view.
+ * `data:` addresses, keeps the pages fitted to the frame's width, and never
+ * leaves the document for a link; a document it cannot draw it reports to the
+ * view.
  */
 const root = document.documentElement
 /** The width of the widest page with the margin around it, unzoomed. */
@@ -41,6 +42,17 @@ function measure(container: HTMLElement) {
       : 0
   return widest + (margin || 0)
 }
+
+// The stand-ins, which run first, open an https link through the view. Any
+// other link but one to a place in the document would take the frame to a page
+// the view's policy refuses, blanking the preview, so it does nothing.
+addEventListener("click", (event) => {
+  const link =
+    event.target instanceof Element ? event.target.closest("a[href]") : null
+  if (link === null || event.defaultPrevented) return
+  if (link.getAttribute("href")?.startsWith("#")) return
+  event.preventDefault()
+})
 
 let taken = false
 // The script runs in the frame's head, before its body is there: the page's

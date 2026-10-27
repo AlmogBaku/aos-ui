@@ -195,7 +195,8 @@ carries does. Styles stay inline, and pictures and fonts arrive as `data:`
 addresses; `connect-src` and `frame-src` are `'none'`. The renderer never
 draws a document's embedded HTML part. The view posts the file's bytes into
 the frame once, as it first loads, and `https:` link clicks are relayed as
-Agent HTML's are.
+Agent HTML's are. Any other link but one to a place in the document does
+nothing, so the frame never leaves the document for a page its policy refuses.
 
 Even though the Agent HTML frame is opaque, it has two capabilities:
 

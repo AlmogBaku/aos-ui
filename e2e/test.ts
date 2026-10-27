@@ -27,9 +27,11 @@ function isExpectedConsoleError(message: string) {
     // Chrome reports the refusal as console errors, which is the expected
     // behavior.
     message.includes("https://files.invalid/") ||
-    // The Word fixture's script link, which the Word frame's policy refuses.
-    (message.startsWith("Running the JavaScript URL violates") &&
-      message.includes("(about:srcdoc:"))
+    // The script the Word test adds to the drawn page, which the Word frame's
+    // nonce policy, the only one in the app, refuses.
+    message.startsWith(
+      "Executing inline script violates the following Content Security Policy directive 'script-src 'nonce-"
+    )
   )
 }
 
