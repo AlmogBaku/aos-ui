@@ -5,6 +5,7 @@ import {
   FileCode,
   FileImage,
   FileMusic,
+  FileSpreadsheet,
   FileText,
   FileVideoCamera,
   Maximize2,
@@ -27,6 +28,7 @@ import { z } from "zod"
 import type { PresentArtifactResult } from "../../../shared/presentation/tools"
 import {
   PREVIEW_LIMITS,
+  SHEET_LIMITS,
   kindOf,
   knownType,
   type FileKind,
@@ -38,10 +40,13 @@ import {
 import { Code } from "./artifact/code"
 import { CopyButton } from "./artifact/copy-button"
 import { CsvTable } from "./artifact/csv-table"
+import { DocxPreview } from "./artifact/docx-preview"
 import { HtmlPreview } from "./artifact/html-preview"
 import { Markdown } from "./artifact/markdown"
 import { MediaPlayer } from "./artifact/media-player"
 import { useRoom, type Room } from "./artifact/room"
+import { SheetPreview } from "./artifact/sheet-preview"
+import type { SheetLimits } from "./artifact/sheet-workbook"
 import { useFile } from "./artifact/use-file"
 import { ZoomPane } from "./artifact/zoom"
 import type { ViewLabels } from "./locale"
@@ -213,6 +218,7 @@ function Preview({
   labels,
   app,
   room,
+  sheetLimits,
 }: {
   preview: Exclude<FilePreview, MediaPreview>
   filename: string
@@ -220,6 +226,7 @@ function Preview({
   labels: ArtifactLabels
   app: ViewApp
   room: Room
+  sheetLimits: SheetLimits
 }) {
   switch (preview.kind) {
     case "pdf":
@@ -232,6 +239,27 @@ function Preview({
             room={room}
           />
         </Suspense>
+      )
+    case "sheet":
+      return (
+        <SheetPreview
+          blob={preview.blob}
+          filename={filename}
+          read={app.readServerResource}
+          labels={labels}
+          room={room}
+          limits={sheetLimits}
+        />
+      )
+    case "document":
+      return (
+        <DocxPreview
+          blob={preview.blob}
+          read={app.readServerResource}
+          openLink={app.openLink}
+          labels={labels}
+          height={room.height}
+        />
       )
     case "image":
       return (
@@ -276,6 +304,8 @@ const KIND_ICONS: Record<FileKind, LucideIcon> = {
   text: FileText,
   audio: FileMusic,
   video: FileVideoCamera,
+  sheet: FileSpreadsheet,
+  document: FileText,
 }
 
 /**
@@ -456,7 +486,11 @@ export function ArtifactView({
   app,
   context,
   previewLimits = PREVIEW_LIMITS,
-}: ViewProps<PresentArtifactResult> & { previewLimits?: PreviewLimits }) {
+  sheetLimits = SHEET_LIMITS,
+}: ViewProps<PresentArtifactResult> & {
+  previewLimits?: PreviewLimits
+  sheetLimits?: SheetLimits
+}) {
   const artifact = labels.artifact
   const address = filesSchema.safeParse(context?.["aos/files"]).data?.path
   const revision = revisionSchema.safeParse(context?.["aos/filesRevision"]).data
@@ -676,6 +710,7 @@ export function ArtifactView({
                 labels={artifact}
                 app={app}
                 room={room}
+                sheetLimits={sheetLimits}
               />
             </Compact>
           </ToolbarSlot>

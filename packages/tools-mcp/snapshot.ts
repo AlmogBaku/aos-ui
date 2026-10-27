@@ -6,11 +6,14 @@ import {
 } from "@modelcontextprotocol/client"
 
 import {
+  DOCX_RENDERER_FILE,
   GRAMMAR_RESOURCE_URI,
   MAPLIBRE_RESOURCE_URI,
   MAPLIBRE_WORKER_FILE,
+  OFFICE_RESOURCE_URI,
   PDFJS_RESOURCE_URI,
   PDFJS_WORKER_FILE,
+  SHEET_WORKER_FILE,
 } from "../../shared/presentation/views"
 import {
   toolsServerFactory,
@@ -53,10 +56,15 @@ const FIXTURE_MAPLIBRE_URIS = [
   `${MAPLIBRE_RESOURCE_URI}${MAPLIBRE_WORKER_FILE}`,
 ]
 
+/** The scripts the fixture's workbook and Word document are read with. */
+const FIXTURE_OFFICE_URIS = [SHEET_WORKER_FILE, DOCX_RENDERER_FILE].map(
+  (file) => `${OFFICE_RESOURCE_URI}${file}`
+)
+
 /**
  * Asks a real server, built with `options`, for its `tools/list`, every view's
- * `resources/read`, the pdf.js resources and grammars the artifact view needs
- * for the fixture files, and the map view's worker.
+ * `resources/read`, the pdf.js resources, grammars, and Office scripts the
+ * artifact view needs for the fixture files, and the map view's worker.
  */
 export async function snapshotToolsServer(
   files: ToolsServerFiles,
@@ -77,6 +85,7 @@ export async function snapshotToolsServer(
       ...FIXTURE_PDFJS_URIS,
       ...FIXTURE_GRAMMAR_URIS,
       ...FIXTURE_MAPLIBRE_URIS,
+      ...FIXTURE_OFFICE_URIS,
     ])
       resources[uri] = await client.readResource({ uri })
     return { tools, resources }

@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest"
 
 import { SYNTAX_LANGUAGES } from "../../../shared/syntax-language"
-import { buildGrammars, buildPdfjs, buildViews } from "./build"
+import { buildGrammars, buildOffice, buildPdfjs, buildViews } from "./build"
 
 /** The gateway refuses an App document, or any resource it reads, above this size. */
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
@@ -52,6 +52,20 @@ describe("buildPdfjs", () => {
       expect(Math.ceil(bytes.length / 3) * 4, name).toBeLessThan(
         MAX_DOCUMENT_BYTES
       )
+  }, 120_000)
+})
+
+describe("buildOffice", () => {
+  it("builds each Office script into one classic script under the resource limit", async () => {
+    const files = await buildOffice()
+
+    expect([...files.keys()]).toEqual(["sheet.worker.js", "docx-preview.js"])
+    for (const [name, bytes] of files) {
+      expect(bytes.length, name).toBeLessThan(MAX_DOCUMENT_BYTES)
+      expect(new TextDecoder().decode(bytes), name).not.toMatch(
+        /^\s*(?:import|export)\b/mu
+      )
+    }
   }, 120_000)
 })
 

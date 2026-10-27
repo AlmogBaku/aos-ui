@@ -26,7 +26,12 @@ function isExpectedConsoleError(message: string) {
     // The artifact view's HTML fixture tries a fetch its policy refuses;
     // Chrome reports the refusal as console errors, which is the expected
     // behavior.
-    message.includes("https://files.invalid/")
+    message.includes("https://files.invalid/") ||
+    // The script the Word test adds to the drawn page, which the Word frame's
+    // nonce policy, the only one in the app, refuses.
+    message.startsWith(
+      "Executing inline script violates the following Content Security Policy directive 'script-src 'nonce-"
+    )
   )
 }
 

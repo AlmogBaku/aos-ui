@@ -193,6 +193,80 @@ test("the artifact view shows preview.png alone in its message", async ({
   )
 })
 
+test("the artifact view reads crm-pipeline.xlsx in its worker and shows its sheet as a grid in the side panel", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  await ready(page)
+
+  await send(page, "Show a spreadsheet artifact")
+  await artifactFrame(page, "crm-pipeline.xlsx")
+    .getByRole("button", { name: "View crm-pipeline.xlsx" })
+    .click()
+  // The sheet worker starts from the server's script inside the sandbox and
+  // answers with the cells as Excel shows them.
+  const grid = panelView(page, "crm-pipeline.xlsx").getByRole("region", {
+    name: "crm-pipeline.xlsx: Leads",
+  })
+  await expect(
+    grid.getByRole("cell", { name: "Northwind Traders" })
+  ).toBeVisible()
+  await expect(grid.getByRole("cell", { name: "2026-11-14" })).toBeVisible()
+})
+
+test("the artifact view draws sales-proposal.docx as pages in a frame that runs no script of the document's own and never leaves it", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  await ready(page)
+
+  await send(page, "Show a word document artifact")
+  await artifactFrame(page, "sales-proposal.docx")
+    .getByRole("button", { name: "View sales-proposal.docx" })
+    .click()
+  const word = panelView(page, "sales-proposal.docx").frameLocator(
+    'iframe[title="Word document"]'
+  )
+  await expect(word.getByText("Sales proposal")).toBeVisible()
+  // The picture arrives as a data: address, the only one the view allows.
+  await expect
+    .poll(() =>
+      word
+        .getByRole("img")
+        .first()
+        .evaluate(
+          (image: HTMLImageElement) => image.complete && image.naturalWidth > 0
+        )
+    )
+    .toBe(true)
+  // The embedded HTML part is never drawn, so its script never runs.
+  await expect(word.getByText("embedded part")).toHaveCount(0)
+  await expect(word.locator("iframe")).toHaveCount(0)
+
+  // Its https link opens in a new tab, kept off the network here.
+  await page
+    .context()
+    .route("https://example.invalid/**", (route) => route.fulfill())
+  const opened = page.waitForEvent("popup")
+  await word.getByRole("link", { name: "Read the pricing page" }).click()
+  await expect(await opened).toHaveURL("https://example.invalid/pricing")
+  // A link that is not https leaves the document in place.
+  await word.getByRole("link", { name: "Run the macro" }).click()
+  await expect(word.getByText("Sales proposal")).toBeVisible()
+  // The policy runs only the frame's own scripts, so a script that reaches the
+  // drawn page is refused.
+  const refused = page.waitForEvent("console", (message) =>
+    message.text().startsWith("Executing inline script violates")
+  )
+  await word.locator("body").evaluate((body) => {
+    const script = document.createElement("script")
+    script.textContent = "document.body.append('script ran')"
+    body.append(script)
+  })
+  await refused
+  await expect(word.getByText("script ran")).toHaveCount(0)
+})
+
 test("the artifact view runs test.html sandboxed with storage, opening its link in a new tab and refusing its fetch and its navigation", async ({
   page,
 }) => {

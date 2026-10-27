@@ -3,14 +3,14 @@ import { useId, useRef, type KeyboardEvent, type ReactNode } from "react"
 import { Toolbar } from "./toolbar"
 
 const TAB_CLASS =
-  "cursor-pointer rounded-sm px-3 py-1 text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-selected:bg-background aria-selected:text-foreground motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
+  "shrink-0 cursor-pointer rounded-sm px-3 py-1 whitespace-nowrap text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-selected:bg-background aria-selected:text-foreground motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
 
 /**
  * A row of tabs over one panel showing the selected tab. The arrow keys move
- * to the neighbouring tab, wrapping, and Home and End to the first and last;
- * only the selected tab is in the Tab order. With two tabs, either arrow
- * reaches the other, so neither needs to mirror in RTL. With `toolbar`, the
- * tabs sit among the view's header controls.
+ * to the neighbouring tab in reading order, mirrored in RTL, wrapping, and
+ * Home and End to the first and last; only the selected tab is in the Tab
+ * order. With `toolbar`, the tabs sit among the view's header controls; more
+ * tabs than fit scroll sideways.
  */
 export function Tabs<Name extends string>({
   label,
@@ -33,9 +33,10 @@ export function Tabs<Name extends string>({
   const buttons = useRef<Partial<Record<Name, HTMLButtonElement | null>>>({})
   const move = (event: KeyboardEvent) => {
     const at = tabs.findIndex((tab) => tab.name === selected)
+    const forward = document.documentElement.dir === "rtl" ? -1 : 1
     const keys: Partial<Record<string, number>> = {
-      ArrowLeft: at - 1,
-      ArrowRight: at + 1,
+      ArrowLeft: at - forward,
+      ArrowRight: at + forward,
       Home: 0,
       End: tabs.length - 1,
     }
@@ -50,7 +51,7 @@ export function Tabs<Name extends string>({
     <div
       role="tablist"
       aria-label={label}
-      className="inline-flex w-fit gap-1 rounded-md bg-muted p-1"
+      className="inline-flex w-fit max-w-full gap-1 overflow-x-auto rounded-md bg-muted p-1"
       onKeyDown={move}
     >
       {tabs.map((tab) => (

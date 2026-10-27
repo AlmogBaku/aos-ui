@@ -38,13 +38,21 @@ const grammars = new Map([
 const maplibre = new Map([
   ["maplibre-gl-worker.mjs", new TextEncoder().encode("export {}")],
 ])
+const office = new Map([
+  ["sheet.worker.js", new TextEncoder().encode("self.onmessage = null")],
+  ["docx-preview.js", new TextEncoder().encode("addEventListener()")],
+])
 
 beforeAll(async () => {
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair()
-  await toolsServerFactory({ views, pdfjs, grammars, maplibre })().connect(
-    serverTransport
-  )
+  await toolsServerFactory({
+    views,
+    pdfjs,
+    grammars,
+    maplibre,
+    office,
+  })().connect(serverTransport)
   await client.connect(clientTransport)
 })
 
@@ -211,7 +219,8 @@ describe("MCP App views", () => {
 
 describe("view files", () => {
   // The views' sandboxes fetch nothing, so the artifact view reads pdf.js's
-  // worker, data, and decoders by name, and the map view MapLibre's worker;
+  // worker, data, and decoders, and its Office scripts, by name, and the map
+  // view MapLibre's worker;
   // "lists one App resource per view" keeps them out of the resource list the
   // fixture snapshot reads.
   it("serves each worker as script text, other files as bytes, and nothing else", async () => {
@@ -220,6 +229,12 @@ describe("view files", () => {
     })
     const mapWorker = await client.readResource({
       uri: "ui://aos-ui/maplibre/maplibre-gl-worker.mjs",
+    })
+    const sheetWorker = await client.readResource({
+      uri: "ui://aos-ui/office/sheet.worker.js",
+    })
+    const renderer = await client.readResource({
+      uri: "ui://aos-ui/office/docx-preview.js",
     })
     const decoder = await client.readResource({
       uri: "ui://aos-ui/pdfjs/wasm/jbig2.wasm",
@@ -237,6 +252,20 @@ describe("view files", () => {
         uri: "ui://aos-ui/maplibre/maplibre-gl-worker.mjs",
         mimeType: "text/javascript",
         text: "export {}",
+      },
+    ])
+    expect(sheetWorker.contents).toEqual([
+      {
+        uri: "ui://aos-ui/office/sheet.worker.js",
+        mimeType: "text/javascript",
+        text: "self.onmessage = null",
+      },
+    ])
+    expect(renderer.contents).toEqual([
+      {
+        uri: "ui://aos-ui/office/docx-preview.js",
+        mimeType: "text/javascript",
+        text: "addEventListener()",
       },
     ])
     expect(decoder.contents).toEqual([

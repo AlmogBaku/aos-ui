@@ -91,6 +91,20 @@ export const MAPLIBRE_RESOURCE_URI = "ui://aos-ui/maplibre/"
 export const MAPLIBRE_WORKER_FILE = "maplibre-gl-worker.mjs"
 
 /**
+ * Where the artifact view reads the scripts that read Office files from the
+ * `aos-ui` server: the spreadsheet worker and the Word renderer. Inlined, the
+ * libraries they carry would take the view past the 2 MiB a gateway accepts
+ * for one App document.
+ */
+export const OFFICE_RESOURCE_URI = "ui://aos-ui/office/"
+
+/** The worker that reads a workbook's sheets, a classic script. */
+export const SHEET_WORKER_FILE = "sheet.worker.js"
+
+/** The script that draws a Word document inside its own frame. */
+export const DOCX_RENDERER_FILE = "docx-preview.js"
+
+/**
  * Where the artifact view reads the grammar it highlights code in, one Shiki
  * grammar per `<name>.json`, so the view carries none of them itself.
  */
@@ -125,8 +139,10 @@ export const FIXTURE_MCP_APP_FILES_PATH = "/fixture/mcp-app-files"
  * The synthetic fixture files served at `FIXTURE_MCP_APP_FILES_PATH/<name>`
  * for exercising the artifact view in fixture mode: a PDF with a CCITT Group 4
  * image, a PNG, an HTML file whose visible effect confirms that its
- * scripts run and its fetch is refused, a tone, and colour bars, which the
- * preview's artifact tool calls show; and the Markdown,
+ * scripts run and its fetch is refused, a tone, colour bars, a two-sheet
+ * workbook, and a Word document carrying a script link and an embedded HTML
+ * part its frame must refuse, which the preview's artifact tool calls show;
+ * and the Markdown,
  * CSV, JSON, code, and HTML files its published attachments carry.
  */
 export const FIXTURE_MCP_APP_FILES = {
@@ -140,6 +156,8 @@ export const FIXTURE_MCP_APP_FILES = {
   json: "quarterly-spend.json",
   code: "growth-rate.ts",
   page: "market-summary.html",
+  sheet: "crm-pipeline.xlsx",
+  document: "sales-proposal.docx",
 } as const
 
 /**
@@ -169,6 +187,8 @@ export const FIXTURE_MCP_APP_FILE_IDS: ReadonlyMap<string, string> = new Map(
       ["json", "e633aa9f35c4e001"],
       ["code", "aa845e2768a8c3f0"],
       ["page", "19ca46590f90e9d6"],
+      ["sheet", "dffccb69c3bffd1c"],
+      ["document", "9b419a596a79c8d0"],
     ] as const satisfies ReadonlyArray<
       readonly [keyof typeof FIXTURE_MCP_APP_FILES, string]
     >

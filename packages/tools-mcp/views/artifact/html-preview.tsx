@@ -10,6 +10,7 @@ import { Tabs } from "../ui/tabs"
 import type { ViewApp } from "../view"
 import { Code } from "./code"
 import { CopyButton } from "./copy-button"
+import { DOCX_FAILED } from "./docx-frame"
 import { MAX_ZOOM } from "./zoom"
 
 const TABS = ["preview", "source"] as const
@@ -48,17 +49,19 @@ export const AGENT_HTML_CSP = [
 
 /**
  * Zooms the file's own page with Ctrl and the wheel, which is also how a
- * trackpad pinch arrives, from fitted up to the view's `MAX_ZOOM`. A wheel
- * over the frame never reaches the view, and unhandled it would zoom the
- * whole page instead.
+ * trackpad pinch arrives, from fitted up to the view's `MAX_ZOOM` times that.
+ * A page that fits itself to its frame names the zoom that fits as its root's
+ * `data-fit`; any other page fits at 1. A wheel over the frame never reaches
+ * the view, and unhandled it would zoom the whole page instead.
  */
-const ZOOM_SCRIPT = `addEventListener("wheel", (event) => {
+export const ZOOM_SCRIPT = `addEventListener("wheel", (event) => {
   if (!event.ctrlKey) return
   event.preventDefault()
   const root = document.documentElement
+  const fit = Number(root.dataset.fit || 1)
   const delta = Math.min(Math.max(event.deltaY, -25), 25)
-  const zoom = Number(root.style.zoom || 1) * Math.exp(-delta / 100)
-  root.style.zoom = String(Math.min(Math.max(zoom, 1), ${MAX_ZOOM}))
+  const zoom = Number(root.style.zoom || fit) * Math.exp(-delta / 100)
+  root.style.zoom = String(Math.min(Math.max(zoom, fit), fit * ${MAX_ZOOM}))
 }, { passive: false })`
 
 /** The message the file's frame sends the view for a link the file opens. */
@@ -184,7 +187,7 @@ export function installStandIns(
  * `storage` holds for the file, if the view keeps it, with `<` escaped so that
  * no value closes the script.
  */
-function standInsScript(storage: AgentStorage | undefined) {
+export function standInsScript(storage: AgentStorage | undefined) {
   const options: StandInOptions = {
     linkType: AGENT_LINK,
     storageType: AGENT_STORAGE,
@@ -201,19 +204,31 @@ const agentMessageSchema = z.discriminatedUnion("type", [
     url: z.url({ protocol: /^https$/u }),
   }),
   z.object({ type: z.literal(AGENT_STORAGE), items: savedItemsSchema }),
+  z.object({ type: z.literal(DOCX_FAILED) }),
 ])
 
+/** A message a file's frame may send the view. */
+export type AgentMessage = z.infer<typeof agentMessageSchema>
+
+/** What Agent HTML's frame may ask: to open a link, or to save its values. */
+export const AGENT_HTML_MESSAGES = [AGENT_LINK, AGENT_STORAGE] as const
+
 /**
- * What a message from the file's own frame asks of the view: to open an https
- * address, or to save the file's values; `undefined` for a message from
- * anywhere else, of any other shape, or for any other scheme.
+ * What a message from the file's own frame asks of the view, among the types
+ * `accepts` names for that frame: to open an https address, to save the
+ * file's values, or that its document could not be drawn; `undefined` for a
+ * message from anywhere else, of any other type or shape, or for any other
+ * scheme.
  */
-export function agentMessage(
+export function agentMessage<Type extends AgentMessage["type"]>(
   { source, data }: { source: MessageEventSource | null; data: unknown },
-  frame: MessageEventSource | null | undefined
-) {
-  return source !== null && source === frame
-    ? agentMessageSchema.safeParse(data).data
+  frame: MessageEventSource | null | undefined,
+  accepts: readonly Type[]
+): Extract<AgentMessage, { type: Type }> | undefined {
+  if (source === null || source !== frame) return undefined
+  const message = agentMessageSchema.safeParse(data).data
+  return message && (accepts as readonly string[]).includes(message.type)
+    ? (message as Extract<AgentMessage, { type: Type }>)
     : undefined
 }
 
@@ -301,23 +316,59 @@ function expectedHost() {
 }
 
 /**
- * The file's HTML with the policy as the first child of its head, so it
- * governs every script the file holds, and the zoom script and the stand-ins,
- * holding what `storage` saved for the file, after it, so they run before the
- * file's own.
+ * `html` with `policy` as the first child of its head, so it governs every
+ * script the page holds, and `scripts` after it, so they run before the
+ * page's own; with a `nonce`, each of them carries it, so a policy that names
+ * that nonce runs them and nothing else.
  */
-function withPolicy(html: string, storage: AgentStorage | undefined) {
+export function withPolicy(
+  html: string,
+  policy: string,
+  scripts: readonly string[],
+  nonce?: string
+) {
   const document = new DOMParser().parseFromString(html, "text/html")
   const meta = document.createElement("meta")
   meta.httpEquiv = "Content-Security-Policy"
-  meta.content = AGENT_HTML_CSP
-  const scripts = [ZOOM_SCRIPT, standInsScript(storage)].map((source) => {
+  meta.content = policy
+  const elements = scripts.map((source) => {
     const script = document.createElement("script")
+    // The `nonce` property is not written back into the HTML.
+    if (nonce !== undefined) script.setAttribute("nonce", nonce)
     script.textContent = source
     return script
   })
-  document.head.prepend(meta, ...scripts)
+  document.head.prepend(meta, ...elements)
   return `<!doctype html>${document.documentElement.outerHTML}`
+}
+
+/**
+ * A frame that runs `html` with its scripts but without the same origin: the
+ * page runs in an opaque origin of its own, so it reaches neither this view
+ * nor the page around it.
+ */
+export function SandboxFrame({
+  frame,
+  html,
+  title,
+  onLoad,
+}: {
+  frame: RefObject<HTMLIFrameElement | null>
+  html: string
+  title: string
+  onLoad?: () => void
+}) {
+  return (
+    <iframe
+      ref={frame}
+      sandbox="allow-scripts"
+      srcDoc={html}
+      title={title}
+      referrerPolicy="no-referrer"
+      onLoad={onLoad}
+      className="block h-full w-full rounded-md border bg-white"
+    />
+  )
 }
 
 /**
@@ -336,19 +387,12 @@ function AgentFrame({
   storage: AgentStorage | undefined
   title: string
 }) {
-  const html = useMemo(() => withPolicy(text, storage), [text, storage])
-  return (
-    // Scripts without the same origin: the file runs in an opaque origin of
-    // its own, so it reaches neither this view nor the page.
-    <iframe
-      ref={frame}
-      sandbox="allow-scripts"
-      srcDoc={html}
-      title={title}
-      referrerPolicy="no-referrer"
-      className="block h-full w-full rounded-md border bg-white"
-    />
+  const html = useMemo(
+    () =>
+      withPolicy(text, AGENT_HTML_CSP, [ZOOM_SCRIPT, standInsScript(storage)]),
+    [text, storage]
   )
+  return <SandboxFrame frame={frame} html={html} title={title} />
 }
 
 /**
@@ -381,7 +425,11 @@ export function HtmlPreview({
   const frame = useRef<HTMLIFrameElement>(null)
   useEffect(() => {
     const relay = (event: MessageEvent) => {
-      const message = agentMessage(event, frame.current?.contentWindow)
+      const message = agentMessage(
+        event,
+        frame.current?.contentWindow,
+        AGENT_HTML_MESSAGES
+      )
       if (message?.type === AGENT_LINK)
         void openLink({ url: message.url }).catch(() => undefined)
       else if (message?.type === AGENT_STORAGE) storage?.save(message.items)

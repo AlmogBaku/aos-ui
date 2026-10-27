@@ -8,9 +8,11 @@ import { build, type Rolldown } from "vite"
 
 import { SYNTAX_LANGUAGES } from "../../../shared/syntax-language"
 import {
+  DOCX_RENDERER_FILE,
   MAPLIBRE_WORKER_FILE,
   PDFJS_WORKER_FILE,
   presentationViewNames,
+  SHEET_WORKER_FILE,
   type PresentationViewName,
 } from "../../../shared/presentation/views"
 
@@ -127,12 +129,12 @@ export async function buildViews(): Promise<
 }
 
 /**
- * The artifact view starts pdf.js's worker as a classic script from a blob URL
- * of its text. pdf.js ships the worker as a module, so the same bundler
- * rewrites it as one classic script, which starts itself on load;
+ * The module at `entry`, with everything it imports, as one classic script
+ * that starts itself on load: the artifact view starts its workers from a
+ * blob URL of their text, and inlines the Word renderer into a frame.
  * `import.meta.url` becomes the script's own address.
  */
-async function buildPdfWorker(): Promise<Uint8Array> {
+async function buildClassicScript(entry: string, name: string) {
   const files = outputFiles(
     await build({
       configFile: false,
@@ -145,21 +147,27 @@ async function buildPdfWorker(): Promise<Uint8Array> {
         emptyOutDir: false,
         minify: true,
         reportCompressedSize: false,
-        lib: {
-          entry: path.join(PDFJS_DIRECTORY, "build/pdf.worker.min.mjs"),
-          formats: ["iife"],
-          name: "pdfjsWorker",
-        },
+        lib: { entry, formats: ["iife"], name },
         rolldownOptions: { output: { codeSplitting: false } },
       },
     })
   )
-  const [worker] = files
-  if (files.length !== 1 || worker?.type !== "chunk")
+  const [script] = files
+  if (files.length !== 1 || script?.type !== "chunk")
     throw new Error(
-      `The pdf.js worker did not build into one script: ${files.map((file) => file.fileName).join(", ")}`
+      `${name} did not build into one script: ${files.map((file) => file.fileName).join(", ")}`
     )
-  return new TextEncoder().encode(worker.code)
+  return script.code
+}
+
+/** pdf.js ships its worker as a module, which the view cannot start. */
+async function buildPdfWorker(): Promise<Uint8Array> {
+  return new TextEncoder().encode(
+    await buildClassicScript(
+      path.join(PDFJS_DIRECTORY, "build/pdf.worker.min.mjs"),
+      "pdfjsWorker"
+    )
+  )
 }
 
 /**
@@ -189,6 +197,27 @@ export async function buildPdfjs(): Promise<Map<string, Uint8Array>> {
   for (const name of names)
     files.set(name, await readFile(path.join(PDFJS_DIRECTORY, name)))
   return files
+}
+
+/** The Office scripts the artifact view reads, by name. */
+export async function buildOffice(): Promise<Map<string, Uint8Array>> {
+  const script = (entry: string, name: string) =>
+    buildClassicScript(path.join(VIEWS_DIRECTORY, "artifact", entry), name)
+  return new Map([
+    [
+      SHEET_WORKER_FILE,
+      new TextEncoder().encode(
+        await script("sheet-worker-main.ts", "sheetWorker")
+      ),
+    ],
+    // The view inlines the renderer into its frame's own <script>.
+    [
+      DOCX_RENDERER_FILE,
+      new TextEncoder().encode(
+        inlineScript(await script("docx-frame-main.ts", "docxRenderer"))
+      ),
+    ],
+  ])
 }
 
 /** MapLibre's worker module, by name, exactly as the package ships it. */

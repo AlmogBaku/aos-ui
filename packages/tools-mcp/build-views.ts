@@ -4,15 +4,16 @@ import path from "node:path"
 import {
   buildGrammars,
   buildMaplibre,
+  buildOffice,
   buildPdfjs,
   buildViews,
   VIEWS_OUTPUT_DIRECTORY,
 } from "./views/build"
 
 /**
- * `bun run tools-mcp:build`: writes each view, the pdf.js files and grammars
- * the artifact view reads, and the map view's MapLibre worker, where the
- * server loads them.
+ * `bun run tools-mcp:build`: writes each view, the pdf.js files, grammars,
+ * and Office scripts the artifact view reads, and the map view's MapLibre
+ * worker, where the server loads them.
  */
 const views = await buildViews()
 await mkdir(VIEWS_OUTPUT_DIRECTORY, { recursive: true })
@@ -32,3 +33,4 @@ async function writeFolder(folder: string, files: Map<string, Uint8Array>) {
 await writeFolder("pdfjs", await buildPdfjs())
 await writeFolder("grammars", await buildGrammars())
 await writeFolder("maplibre", await buildMaplibre())
+await writeFolder("office", await buildOffice())
