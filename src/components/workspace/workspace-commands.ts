@@ -111,7 +111,7 @@ export type WorkspaceCommandInput = {
   readonly messages: () => readonly CommandMessage[]
   readonly rewindAvailable: boolean
   readonly reloadMessage: (messageId: string) => void
-  /** Opens a user message's inline editor and brings it into view. */
+  /** Opens a user message for editing in the composer and brings it into view. */
   readonly beginEdit: (messageId: string) => void
   /** Copies an assistant message's answer; rejects when the copy fails. */
   readonly copyMessage: (messageId: string) => Promise<void>

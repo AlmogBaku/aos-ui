@@ -806,6 +806,65 @@ describe("useAcpRuntime", () => {
     })
   })
 
+  it("resends an edited turn as its text alone, so the provider keeps the turn's images", async () => {
+    const fake = createFakeConnection()
+    const stageAttachments = vi.fn(async () => ({
+      stageId: "stage-1",
+      attachments: [],
+    }))
+    const { result } = await mount(fake, { stageAttachments })
+    act(() => {
+      fake.emit(textUpdate("user_message", "u1", "Ship it"))
+      fake.emit(textUpdate("agent_message", "a1", "Wrong answer"))
+    })
+    fake.prompt.mockResolvedValueOnce({ messageId: "u2" })
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Ship it now" }],
+        attachments: [CHART],
+        parentId: null,
+        sourceId: "u1",
+      })
+    })
+    await waitFor(() => {
+      expect(fake.prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        [{ type: "text", text: "Ship it now" }],
+        expect.objectContaining({ rewindSourceId: "provider-u1" })
+      )
+    })
+    expect(stageAttachments).not.toHaveBeenCalled()
+  })
+
+  it("hands an edit the gateway refused back to the composer, ahead of the draft", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit(textUpdate("user_message", "u1", "Ship it"))
+      fake.emit(textUpdate("agent_message", "a1", "Wrong answer"))
+      result.current.thread.composer.setText("Meanwhile")
+    })
+    fake.prompt.mockRejectedValueOnce(
+      Object.assign(new Error("unavailable"), {
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
+      })
+    )
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Ship it now" }],
+        parentId: null,
+        sourceId: "u1",
+      })
+    })
+    await waitFor(() => {
+      expect(result.current.thread.composer.getState().text).toBe(
+        "Ship it now\n\nMeanwhile"
+      )
+    })
+  })
+
   it("keeps a prompt stopped before any reply, since the provider saved it", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)

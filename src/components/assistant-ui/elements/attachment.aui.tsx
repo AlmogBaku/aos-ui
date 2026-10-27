@@ -328,12 +328,14 @@ export const ComposerAttachments: FC = () => {
   )
 }
 
-export const ComposerAddAttachment: FC = () => {
+export const ComposerAddAttachment: FC<{ disabled?: boolean }> = ({
+  disabled = false,
+}) => {
   const labels = useAttachmentLabels()
   const dictating = useAuiState((s) => s.composer.dictation != null)
   return (
     <ComposerPrimitive.AddAttachment
-      disabled={dictating}
+      disabled={disabled || dictating}
       render={
         <TooltipIconButton
           tooltip={labels.add}

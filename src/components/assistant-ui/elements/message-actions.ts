@@ -95,8 +95,43 @@ export function useMessageRetry(messageRewind: MessageRewind | undefined): {
   return { retry, disabled: disabled || hasPendingInteraction }
 }
 
+type EditableComposer = {
+  getState(): { readonly isEditing: boolean }
+  beginEdit(): void
+  cancel(): void
+}
+
+/**
+ * The composer holds one edit at a time, so beginning one ends any other. A
+ * message already being edited stays as it is.
+ */
+export function beginOnlyEdit(
+  messageIds: readonly string[],
+  composerOf: (messageId: string) => EditableComposer,
+  messageId: string
+) {
+  const target = composerOf(messageId)
+  if (target.getState().isEditing) return
+  for (const id of messageIds) {
+    if (id === messageId) continue
+    const composer = composerOf(id)
+    if (composer.getState().isEditing) composer.cancel()
+  }
+  target.beginEdit()
+}
+
 export function useMessageEdit(): { edit: () => void; disabled: boolean } {
-  const { edit, disabled } = useActionBarEdit()
+  const aui = useAui()
+  const { disabled } = useActionBarEdit()
   const hasPendingInteraction = usePendingInteractionGate()
+  const edit = useCallback(
+    () =>
+      beginOnlyEdit(
+        aui.thread.getState().messages.map(({ id }) => id),
+        (id) => aui.thread.message({ id }).composer(),
+        aui.message.getState().id
+      ),
+    [aui]
+  )
   return { edit, disabled: disabled || hasPendingInteraction }
 }

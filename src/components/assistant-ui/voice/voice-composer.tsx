@@ -108,17 +108,41 @@ export function VoiceComposerField({ children }: PropsWithChildren) {
 
 /**
  * `surface` carries a request from elsewhere, such as `/voice`, to start or
- * finish capture exactly as this control's own buttons do.
+ * finish capture exactly as this control's own buttons do. A `reason` shows
+ * the microphone unavailable, saying why, and it records nothing.
  */
 export function VoiceComposerControl({
   surface,
+  reason,
 }: {
   surface?: WorkspaceSurfaceRequests | undefined
+  reason?: string | undefined
 }) {
   const media = useVoiceContext()?.media
   const hasDictation = useAuiState((s) => s.thread.capabilities.dictation)
   if (!media || !hasDictation) return null
+  if (reason) return <UnavailableMic media={media} reason={reason} />
   return <VoiceCaptureControl media={media} surface={surface} />
+}
+
+function UnavailableMic({
+  media,
+  reason,
+}: {
+  media: VoiceMediaController
+  reason: string
+}) {
+  const labels = useVoiceLabels()
+  const mode = useVoiceState((s) => s?.mode ?? "transcription")
+  return (
+    <MicModeButton
+      mode={mode}
+      onModeChange={(value) => media.setMode(value)}
+      onRecord={() => undefined}
+      reason={reason}
+      labels={labels}
+    />
+  )
 }
 
 function VoiceCaptureControl({

@@ -4,6 +4,7 @@ import type { ThreadRuntimeState } from "@assistant-ui/react"
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react"
 
 import {
+  beginOnlyEdit,
   copyMessage,
   retryMessage,
 } from "@/components/assistant-ui/elements/message-actions"
@@ -198,7 +199,11 @@ export function useWorkspaceCommands({
           media
         ),
       beginEdit: (messageId) => {
-        runtime.thread.getMessageById(messageId).composer.beginEdit()
+        beginOnlyEdit(
+          runtime.thread.getState().messages.map(({ id }) => id),
+          (id) => runtime.thread.getMessageById(id).composer,
+          messageId
+        )
         surface.request({ kind: "revealMessage", messageId })
       },
       copyMessage: async (messageId) => {
