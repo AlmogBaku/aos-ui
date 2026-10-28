@@ -1169,6 +1169,105 @@ describe("Thread accessibility", () => {
     }
   )
 
+  it.each([
+    {
+      action: "Update",
+      finish: async (user: User, editor: HTMLElement) => {
+        draft(editor, "Review this image carefully")
+        await user.click(screen.getByRole("button", { name: "Update" }))
+      },
+      sent: ["Review this image carefully"],
+    },
+    {
+      action: "Cancel",
+      finish: async (user: User) => {
+        await user.click(screen.getByRole("button", { name: "Cancel" }))
+      },
+      sent: [],
+    },
+  ])(
+    "edits a message in the composer and gives the draft back after $action",
+    async ({ finish, sent }) => {
+      const user = userEvent.setup()
+      let runtime: AssistantRuntime | undefined
+      const run = vi.fn<ChatModelAdapter["run"]>().mockResolvedValue({
+        content: [{ type: "text", text: "Updated" }],
+      })
+      render(
+        <LocalThread
+          model={{ run }}
+          exposeRuntime={(value) => {
+            runtime = value
+          }}
+        />
+      )
+      await screen.findByText("The reference is ready.")
+      const input = screen.getByRole("textbox", { name: "Message input" })
+      draft(input, "Ask finance for the Q3 numbers")
+
+      act(() => {
+        runtime!.thread.getMessageById("message-user").composer.beginEdit()
+      })
+      const editor = await screen.findByRole("textbox", {
+        name: "Editing message",
+      })
+      expect(editor).toHaveValue("Review this image")
+      expect(input).not.toBeVisible()
+      expect(
+        screen.getByRole("button", { name: "Add attachment" })
+      ).toBeDisabled()
+
+      await finish(user, editor)
+
+      await waitFor(() => expect(input).toBeVisible())
+      expect(
+        screen.queryByRole("textbox", { name: "Editing message" })
+      ).toBeNull()
+      expect(input).toHaveValue("Ask finance for the Q3 numbers")
+      expect(input).toHaveFocus()
+      await waitFor(() => expect(run).toHaveBeenCalledTimes(sent.length))
+      expect(
+        run.mock.calls.map(([{ messages }]) =>
+          messageText(messages.findLast((message) => message.role === "user")!)
+        )
+      ).toEqual(sent)
+    }
+  )
+
+  it("never sends a blank edit, by key or by Update", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn<ChatModelAdapter["run"]>().mockResolvedValue({
+      content: [],
+    })
+    // A queue-enabled thread, whose steer chord sends straight from the key.
+    // The message's image is what makes a blank edit sendable at all.
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await screen.findByText("The reference is ready.")
+    act(() => {
+      runtime!.thread.getMessageById("message-user").composer.beginEdit()
+    })
+    const editor = await screen.findByRole("textbox", {
+      name: "Editing message",
+    })
+
+    await user.clear(editor)
+    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Shift>}{Enter}{/Shift}{/Control}")
+
+    expect(editor).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Update" })).toBeDisabled()
+    expect(run).not.toHaveBeenCalled()
+  })
+
   it("opens current-session history search with Ctrl+R without sending the draft", async () => {
     const user = userEvent.setup()
     let runtime: AssistantRuntime | undefined

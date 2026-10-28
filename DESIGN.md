@@ -553,6 +553,12 @@ assistant's answer.
   that call. The composer stays in place; new messages queue and Edit and Retry
   wait until the request is answered. "Allow always" asks for confirmation
   first. Once the guarded call settles, its own view replaces the card.
+- **Edit in the composer:** Edit on a user message opens it in the composer's
+  place, under an "Editing message" line that names it; the message itself
+  stays as it is in the thread. The draft already written waits, hidden, and
+  returns when the edit is sent or cancelled. An edit carries only its text:
+  attach and voice show disabled, and a blank edit is never sent. One edit is
+  open at a time.
 - **System notices:** anything AOS or a provider says about a failure or an
   unavailable output renders in the System Notice panel with the AOS source
   label, never as message prose. The operator cannot then mistake it for the

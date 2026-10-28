@@ -1107,9 +1107,15 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
       isDisabled: isDisabled ?? false,
       extras: acpExtras.provide(extras),
       onNew: (message) => controller.send(message),
+      // An edit resends only its text: a rewind that stages nothing of its own
+      // keeps the turn's images, which the provider re-attaches itself. The edit
+      // composer closes as it sends, so a refused edit goes back to the composer.
       onEdit: (message) => {
         queue?.clear()
-        return controller.send(message)
+        return controller.send(
+          { ...message, attachments: [] },
+          { handBack: true }
+        )
       },
       onReload: (parentId) => {
         queue?.clear()

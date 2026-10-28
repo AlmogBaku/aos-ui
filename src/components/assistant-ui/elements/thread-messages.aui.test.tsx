@@ -497,16 +497,45 @@ describe("message context menu", () => {
     )
   })
 
-  it("opens the edit composer from the menu", async () => {
+  it("opens one edit at a time in the composer from the menu, and focuses it", async () => {
     const user = userEvent.setup()
-    render(<LocalThread />)
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "user-1",
+            role: "user",
+            content: [{ type: "text", text: "Draft the supplier email" }],
+          },
+          {
+            id: "assistant-1",
+            role: "assistant",
+            content: [{ type: "text", text: "Here is a draft." }],
+          },
+          {
+            id: "user-2",
+            role: "user",
+            content: [{ type: "text", text: "Make it shorter" }],
+          },
+          {
+            id: "assistant-2",
+            role: "assistant",
+            content: [{ type: "text", text: "Here is a shorter one." }],
+          },
+        ]}
+      />
+    )
 
-    const menu = await openMessageMenu("Review this image")
-    await user.click(within(menu).getByRole("menuitem", { name: "Edit" }))
+    for (const text of ["Draft the supplier email", "Make it shorter"]) {
+      const menu = await openMessageMenu(text)
+      await user.click(within(menu).getByRole("menuitem", { name: "Edit" }))
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+    }
 
-    expect(
-      await screen.findByRole("button", { name: "Update" })
-    ).toBeInTheDocument()
+    const editors = screen.getAllByRole("textbox", { name: "Editing message" })
+    expect(editors).toHaveLength(1)
+    expect(editors[0]).toHaveValue("Make it shorter")
+    await waitFor(() => expect(editors[0]).toHaveFocus())
   })
 
   it("names the pending question on the action it holds back", async () => {

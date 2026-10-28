@@ -9,6 +9,7 @@ type MessageActionsCopy = {
   selectText: string
   update: string
   cancel: string
+  messageInput: string
   conversation: string
   chartFrame: string
   showChartData: string
@@ -23,6 +24,7 @@ const english: MessageActionsCopy = {
   selectText: "Select text",
   update: "Update",
   cancel: "Cancel",
+  messageInput: "Message input",
   conversation: "Conversation",
   chartFrame: "render_chart app",
   showChartData: "View chart data",
@@ -55,7 +57,10 @@ async function settle(page: Page) {
   )
 }
 
-/** Editing replaces the turn with a composer that updates it or backs out. */
+/**
+ * Editing opens the message in the composer's place, which updates it or
+ * backs out to the composer it stood in for.
+ */
 async function cancelEditComposer(page: Page, copy: MessageActionsCopy) {
   const cancel = page.getByRole("button", { name: copy.cancel, exact: true })
   await expect(
@@ -63,7 +68,9 @@ async function cancelEditComposer(page: Page, copy: MessageActionsCopy) {
   ).toBeVisible()
   await expect(cancel).toBeVisible()
   await cancel.click()
-  await expect(turn(page, USER_TURN)).toBeVisible()
+  await expect(
+    page.getByRole("textbox", { name: copy.messageInput, exact: true })
+  ).toBeVisible()
 }
 
 async function exerciseDesktop(page: Page, copy: MessageActionsCopy) {

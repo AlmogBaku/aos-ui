@@ -136,4 +136,40 @@ describe("workspace focus regions", () => {
     )
     stop()
   })
+
+  it("takes the composer region to the shell on show while an edit hides the main one", async () => {
+    const root = document.createElement("div")
+    document.body.append(root)
+    const stop = observeKeyboardRegions(root)
+    const shell = () => {
+      const element = document.createElement("div")
+      element.dataset.slot = "aui_composer-shell"
+      const input = document.createElement("textarea")
+      element.append(input)
+      return { element, input }
+    }
+    const main = shell()
+    root.append(main.element)
+    await waitFor(() => {
+      expect(focusRegion(root, "composer")).toBe(true)
+      expect(main.input).toHaveFocus()
+    })
+
+    // An edit shows its own shell after the main one, which hides.
+    const edit = shell()
+    main.element.hidden = true
+    root.append(edit.element)
+    await waitFor(() => {
+      expect(focusRegion(root, "composer")).toBe(true)
+      expect(edit.input).toHaveFocus()
+    })
+
+    edit.element.remove()
+    main.element.hidden = false
+    await waitFor(() => {
+      expect(focusRegion(root, "composer")).toBe(true)
+      expect(main.input).toHaveFocus()
+    })
+    stop()
+  })
 })

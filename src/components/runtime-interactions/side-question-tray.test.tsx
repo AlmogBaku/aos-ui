@@ -1,8 +1,12 @@
+import type { AssistantRuntime, ThreadMessageLike } from "@assistant-ui/react"
 import { act, cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { LocalThread } from "@/components/assistant-ui/elements/thread.aui.test-helpers"
+import {
+  INITIAL_MESSAGES,
+  LocalThread,
+} from "@/components/assistant-ui/elements/thread.aui.test-helpers"
 import { en } from "@/lib/i18n/dictionaries/en"
 import type { SideQuestionSnapshot } from "@/runtime-adapters/contracts"
 
@@ -46,7 +50,13 @@ function fakeQuestion() {
  * One question asked about the Session the tray already shows, above a real
  * composer, as the thread places it.
  */
-function renderTray() {
+function renderTray({
+  initialMessages = [],
+  exposeRuntime,
+}: {
+  initialMessages?: readonly ThreadMessageLike[]
+  exposeRuntime?: (runtime: AssistantRuntime) => void
+} = {}) {
   const question = fakeQuestion()
   const store = new SideQuestionStore()
   const openSession = vi.fn(async () => undefined)
@@ -54,7 +64,13 @@ function renderTray() {
   const Tray = () => (
     <SessionSideQuestions workspace={workspace} sessionId="session-1" />
   )
-  render(<LocalThread initialMessages={[]} beforeComposer={Tray} />)
+  render(
+    <LocalThread
+      initialMessages={initialMessages}
+      exposeRuntime={exposeRuntime}
+      beforeComposer={Tray}
+    />
+  )
   act(() =>
     store.ask(question.handle, {
       agentId: "agent-1",
@@ -110,5 +126,26 @@ describe("side-question tray", () => {
     expect(question.followers()).toBe(0)
     // The last row gone, focus goes to the composer, never the page.
     expect(screen.getByRole("textbox", { name: "Message input" })).toHaveFocus()
+  })
+
+  it("gives focus to an open edit once the last question is dismissed", async () => {
+    let runtime: AssistantRuntime | undefined
+    renderTray({
+      initialMessages: INITIAL_MESSAGES,
+      exposeRuntime: (value) => {
+        runtime = value
+      },
+    })
+    act(() => {
+      runtime!.thread.getMessageById("message-user").composer.beginEdit()
+    })
+    const editor = await screen.findByRole("textbox", {
+      name: "Editing message",
+    })
+
+    screen.getByText(copy.dismiss).focus()
+    await userEvent.keyboard("{Escape}")
+
+    expect(editor).toHaveFocus()
   })
 })

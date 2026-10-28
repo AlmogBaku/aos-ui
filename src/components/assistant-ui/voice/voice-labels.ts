@@ -25,6 +25,7 @@ export type VoiceLabels = {
   unavailable: string
   browser: string
   idleRequired: string
+  editing: string
   emptyRequired: string
   voiceNeedsBoth: string
   speechError: string
@@ -60,6 +61,7 @@ export const voiceLabels: Record<Locale, VoiceLabels> = {
       "Recording requires microphone access on HTTPS or localhost and a supported browser.",
     idleRequired:
       "Voice turns require a resumed, idle Session with no pending approval.",
+    editing: "Voice input isn't available while editing a message.",
     emptyRequired:
       "Send or clear the draft, attachments, and queued messages before a voice turn.",
     voiceNeedsBoth: "Voice turns require both transcription and read-aloud.",
@@ -112,6 +114,7 @@ export const voiceLabels: Record<Locale, VoiceLabels> = {
     browser:
       "הקלטה דורשת הרשאת מיקרופון, דפדפן תומך וחיבור HTTPS או localhost.",
     idleRequired: "תור קולי דורש שיחה שחודשה ופנויה, ללא בקשת הרשאה ממתינה.",
+    editing: "קלט קולי אינו זמין בזמן עריכת הודעה.",
     emptyRequired:
       "יש לשלוח או לנקות את הטיוטה, הקבצים וההודעות שבתור לפני תור קולי.",
     voiceNeedsBoth: "תור קולי דורש גם תמלול וגם הקראה.",

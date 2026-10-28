@@ -44,13 +44,14 @@ function closeOnEscape(event: KeyboardEvent, close: () => void) {
 
 /**
  * Focuses the composer's message input, found the way its attachments find
- * it: the composer shares the thread's viewport with the tray.
+ * it: the composer shares the thread's viewport with the tray. While a message
+ * is being edited, the composer on show is that edit's.
  */
 function focusMessageInput(from: Element | null) {
   from
     ?.closest('[data-slot="aui_thread-viewport"]')
     ?.querySelector<HTMLTextAreaElement>(
-      '[data-slot="aui_composer-shell"] textarea:not([aria-hidden=true])'
+      '[data-slot="aui_composer-shell"]:not([hidden]) textarea:not([aria-hidden=true])'
     )
     ?.focus({ preventScroll: true })
 }

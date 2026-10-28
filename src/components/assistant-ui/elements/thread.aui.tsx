@@ -106,7 +106,11 @@ import {
   VoiceComposerField,
   VoiceComposerNotice,
 } from "../voice/voice-composer"
-import { useVoiceCaptureActive, useVoiceContext } from "../voice/voice-context"
+import {
+  useVoiceCaptureActive,
+  useVoiceContext,
+  useVoiceLabels,
+} from "../voice/voice-context"
 import {
   InlineReadAloud,
   VoiceMessageActions,
@@ -121,6 +125,7 @@ import {
   type AssistantState,
   BranchPickerPrimitive,
   ComposerPrimitive,
+  MessageByIndexProvider,
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
@@ -146,6 +151,7 @@ import {
   PencilIcon,
   RefreshCwIcon,
   SquareIcon,
+  XIcon,
 } from "lucide-react"
 import {
   createContext,
@@ -234,6 +240,7 @@ export type ThreadLabels = {
   pendingInteractionAction: string
   cancel: string
   update: string
+  editingMessage: string
   historySearch?: string | undefined
   historySearchPlaceholder?: string | undefined
   historyCancel?: string | undefined
@@ -342,6 +349,7 @@ const DEFAULT_LABELS: ThreadLabels = {
     "Respond to the pending request before changing this conversation",
   cancel: "Cancel",
   update: "Update",
+  editingMessage: "Editing message",
   historySearch: "Search conversation history",
   historySearchPlaceholder: "Filter sent messages…",
   historyCancel: "Cancel history search",
@@ -775,9 +783,8 @@ const ThreadMessage: FC = () => {
   const { AssistantMessage: AssistantMessageComponent = AssistantMessage } =
     useContext(ThreadComponentsContext)
   const role = useAuiState((s) => s.message.role)
-  const isEditing = useAuiState((s) => s.message.composer.isEditing)
 
-  if (isEditing) return <EditComposer />
+  // A message being edited stays as it is; the edit shows in the composer.
   if (role === "user") return <UserMessage />
   return <AssistantMessageComponent />
 }
@@ -792,7 +799,7 @@ const BoundedThreadMessage: FC = () => {
   )
 }
 
-/** `ThreadMessage` picks the role and the edit composer itself. */
+/** `ThreadMessage` picks the role itself. */
 const THREAD_MESSAGE_COMPONENTS = { Message: BoundedThreadMessage }
 
 /**
@@ -928,10 +935,52 @@ export function createComposerHistorySelector() {
   }
 }
 
+// The main composer and the edit shown in its place share one look.
+const COMPOSER_ROOT_CLASS =
+  "aui-composer-root relative -mx-2 flex w-[calc(100%+1rem)] flex-col @md:-mx-7 @md:w-[calc(100%+3.5rem)] @min-[64rem]/workspace:mx-0 @min-[64rem]/workspace:w-full"
+const COMPOSER_SHELL_CLASS =
+  "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-(--thread-content-max-width) dark:bg-popover"
+const COMPOSER_INPUT_CLASS =
+  "aui-composer-input max-h-36 min-w-0 flex-1 resize-none bg-transparent text-base leading-5 text-foreground/85 caret-primary outline-none placeholder:text-muted-foreground @min-[64rem]/workspace:max-h-48 @min-[64rem]/workspace:min-h-11 @min-[64rem]/workspace:w-full @min-[64rem]/workspace:px-3 @min-[64rem]/workspace:text-[15px] @min-[64rem]/workspace:leading-6"
+const COMPOSER_SEND_CLASS =
+  "aui-composer-send grid size-11 shrink-0 place-items-center rounded-full bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
+const COMPOSER_SEND_FACE_CLASS =
+  "grid size-9 place-items-center rounded-full bg-primary text-primary-foreground @min-[64rem]/workspace:contents"
+
+/**
+ * The composer slot: the main composer and, while a message is being edited,
+ * that edit in its place. The draft written in the main composer waits,
+ * hidden, until the edit is sent or cancelled.
+ */
 const Composer: FC<{
   autoFocus: boolean
   direction: LocaleDirection
 }> = ({ autoFocus, direction }) => {
+  const editingIndex = useAuiState((s) =>
+    s.thread.messages.findIndex((message) => message.composer.isEditing)
+  )
+  const editingId = useAuiState((s) => s.thread.messages[editingIndex]?.id)
+  return (
+    <>
+      <MainComposer
+        autoFocus={autoFocus}
+        direction={direction}
+        editing={editingId !== undefined}
+      />
+      {editingId !== undefined ? (
+        <MessageByIndexProvider index={editingIndex}>
+          <MessageEditComposer key={editingId} direction={direction} />
+        </MessageByIndexProvider>
+      ) : null}
+    </>
+  )
+}
+
+const MainComposer: FC<{
+  autoFocus: boolean
+  direction: LocaleDirection
+  editing: boolean
+}> = ({ autoFocus, direction, editing }) => {
   const voice = useVoiceContext()
   const voiceActive = useVoiceCaptureActive()
   const labels = useContext(ThreadLabelsContext)
@@ -1273,6 +1322,19 @@ const Composer: FC<{
     restoreDraft(stash)
   }, [composerEmpty, mainThreadId, restoreDraft])
 
+  // The Session an edit began in: focus comes back to this draft when that
+  // edit ends, never on a switch to another Session.
+  const editingInRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (editing) {
+      editingInRef.current = mainThreadId
+      return
+    }
+    if (editingInRef.current === mainThreadId)
+      inputRef.current?.focus({ preventScroll: true })
+    editingInRef.current = null
+  }, [editing, mainThreadId])
+
   const openHistorySearch = useCallback(
     (input: HTMLTextAreaElement) => {
       const state = aui.composer.getState()
@@ -1560,7 +1622,7 @@ const Composer: FC<{
 
   return (
     <ComposerPrimitive.Root
-      className="aui-composer-root relative -mx-2 flex w-[calc(100%+1rem)] flex-col @md:-mx-7 @md:w-[calc(100%+3.5rem)] @min-[64rem]/workspace:mx-0 @min-[64rem]/workspace:w-full"
+      className={COMPOSER_ROOT_CLASS}
       onSubmit={(event) => {
         event.preventDefault()
         submitOrdinary()
@@ -1704,14 +1766,15 @@ const Composer: FC<{
         render={
           <div
             data-slot="aui_composer-shell"
-            className={cn(
-              "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-(--thread-content-max-width) dark:bg-popover"
-            )}
+            className={COMPOSER_SHELL_CLASS}
+            hidden={editing}
           />
         }
       >
         <div className="contents" inert={voiceActive}>
-          <ThreadSlashCommands />
+          {/* The edit's input shares this popover root, so no command plugin
+              listens while an edit is open. */}
+          {editing ? null : <ThreadSlashCommands />}
           <ComposerAttachments />
         </div>
         <div
@@ -1721,7 +1784,7 @@ const Composer: FC<{
           <VoiceComposerField>
             <ComposerPrimitive.Input
               placeholder={labels.composerPlaceholder}
-              className="aui-composer-input max-h-36 min-w-0 flex-1 resize-none bg-transparent text-base leading-5 text-foreground/85 caret-primary outline-none placeholder:text-muted-foreground @min-[64rem]/workspace:max-h-48 @min-[64rem]/workspace:min-h-11 @min-[64rem]/workspace:w-full @min-[64rem]/workspace:px-3 @min-[64rem]/workspace:text-[15px] @min-[64rem]/workspace:leading-6"
+              className={COMPOSER_INPUT_CLASS}
               rows={1}
               autoFocus={autoFocus}
               enterKeyHint="enter"
@@ -1929,25 +1992,25 @@ const ComposerToolbar: FC<
             {!isRunning ? (
               <button
                 type="button"
-                className="aui-composer-send grid size-11 shrink-0 place-items-center rounded-full bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
+                className={COMPOSER_SEND_CLASS}
                 aria-label={labels.sendMessage}
                 disabled={!canSend}
                 onClick={onSend}
               >
-                <span className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground @min-[64rem]/workspace:contents">
+                <span className={COMPOSER_SEND_FACE_CLASS}>
                   <ArrowUpIcon className="aui-composer-send-icon size-4" />
                 </span>
               </button>
             ) : showQueue ? (
               <button
                 type="button"
-                className="aui-composer-send grid size-11 shrink-0 place-items-center rounded-full bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
+                className={COMPOSER_SEND_CLASS}
                 aria-label={labels.queueMessage}
                 disabled={!canSend}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={onSend}
               >
-                <span className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground @min-[64rem]/workspace:contents">
+                <span className={COMPOSER_SEND_FACE_CLASS}>
                   <ArrowUpIcon className="aui-composer-send-icon size-4" />
                 </span>
               </button>
@@ -2494,48 +2557,90 @@ const UserActionBar: FC = () => {
   )
 }
 
-const EditComposer: FC = () => {
+/**
+ * A user message being edited, shown in the main composer's place while that
+ * composer's draft waits hidden. An edit carries only its text: attachments and
+ * voice stay off, and a blank edit is never sent.
+ */
+const MessageEditComposer: FC<{ direction: LocaleDirection }> = ({
+  direction,
+}) => {
   const labels = useContext(ThreadLabelsContext)
+  const voiceLabels = useVoiceLabels()
   const messageRewind = useContext(MessageRewindContext)
   const isTouchPrimaryInput = useTouchPrimaryInput()
   const sourceId = useAuiState((state) => state.message.id)
+  const original = useAuiState((state) => getMessageText(state.message))
+  const blank = useAuiState((state) => !state.composer.text.trim())
   const aui = useAui()
   useEffect(() => {
     if (!messageRewind) return
     aui.composer.setRunConfig(messageRewind.runConfig(sourceId))
   }, [aui, messageRewind, sourceId])
   return (
-    <MessagePrimitive.Root
-      data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-2"
-    >
-      <ComposerPrimitive.Root className="aui-edit-composer-root ms-auto flex w-full max-w-[85%] cursor-text flex-col rounded-(--composer-radius) border border-border/60 bg-(--composer-bg) dark:border-muted-foreground/15">
-        <ComposerPrimitive.Input
-          className="aui-edit-composer-input min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base text-foreground outline-none"
-          autoFocus
-          enterKeyHint="enter"
-          submitMode={isTouchPrimaryInput ? "ctrlEnter" : "enter"}
-        />
-        <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
+    <ComposerPrimitive.Root className={COMPOSER_ROOT_CLASS}>
+      <div data-slot="aui_composer-shell" className={COMPOSER_SHELL_CLASS}>
+        <div className="flex min-w-0 items-center gap-2 ps-3 text-sm text-muted-foreground">
+          <PencilIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="shrink-0 font-medium text-foreground">
+            {labels.editingMessage}
+          </span>
+          <span className="min-w-0 flex-1 truncate" dir="auto">
+            {original}
+          </span>
           <ComposerPrimitive.Cancel
             render={
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 rounded-full px-3.5"
+              <TooltipIconButton
+                tooltip={labels.cancel}
+                className="size-8 shrink-0 rounded-full"
               />
             }
           >
-            {labels.cancel}
+            <XIcon />
           </ComposerPrimitive.Cancel>
-          <ComposerPrimitive.Send
-            render={<Button size="sm" className="h-8 rounded-full px-3.5" />}
-          >
-            {labels.update}
-          </ComposerPrimitive.Send>
         </div>
-      </ComposerPrimitive.Root>
-    </MessagePrimitive.Root>
+        <div
+          data-slot="aui_composer-field"
+          className="flex min-w-0 items-center px-3"
+        >
+          <ComposerPrimitive.Input
+            className={COMPOSER_INPUT_CLASS}
+            rows={1}
+            autoFocus
+            enterKeyHint="enter"
+            submitMode={isTouchPrimaryInput ? "ctrlEnter" : "enter"}
+            addAttachmentOnPaste={false}
+            onKeyDown={(event) => {
+              // The edit holds the message's attachments unseen, which would let
+              // a blank edit send, and the provider would resend the old text.
+              // Assistant UI's own Enter handling runs after this one.
+              if (event.key === "Enter" && !aui.composer.getState().text.trim())
+                event.preventDefault()
+            }}
+            aria-label={labels.editingMessage}
+          />
+        </div>
+        <div
+          data-slot="aui_composer-toolbar"
+          className="aui-composer-action-wrapper flex w-full min-w-0 items-center gap-1"
+        >
+          <ComposerAddAttachment disabled />
+          <ComposerFeatureBar direction={direction} />
+          <div className="relative ms-auto flex shrink-0 items-center gap-1.5">
+            <VoiceComposerControl reason={voiceLabels.editing} />
+            <ComposerPrimitive.Send
+              disabled={blank}
+              aria-label={labels.update}
+              render={<button type="button" className={COMPOSER_SEND_CLASS} />}
+            >
+              <span className={COMPOSER_SEND_FACE_CLASS}>
+                <CheckIcon className="size-4" />
+              </span>
+            </ComposerPrimitive.Send>
+          </div>
+        </div>
+      </div>
+    </ComposerPrimitive.Root>
   )
 }
 

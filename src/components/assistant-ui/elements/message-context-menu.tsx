@@ -11,7 +11,13 @@ import {
   TextSelectIcon,
   Volume2Icon,
 } from "lucide-react"
-import { useEffect, useRef, useState, type ReactElement } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react"
 
 import { usePendingInteractionGate } from "@/components/runtime-interactions/pending-interaction-context"
 import {
@@ -74,6 +80,25 @@ function hasSelectionInside(root: HTMLElement | null) {
 }
 
 /**
+ * Edit opens the message in the composer, whose input takes focus, so the
+ * close Edit causes leaves focus there instead of returning it to the message.
+ * `editClosed` reports, once, whether Edit closed the menu.
+ */
+function useEditKeepsFocus(edit: () => void) {
+  const chosen = useRef(false)
+  const beginEdit = useCallback(() => {
+    chosen.current = true
+    edit()
+  }, [edit])
+  const editClosed = useCallback(() => {
+    const closedByEdit = chosen.current
+    chosen.current = false
+    return closedByEdit
+  }, [])
+  return { beginEdit, editClosed }
+}
+
+/**
  * Offers a message's own actions where a hover action bar cannot be reached: a
  * long press on touch, a right click with a pointer. The action bar keeps every
  * item it already has, and this menu offers the same ones in the same states.
@@ -103,6 +128,7 @@ export function MessageContextMenu({
   const copy = useMessageCopy()
   const retry = useMessageRetry(messageRewind)
   const edit = useMessageEdit()
+  const { beginEdit, editClosed } = useEditKeepsFocus(edit.edit)
   const voice = useVoiceMessageAction()
   const popup = useMenuPopupMount(() => {
     const active = rootRef.current?.ownerDocument.activeElement
@@ -178,7 +204,7 @@ export function MessageContextMenu({
       icon: <PencilIcon aria-hidden="true" />,
       disabled: edit.disabled,
       disabledReason: pendingReason,
-      onSelect: edit.edit,
+      onSelect: beginEdit,
     })
   }
   if (touchPress)
@@ -228,7 +254,9 @@ export function MessageContextMenu({
         <MenuPopup
           entries={{ items }}
           dir={dir}
-          finalFocus={() => returnFocusTo.current ?? rootRef.current}
+          finalFocus={() =>
+            editClosed() ? false : (returnFocusTo.current ?? rootRef.current)
+          }
         />
       ) : null}
     </ContextMenu.Root>
