@@ -81,11 +81,21 @@ export function annotateKeyboardRegions(root: ParentNode) {
   if (transcript && !transcript.hasAttribute("tabindex")) {
     transcript.tabIndex = -1
   }
-  const composer = root.querySelector<HTMLElement>(
-    '[data-slot="aui_composer-shell"]'
-  )
-  composer?.setAttribute("data-keyboard-region", "composer")
-  composer?.setAttribute("data-keyboard-composer", "true")
+  // A message being edited shows its own shell in place of the main one,
+  // which hides; the composer is the shell on show, and only that one.
+  const shells = [
+    ...root.querySelectorAll<HTMLElement>('[data-slot="aui_composer-shell"]'),
+  ]
+  const composer = shells.find((shell) => !shell.hidden)
+  for (const shell of shells) {
+    if (shell === composer) {
+      shell.setAttribute("data-keyboard-region", "composer")
+      shell.setAttribute("data-keyboard-composer", "true")
+    } else {
+      shell.removeAttribute("data-keyboard-region")
+      shell.removeAttribute("data-keyboard-composer")
+    }
+  }
 }
 
 /** Keep markers correct when Assistant UI mounts or remounts its slots later. */
