@@ -94,9 +94,11 @@ export function DocxPreview({
   const send = () => {
     if (posted.current) return
     posted.current = true
-    void blob.arrayBuffer().then((bytes) =>
-      frame.current?.contentWindow?.postMessage({ bytes }, "*", [bytes])
-    )
+    void blob
+      .arrayBuffer()
+      .then((bytes) =>
+        frame.current?.contentWindow?.postMessage({ bytes }, "*", [bytes])
+      )
   }
 
   if (failed) return <Status>{labels.noPreview}</Status>

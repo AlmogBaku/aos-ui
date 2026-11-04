@@ -113,9 +113,7 @@ export function DataTable({
         </tbody>
       </table>
       {note ? (
-        <p className="m-0 border-t p-3 text-xs text-muted-foreground">
-          {note}
-        </p>
+        <p className="m-0 border-t p-3 text-xs text-muted-foreground">{note}</p>
       ) : null}
     </div>
   )
