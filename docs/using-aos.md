@@ -97,7 +97,7 @@ The gateway serves the file. The view reads it by calling `readServerResource` w
 
 Hermes reads through its dashboard file API. OpenClaw reads through its Control UI media route. OpenCode cannot yet serve files; the card shows "Can't reach this file."
 
-An Artifact from a `MEDIA:` line (Hermes and OpenClaw) or a trusted native delivery tool such as Hermes text-to-speech appears in the conversation as an inline image, audio, or video, or as a download link for other types. Publishing the same path again lists it once in the inspector's Artifacts list, at its latest publication. Paths mentioned in prose are not published.
+An Artifact from a `MEDIA:` line in the Agent's reply (Hermes and OpenClaw) appears in the conversation as an inline image, audio, or video, or as a download link for other types. Publishing the same path again lists it once in the inspector's Artifacts list, at its latest publication. Paths mentioned in prose are not published, and neither is a file a tool's result names, such as Hermes text-to-speech audio, until the Agent delivers it.
 
 ## Use MCP Apps
 

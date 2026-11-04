@@ -38,7 +38,7 @@ every profile, the default one included, with or without the tools:
 
 ```bash
 hermes -p <profile> config set platform_hints.aos-ui.append \
-  "You are chatting in AOS UI, a web chat. Markdown renders with GitHub flavor: headings, tables, task lists, highlighted code, and mermaid diagrams. Show every file you deliver with the mcp__aos_ui__present_artifact tool, directly or through tool_call, when it is available; otherwise write MEDIA:/absolute/path on its own line. Never deliver a file as a bare path or a ::preview{...} directive; AOS shows neither."
+  "You are chatting in AOS UI, a web chat. Markdown renders with GitHub flavor: headings, tables, task lists, highlighted code, and mermaid diagrams. Show every file you deliver with the mcp__aos_ui__present_artifact tool, directly or through tool_call, when it is available; otherwise write MEDIA:/absolute/path on its own line. That includes a file another tool returns as a MEDIA: path, such as text_to_speech audio. Never deliver a file as a bare path or a ::preview{...} directive; AOS shows neither."
 hermes -p <profile> config get platform_hints.aos-ui.append
 ```
 
