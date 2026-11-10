@@ -1243,19 +1243,22 @@ export function WorkspaceShell({
     onConversationObscuredChange?.(modalDrawerOpen)
     return () => onConversationObscuredChange?.(false)
   }, [modalDrawerOpen, onConversationObscuredChange])
-  const activityButton = (
-    <ActivityBell
-      dictionary={dictionary}
-      attention={activity?.attention ?? noAttention}
-      ring={activity?.ring ?? 0}
-      open={activityOpen}
-      onOpen={() => {
-        dispatchMobileNavigator({ type: "DISMISS" })
-        activity?.dismissNotice()
-        setActivityOpen(true)
-      }}
-    />
-  )
+  const openActivity = () => {
+    dispatchMobileNavigator({ type: "DISMISS" })
+    activity?.dismissNotice()
+    setActivityOpen(true)
+  }
+  // One bell per layout. Closing Activity returns focus to the one on screen,
+  // since the notice that may have opened it is gone by then.
+  const headerBellRef = useRef<HTMLButtonElement>(null)
+  const railBellRef = useRef<HTMLButtonElement>(null)
+  const activityBellProps = {
+    dictionary,
+    attention: activity?.attention ?? noAttention,
+    ring: activity?.ring ?? 0,
+    open: activityOpen,
+    onOpen: openActivity,
+  }
   const selectedAgent =
     agents.find((agent) => agent.id === selectedAgentId) ?? null
   const selectedNavigation = useMemo<AgentSessionNavigation | null>(() => {
@@ -1652,7 +1655,7 @@ export function WorkspaceShell({
                 {dictionary.productName}
               </span>
             )}
-            {activityButton}
+            <ActivityBell ref={headerBellRef} {...activityBellProps} />
             {environmentLabel ? (
               <span className={styles.environmentLabel}>
                 {environmentLabel}
@@ -1671,7 +1674,9 @@ export function WorkspaceShell({
           >
             <AgentsPanel
               {...agentsPanelProps}
-              activityButton={activityButton}
+              activityButton={
+                <ActivityBell ref={railBellRef} {...activityBellProps} />
+              }
               commandsHost
             />
           </aside>
@@ -2044,6 +2049,7 @@ export function WorkspaceShell({
           <ActivityNotice
             notice={activity?.notice ?? null}
             dictionary={dictionary}
+            onOpen={openActivity}
             onDismiss={() => activity?.dismissNotice()}
           />
         ) : null}
@@ -2057,6 +2063,7 @@ export function WorkspaceShell({
             title={dictionary.activity.title}
             closeLabel={dictionary.actions.closePanel}
             onClose={() => setActivityOpen(false)}
+            returnFocusRef={desktopLayout ? railBellRef : headerBellRef}
           >
             <ActivityPanel
               activity={activity}

@@ -10,7 +10,7 @@ import type {
   ActivityNoticeState,
   ActivityView,
 } from "./use-activity-coordinator"
-import { useId, useLayoutEffect, useRef, useState } from "react"
+import { useId, useLayoutEffect, useRef, useState, type Ref } from "react"
 import { ArrowLeft, Bell, SlidersHorizontal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { attentionLabels, type AttentionLevel } from "@/lib/attention-level"
@@ -42,12 +42,14 @@ export type BrowserSettingsView = {
   onInstall: () => void
 }
 export function ActivityBell({
+  ref,
   dictionary,
   attention,
   ring,
   open,
   onOpen,
 }: {
+  ref?: Ref<HTMLButtonElement>
   dictionary: Dictionary
   attention: AttentionLevel
   /** Each new value swings the bell once; the value it mounts with does not. */
@@ -58,6 +60,7 @@ export function ActivityBell({
   const [mountedRing] = useState(ring)
   return (
     <Button
+      ref={ref}
       variant="ghost"
       size="icon"
       type="button"
@@ -280,20 +283,32 @@ export function ActivityPanel({
 export function ActivityNotice({
   notice,
   dictionary,
+  onOpen,
   onDismiss,
 }: {
   notice: ActivityNoticeState | null
   dictionary: Dictionary
+  /** Opens the Activity drawer, where the counted Sessions wait. */
+  onOpen: () => void
   onDismiss: () => void
 }) {
   if (!notice) return null
   return (
     <div className={styles.notice} data-activity-notice="true">
       <p role={notice.urgent ? "alert" : "status"} aria-atomic="true">
-        {notice.urgent
-          ? dictionary.activity.urgentNotice
-          : dictionary.activity.routineNotice}{" "}
-        <span className={styles.noticeCount}>({notice.count})</span>
+        <Button
+          className="h-auto min-h-8 py-1 text-start font-normal whitespace-normal"
+          variant="ghost"
+          aria-haspopup="dialog"
+          onClick={onOpen}
+        >
+          <span>
+            {notice.urgent
+              ? dictionary.activity.urgentNotice
+              : dictionary.activity.routineNotice}{" "}
+            <span className={styles.noticeCount}>({notice.count})</span>
+          </span>
+        </Button>
       </p>
       <Button
         variant="ghost"

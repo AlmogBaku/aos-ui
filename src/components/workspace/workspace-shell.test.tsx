@@ -22,6 +22,7 @@ import {
   type WorkspaceSession,
 } from "./workspace-shell"
 import type { BrowserSettingsView } from "./activity"
+import type { ActivityView } from "./use-activity-coordinator"
 import { defaultBrowserPreferences } from "@/lib/notifications/policy"
 import { attentionLevel } from "@/lib/attention-level"
 
@@ -41,6 +42,25 @@ const askSettings: BrowserSettingsView = {
   onAcceptAsk: vi.fn(),
   onDeclineAsk: vi.fn(),
   onInstall: vi.fn(),
+}
+
+/** Activity with an urgent notice up for two Sessions. */
+function noticeActivity(dismissNotice = () => {}): ActivityView {
+  return {
+    items: [],
+    attention: { count: 2, waiting: 0, failed: 0, top: "unread" },
+    ring: 0,
+    inbox: { waiting: [], unread: [], muted: [] },
+    readNow: () => new Date(),
+    notice: { count: 2, urgent: true },
+    error: false,
+    supported: true,
+    openActivity: async () => false,
+    openRow: async () => false,
+    markRowRead: () => {},
+    markAllRead: () => {},
+    dismissNotice,
+  }
 }
 
 afterEach(() => {
@@ -1428,24 +1448,7 @@ describe("WorkspaceShell", () => {
   })
 
   it("offers the notification ask above the conversation, alongside any notice", () => {
-    renderShell({
-      browserSettings: askSettings,
-      activity: {
-        items: [],
-        attention: { count: 2, waiting: 0, failed: 0, top: "unread" },
-        ring: 0,
-        inbox: { waiting: [], unread: [], muted: [] },
-        readNow: () => new Date(),
-        notice: { count: 2, urgent: true },
-        error: false,
-        supported: true,
-        openActivity: async () => false,
-        openRow: async () => false,
-        markRowRead: () => {},
-        markAllRead: () => {},
-        dismissNotice: () => {},
-      },
-    })
+    renderShell({ browserSettings: askSettings, activity: noticeActivity() })
 
     const ask = screen.getByRole("region", { name: en.activity.askTitle })
     expect(ask).toBeVisible()
@@ -1462,5 +1465,27 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       en.activity.urgentNotice
     )
+  })
+
+  it("opens Activity from the notice, clears it, and returns focus to the bell", async () => {
+    const user = userEvent.setup()
+    const dismissNotice = vi.fn()
+    renderShell({ activity: noticeActivity(dismissNotice) })
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+
+    await user.click(
+      within(screen.getByRole("alert")).getByRole("button", {
+        name: `${en.activity.urgentNotice} (2)`,
+      })
+    )
+
+    expect(screen.getByRole("dialog", { name: "Activity" })).toBeVisible()
+    expect(dismissNotice).toHaveBeenCalledOnce()
+    // The phone header's bell leads the DOM and is the one this width shows.
+    await user.keyboard("{Escape}")
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    expect(
+      screen.getAllByRole("button", { name: "Activity, 2 unread" })[0]
+    ).toHaveFocus()
   })
 })

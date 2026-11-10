@@ -309,6 +309,7 @@ describe("Activity coordinator", () => {
       <ActivityNotice
         notice={result.current.notice}
         dictionary={en}
+        onOpen={() => {}}
         onDismiss={() => {}}
       />
     )
@@ -565,6 +566,7 @@ describe("Activity presentation", () => {
       <ActivityNotice
         notice={{ count: 1, urgent: false }}
         dictionary={en}
+        onOpen={() => {}}
         onDismiss={() => {}}
       />
     )
