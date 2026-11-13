@@ -107,7 +107,9 @@ default profile. Give the creator the kit's build path too: link
 links under the `capability-lifecycle` entry with `aos-cap record`. When the
 household also runs kb, link `kb-recall` and `kb-route` the same way, recorded
 under the `kb` entry, so the creator checks what the operator's knowledge bases
-already hold before it asks. Add a household rule naming the creator and every
+already hold before it asks. `aos-cap record` rewrites a whole entry, so
+re-record each one complete: start from `aos-cap show <entry>` and add the new
+links to every artifact and link already there. Add a household rule naming the creator and every
 one of these links to the root `MOD.md` through `capability-evolve`, so the
 kit's upgrade keeps them. Re-record an entry only while `aos-cap verify` reports
 it clean: recording re-hashes its files, and a hand-edit would become the new
