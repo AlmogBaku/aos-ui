@@ -112,9 +112,11 @@ re-record each one complete: start from `aos-cap show <entry>`, pass back every
 field it prints (`--version`, `--source-root`, each `--artifact`, `--link`,
 `--uses-link`, `--job`, `--config-key`, `--env-line` and `--script`), and add
 the new links. A field left out is silently dropped, and `verify` checks only
-artifacts and links. Add a household rule naming the creator and every
-one of these links to the root `MOD.md` through `capability-evolve`, so the
-kit's upgrade keeps them. Re-record an entry only while `aos-cap verify` reports
+artifacts and links. With capability-lifecycle 0.6.3 or later the kit applies
+and keeps these links itself (its Hermes cheat-sheet's standing links for the
+creator), so they need no household rule. With an older kit, add one to the root
+`MOD.md` through `capability-evolve`, naming the creator and every one of these
+links, so that upgrades keep them. Re-record an entry only while `aos-cap verify` reports
 it clean: recording re-hashes its files, and a hand-edit would become the new
 baseline. Without the kit, skip this: the creator builds with the `hermes` CLI
 alone.
