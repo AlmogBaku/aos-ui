@@ -94,6 +94,18 @@ as `'\''`.
    `hermes -p <id> config get display.tool_progress`, which prints `all` or
    nothing.
 
+10. Smoke-test with a clean environment. Run from inside a Hermes session,
+   `hermes -p <id> chat -q …` inherits that session's `HERMES_*` variables and fails
+   with `invalid_params`, even for profiles that work. Use
+   `env -i HOME=$HOME PATH=$PATH USER=$USER LANG=C.UTF-8 TERM=dumb hermes -p <id> chat -q '<ask>' -Q`.
+   When you test outbound steps (email, invites), put a PATH shim in front that logs and
+   refuses the send verb. The shim proves the approval gate held and that the send
+   command is well-formed, without anything leaving the machine.
+11. OAuth MCP servers that only offer browser PKCE (for example Riverside) cannot finish
+   from the agent: `mcp add --auth oauth` in a non-interactive shell refuses to save, so
+   set `mcp_servers.<name>.url` and `.auth oauth` through `config set`, and have the
+   operator run `hermes -p <id> mcp login <name>` in their own terminal.
+
 A new profile is visible in AOS by default. `hermes profile create` tells a
 running gateway to serve it; if AOS does not list it within a minute, tell the
 operator to restart the Hermes gateway.
