@@ -342,6 +342,13 @@ export const en = {
   turnFailed: "This turn did not complete.",
   turnReturned:
     "Your message was not saved, so it is back in the message box to send again.",
+  attachmentLimits: {
+    tooLarge:
+      '"{name}" is too large to send. A message can carry up to {megabytes} MB of files.',
+    tooLargeTogether:
+      "These files are too large to send together. A message can carry up to {megabytes} MB of files.",
+    tooMany: "A message can carry up to {count} files.",
+  },
   turnStopped: {
     length: "The answer stopped at the length limit.",
     contentFilter: "The model declined to answer.",

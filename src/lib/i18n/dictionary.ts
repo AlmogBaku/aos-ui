@@ -285,6 +285,15 @@ export type Dictionary = {
   turnFailed: string
   /** Said under a failure whose message the provider never kept. */
   turnReturned: string
+  /** Why a turn's files were not sent, said above `turnReturned`. */
+  attachmentLimits: {
+    /** One file alone is over; `{name}` and `{megabytes}` are substituted. */
+    tooLarge: string
+    /** The files together are over; `{megabytes}` is substituted. */
+    tooLargeTogether: string
+    /** `{count}` is substituted. */
+    tooMany: string
+  }
   /** The warning System Notice under a turn the model ended early. */
   turnStopped: {
     length: string
