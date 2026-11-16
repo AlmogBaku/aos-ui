@@ -332,7 +332,7 @@ export const en = {
       "This run produced more events than the workspace can safely buffer.",
     HGW_COMMAND_WITH_ATTACHMENTS: "Commands cannot be sent with attachments.",
     HGW_REWIND_CONFLICT:
-      "This response can no longer be regenerated because the Session history changed.",
+      "This message can no longer be edited or retried because the Session history changed.",
     HGW_COMMAND_UNSUPPORTED: "This command is not available here.",
     temporarily_unavailable:
       "The service is temporarily unavailable. Please try again.",

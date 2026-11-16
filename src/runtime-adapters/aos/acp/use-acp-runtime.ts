@@ -22,6 +22,7 @@ import type {
   ThreadComposerRuntime,
   ThreadMessage,
   ThreadMessageLike,
+  ThreadRuntime,
 } from "@assistant-ui/core"
 import {
   createRuntimeExtras,
@@ -1153,11 +1154,31 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
   useEffect(
     () =>
       controller.handBackTo((message) =>
-        returnToComposer(runtime.thread.composer, message)
+        restoreUnsent(runtime.thread, message)
       ),
     [controller, runtime]
   )
   return runtime
+}
+
+/**
+ * Puts a message the provider never kept back where it was written. An edit
+ * reopens on the message it edits, so sending again edits it once more instead
+ * of adding it as a new turn, unless the thread no longer shows that message
+ * or another edit is open, which it would end.
+ */
+function restoreUnsent(thread: ThreadRuntime, message: AppendMessage) {
+  const { sourceId } = message
+  const shown = thread.getState().messages.map(({ id }) => id)
+  if (
+    sourceId === null ||
+    !shown.includes(sourceId) ||
+    shown.some((id) => thread.getMessageById(id).composer.getState().isEditing)
+  )
+    return returnToComposer(thread.composer, message)
+  const edit = thread.getMessageById(sourceId).composer
+  edit.beginEdit()
+  edit.setText(joinedText([message]))
 }
 
 /**
