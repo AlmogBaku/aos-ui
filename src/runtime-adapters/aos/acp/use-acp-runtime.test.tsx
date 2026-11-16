@@ -837,33 +837,65 @@ describe("useAcpRuntime", () => {
     expect(stageAttachments).not.toHaveBeenCalled()
   })
 
-  it("hands an edit the gateway refused back to the composer, ahead of the draft", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(textUpdate("user_message", "u1", "Ship it"))
-      fake.emit(textUpdate("agent_message", "a1", "Wrong answer"))
-      result.current.thread.composer.setText("Meanwhile")
-    })
-    fake.prompt.mockRejectedValueOnce(
-      Object.assign(new Error("unavailable"), {
-        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
+  it.each([
+    {
+      meanwhile: "nothing else, onto the message it edits",
+      opened: undefined,
+      editing: ["u1"],
+      composer: "Meanwhile",
+    },
+    {
+      meanwhile: "another edit, to the composer ahead of the draft",
+      opened: "u2",
+      editing: ["u2"],
+      composer: "Ship it now\n\nMeanwhile",
+    },
+  ])(
+    "hands an edit the gateway refused back while the operator opened $meanwhile",
+    async ({ opened, editing, composer }) => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake)
+      const { thread } = result.current
+      act(() => {
+        fake.emit(textUpdate("user_message", "u1", "Ship it"))
+        fake.emit(textUpdate("agent_message", "a1", "Wrong answer"))
+        fake.emit(textUpdate("user_message", "u2", "And test it"))
+        fake.emit(textUpdate("agent_message", "a2", "Tested"))
+        thread.composer.setText("Meanwhile")
       })
-    )
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Ship it now" }],
-        parentId: null,
-        sourceId: "u1",
-      })
-    })
-    await waitFor(() => {
-      expect(result.current.thread.composer.getState().text).toBe(
-        "Ship it now\n\nMeanwhile"
+      if (opened) act(() => thread.getMessageById(opened).composer.beginEdit())
+      fake.prompt.mockRejectedValueOnce(
+        Object.assign(new Error("unavailable"), {
+          code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
+        })
       )
-    })
-  })
+      await act(async () => {
+        thread.append({
+          role: "user",
+          content: [{ type: "text", text: "Ship it now" }],
+          parentId: null,
+          sourceId: "u1",
+        })
+      })
+      await waitFor(() => {
+        expect(thread.composer.getState().text).toBe(composer)
+      })
+      const open = ["u1", "u2"].filter(
+        (id) => thread.getMessageById(id).composer.getState().isEditing
+      )
+      expect(open).toEqual(editing)
+      if (!opened)
+        expect(thread.getMessageById("u1").composer.getState().text).toBe(
+          "Ship it now"
+        )
+      expect(visible(result.current).map(({ id }) => id)).toEqual([
+        "u1",
+        "a1",
+        "u2",
+        "a2",
+      ])
+    }
+  )
 
   it("keeps a prompt stopped before any reply, since the provider saved it", async () => {
     const fake = createFakeConnection()
@@ -991,39 +1023,58 @@ describe("useAcpRuntime", () => {
       }
     )
 
-    it("brings back the turns a failed edit replaced, and the edit to the composer", async () => {
-      const { fake, result } = await mountWithHistory()
-      await act(async () => {
-        result.current.thread.append({
-          role: "user",
-          content: [{ type: "text", text: "Ship it now" }],
-          parentId: null,
-          sourceId: "u1",
+    it.each([
+      {
+        provider: "kept the edited turn, onto that turn",
+        replayed: HISTORY,
+        thread: ["u1", "a1"],
+        edit: { isEditing: true, text: "Ship it now" },
+        composer: "",
+      },
+      {
+        provider: "dropped the edited turn too, into the composer",
+        replayed: [textUpdate("agent_message", "a0", "Hello")],
+        thread: ["a0"],
+        edit: undefined,
+        composer: "Ship it now",
+      },
+    ])(
+      "reloads what the provider kept after a failed edit, and hands the edit back when it $provider",
+      async ({ replayed, thread, edit, composer }) => {
+        const { fake, result } = await mountWithHistory()
+        await act(async () => {
+          result.current.thread.append({
+            role: "user",
+            content: [{ type: "text", text: "Ship it now" }],
+            parentId: null,
+            sourceId: "u1",
+          })
         })
-      })
-      await waitFor(() => {
-        expect(fake.prompt).toHaveBeenCalledWith(
-          SESSION_ID,
-          [{ type: "text", text: "Ship it now" }],
-          expect.objectContaining({ rewindSourceId: "provider-u1" })
-        )
-      })
-      await fail(fake)
-      await waitFor(() => {
-        expect(visible(result.current)).toEqual([
-          { id: "u1", role: "user", text: "Ship it" },
-          { id: "a1", role: "assistant", text: "On it" },
-        ])
-      })
-      await waitFor(() => {
-        expect(statusOf(result.current, 1)).toEqual({
-          type: "incomplete",
-          reason: "error",
-          error: { ...FAILURE, returned: true },
+        await waitFor(() => {
+          expect(fake.prompt).toHaveBeenCalledWith(
+            SESSION_ID,
+            [{ type: "text", text: "Ship it now" }],
+            expect.objectContaining({ rewindSourceId: "provider-u1" })
+          )
         })
-      })
-      expect(result.current.thread.composer.getState().text).toBe("Ship it now")
-    })
+        fake.replayOnResume(replayed)
+        await fail(fake)
+        // The failure names the message as returned once it is handed back.
+        await waitFor(() => {
+          expect(statusOf(result.current, thread.length - 1)).toEqual({
+            type: "incomplete",
+            reason: "error",
+            error: { ...FAILURE, returned: true },
+          })
+        })
+        expect(visible(result.current).map(({ id }) => id)).toEqual(thread)
+        expect(result.current.thread.composer.getState().text).toBe(composer)
+        if (edit)
+          expect(
+            result.current.thread.getMessageById("u1").composer.getState()
+          ).toMatchObject(edit)
+      }
+    )
 
     it("does not reload a failure the replay itself restates", async () => {
       const fake = createFakeConnection()
