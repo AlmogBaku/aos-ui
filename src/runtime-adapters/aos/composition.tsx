@@ -46,7 +46,7 @@ const compositionLog = () => (_compositionLog ??= tabAcpLogger())
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
-  stagedAttachmentOf,
+  stageComposedAttachments,
 } from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
 import { AosMcpAppAdapter } from "./aos-mcp-apps"
@@ -197,21 +197,13 @@ function ReadyAosRuntimeProvider({
   // The Session owns the batch, so staging waits for the Session a draft's
   // first turn creates; the prompt then links what the gateway accepted.
   const stageAttachments = useCallback(
-    async (sessionId: string, attachments: readonly CompleteAttachment[]) => {
-      const { stageId } = await client.stageAttachments(
-        sessionId,
-        attachments.map(stagedAttachmentOf)
-      )
-      return {
-        stageId,
-        attachments: attachments.map(({ id, name, contentType }) => ({
-          id,
-          name,
-          ...(contentType === undefined ? {} : { contentType }),
-        })),
-      }
-    },
-    [client]
+    (sessionId: string, attachments: readonly CompleteAttachment[]) =>
+      stageComposedAttachments(
+        attachments,
+        (staged) => client.stageAttachments(sessionId, staged),
+        runtimeDictionaries[locale].attachmentLimits
+      ),
+    [client, locale]
   )
   const runtimeHook = useCallback(
     function useAosThreadRuntime() {

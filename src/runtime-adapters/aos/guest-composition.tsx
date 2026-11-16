@@ -75,7 +75,7 @@ import type { DeploymentOrigins } from "@shared/lane-origins"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
-  stagedAttachmentOf,
+  stageComposedAttachments,
 } from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
 import { AosMcpAppAdapter } from "./aos-mcp-apps"
@@ -444,21 +444,13 @@ function ReadyGuestAosSurface({
   // The invited Session owns the batch, so its bytes are staged per turn and
   // the prompt links whatever the gateway accepted.
   const stageAttachments = useCallback(
-    async (staged: string, composed: readonly CompleteAttachment[]) => {
-      const { stageId } = await rest.stageAttachments(
-        staged,
-        composed.map(stagedAttachmentOf)
-      )
-      return {
-        stageId,
-        attachments: composed.map(({ id, name, contentType }) => ({
-          id,
-          name,
-          ...(contentType === undefined ? {} : { contentType }),
-        })),
-      }
-    },
-    [rest]
+    (staged: string, composed: readonly CompleteAttachment[]) =>
+      stageComposedAttachments(
+        composed,
+        (batch) => rest.stageAttachments(staged, batch),
+        dictionaries[selectedLocale].attachmentLimits
+      ),
+    [rest, selectedLocale]
   )
   const mediaAdapters = useMemo(
     () =>

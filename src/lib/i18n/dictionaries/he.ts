@@ -336,6 +336,13 @@ export const he = {
   turnFailed: "התור הזה לא הושלם.",
   turnReturned:
     "ההודעה שלכם לא נשמרה, ולכן היא חזרה לתיבת ההודעה כדי שתוכלו לשלוח אותה שוב.",
+  attachmentLimits: {
+    tooLarge:
+      'הקובץ "{name}" גדול מדי לשליחה. הודעה אחת יכולה לכלול קבצים בגודל כולל של עד {megabytes} MB.',
+    tooLargeTogether:
+      "הקבצים האלה גדולים מדי לשליחה יחד. הודעה אחת יכולה לכלול קבצים בגודל כולל של עד {megabytes} MB.",
+    tooMany: "אפשר לצרף עד {count} קבצים להודעה אחת.",
+  },
   turnStopped: {
     length: "התשובה נעצרה במגבלת האורך.",
     contentFilter: "המודל סירב לענות.",
