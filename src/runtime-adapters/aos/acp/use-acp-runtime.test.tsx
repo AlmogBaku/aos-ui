@@ -190,6 +190,7 @@ function createFakeConnection(
     prompt,
     cancel,
     setConfigOption: unused,
+    closeSession: unused,
     deleteSession: unused,
     updateSession: unused,
     steer: unused,
