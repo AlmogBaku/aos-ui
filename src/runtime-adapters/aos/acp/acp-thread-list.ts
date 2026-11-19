@@ -33,8 +33,11 @@ export type AcpThreadListConnection = Pick<
 
 export type AcpThreadListOptions = {
   connection: AcpThreadListConnection
-  /** Associates Assistant UI's optimistic local id with the chosen Agent. */
-  drafts: AosDraftRegistry
+  /**
+   * Associates Assistant UI's optimistic local id with the chosen Agent, and
+   * hands over the Session made as the draft opened.
+   */
+  drafts: Pick<AosDraftRegistry, "agentFor" | "claim">
   /** The title tracked from `session_info_update`, for `generateTitle`. */
   titleFor: (remoteId: string) => string | undefined
   /** Resolves Agents for Sessions this adapter has not listed itself. */
@@ -123,17 +126,25 @@ export function createAcpThreadListAdapter({
     if (metadata) listed.set(remoteId, { ...metadata, ...change })
   }
 
-  async function create(sessionId: string, agentId: string) {
-    const existing = initializations.get(sessionId)
+  /**
+   * The Session a draft's first message runs in: the one made as the draft
+   * opened, or, where that create failed, a new one.
+   */
+  async function create(localId: string, agentId: string) {
+    const existing = initializations.get(localId)
     if (existing) return existing
-    const initialization = connection
-      .newSession({ agentId })
-      .then(({ sessionId }) => {
+    const initialization = drafts
+      .claim(localId)
+      .then(
+        async (backing) =>
+          backing ?? (await connection.newSession({ agentId })).sessionId
+      )
+      .then((sessionId) => {
         agents.set(sessionId, agentId)
         return { remoteId: sessionId }
       })
-      .finally(() => initializations.delete(sessionId))
-    initializations.set(sessionId, initialization)
+      .finally(() => initializations.delete(localId))
+    initializations.set(localId, initialization)
     return initialization
   }
 
