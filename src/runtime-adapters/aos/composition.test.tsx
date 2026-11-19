@@ -261,7 +261,8 @@ function createGatewayAgent({
             sessionId,
             update,
           })
-      // The Session's capabilities and row follow the answer as updates.
+      // The Session's lists ride in the answer; its capabilities and row also
+      // follow it as updates.
       setTimeout(() => {
         for (const update of [
           {
@@ -281,7 +282,11 @@ function createGatewayAgent({
             update,
           })
       }, 0)
-      return { _meta: { [HGW_META_KEY]: {} } }
+      return {
+        configOptions: configs.get(sessionId),
+        availableCommands: [AGENT_COMMAND],
+        _meta: { [HGW_META_KEY]: { capabilities: capabilities({ rewind }) } },
+      }
     })
     .onRequest(methods.agent.session.new, ({ params }) => {
       if (unavailable.creates > 0) {
