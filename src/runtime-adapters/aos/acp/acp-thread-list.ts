@@ -1,5 +1,5 @@
 import type { RemoteThreadListAdapter } from "@assistant-ui/react"
-import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2"
+import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   HGW_META_KEY,

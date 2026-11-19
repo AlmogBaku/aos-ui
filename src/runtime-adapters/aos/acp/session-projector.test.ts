@@ -4,7 +4,7 @@ import type {
   StateUpdate,
   SubagentUpdate,
   ToolCallContent,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { ToolCallMessagePart } from "@assistant-ui/core"
 import { describe, expect, it } from "vitest"
 
@@ -1202,7 +1202,9 @@ describe("applyUpdate Session metadata", () => {
       [
         {
           sessionUpdate: "available_commands_update",
-          availableCommands: [{ name: "plan", description: "Plan the work" }],
+          availableCommands: [
+            { type: "command", name: "plan", description: "Plan the work" },
+          ],
         },
       ],
     ])
@@ -1217,7 +1219,7 @@ describe("applyUpdate Session metadata", () => {
       },
     ])
     expect(projected.commands).toEqual([
-      { name: "plan", description: "Plan the work" },
+      { type: "command", name: "plan", description: "Plan the work" },
     ])
   })
 

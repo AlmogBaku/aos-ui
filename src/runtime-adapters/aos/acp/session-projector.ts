@@ -4,7 +4,7 @@ import {
   type SessionConfigOption,
   SessionUpdate,
   type ToolCallLocation,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { MessageStatus, ThreadMessageLike } from "@assistant-ui/core"
 import type { z } from "zod"
 

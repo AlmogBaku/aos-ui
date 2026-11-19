@@ -5,7 +5,7 @@ import {
   type AgentContext,
   type PromptRequest,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import {
   act,
   cleanup,

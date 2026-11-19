@@ -720,7 +720,12 @@ function installAcpStub(script: AcpScript) {
       })
       this.update({
         sessionUpdate: "available_commands_update",
-        availableCommands: capabilities.workspace.slashCommands.commands,
+        availableCommands: capabilities.workspace.slashCommands.commands.map(
+          (command: Record<string, unknown>) => ({
+            type: "command",
+            ...command,
+          })
+        ),
         _meta: { hgw: { capabilities } },
       })
     }

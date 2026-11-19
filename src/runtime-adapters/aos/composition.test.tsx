@@ -4,10 +4,10 @@ import {
   RequestError,
   type AgentApp,
   type AgentContext,
-  type AnyWireMessage,
+  type AnyMessage,
   type PromptRequest,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -315,7 +315,6 @@ function createGatewayAgent({
       peer?.request(methods.client.elicitation.create, {
         mode: "form",
         sessionId,
-        requestId,
         message: "The runtime needs an answer",
         requestedSchema: {
           type: "object",
@@ -349,12 +348,12 @@ const CONFIG = {
 function pipedSocket(app: AgentApp) {
   return class PipedSocket extends EventTarget {
     readyState = 0
-    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
+    readonly #inbound = new TransformStream<AnyMessage, AnyMessage>()
+    readonly #writer: WritableStreamDefaultWriter<AnyMessage>
 
     constructor() {
       super()
-      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
+      const outbound = new TransformStream<AnyMessage, AnyMessage>()
       app.connect({
         readable: this.#inbound.readable,
         writable: outbound.writable,
@@ -367,7 +366,7 @@ function pipedSocket(app: AgentApp) {
       })
     }
 
-    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
+    async #pump(reader: ReadableStreamDefaultReader<AnyMessage>) {
       for (;;) {
         const { value, done } = await reader.read()
         if (done) return
@@ -378,7 +377,7 @@ function pipedSocket(app: AgentApp) {
     }
 
     send(data: string) {
-      void this.#writer.write(JSON.parse(data) as AnyWireMessage)
+      void this.#writer.write(JSON.parse(data) as AnyMessage)
     }
 
     close() {

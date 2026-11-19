@@ -3,7 +3,7 @@ import type {
   AvailableCommand,
   ContentBlock,
   SessionConfigOption,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import {
   ExportedMessageRepository,
   MessageNotSentError,
@@ -872,16 +872,18 @@ function createAcpController({
       }
     },
     reload: async (parentId: string | null) => {
-      // Only the turn's text is resent: its uploads were consumed when it was
-      // first sent, so the provider re-attaches the turn's images itself from
-      // the row the rewind replaces.
+      // The turn's own text and resource links are resent as the gateway
+      // reported them, so an attachments-only turn never sends the empty
+      // prompt ACP forbids. Its uploads were consumed when it was first sent;
+      // the gateway ignores the resent links on a rewind and re-attaches the
+      // files from the row the rewind replaces.
       const blocks = parentId
         ? messageBlocks(shown, parentId).filter(
-            (block) => block.type === "text"
+            (block) => block.type === "text" || block.type === "resource_link"
           )
         : []
       const rewound = rewindFor(parentId)
-      if (!parentId || (blocks.length === 0 && rewound === undefined))
+      if (!parentId || blocks.length === 0)
         throw new Error("An ACP retry needs the user turn it replaces")
       sent = undefined
       const sessionId = await boundSession()

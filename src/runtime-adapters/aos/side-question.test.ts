@@ -3,7 +3,7 @@ import {
   methods,
   type AgentContext,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { createAcpConnection } from "@harness-gw/sdk"
 import {
   HGW_EXTENSION_VERSION,

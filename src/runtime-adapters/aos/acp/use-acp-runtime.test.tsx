@@ -2,7 +2,7 @@ import {
   RequestError,
   type RequestPermissionResponse,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 import {
   act,
@@ -776,21 +776,20 @@ describe("useAcpRuntime", () => {
     ])
   })
 
-  it("retries a turn of images alone as the rewind of its source", async () => {
+  it("retries a turn of images alone with its links, never an empty prompt", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
+    const photo = {
+      type: "resource_link" as const,
+      uri: "hgw-attachment:stage-1/att-1",
+      name: "photo.png",
+      mimeType: "image/png",
+    }
     act(() => {
       fake.emit({
         sessionUpdate: "user_message",
         messageId: "u1",
-        content: [
-          {
-            type: "resource_link",
-            uri: "hgw-attachment:stage-1/att-1",
-            name: "photo.png",
-            mimeType: "image/png",
-          },
-        ],
+        content: [photo],
       })
       fake.emit(textUpdate("agent_message", "a1", "Stopped"))
     })
@@ -800,10 +799,15 @@ describe("useAcpRuntime", () => {
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
-        [],
+        [photo],
         expect.objectContaining({ rewindSourceId: "provider-u1" })
       )
     })
+    expect(fake.prompt).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      [],
+      expect.anything()
+    )
   })
 
   it("resends an edited turn as its text alone, so the provider keeps the turn's images", async () => {
