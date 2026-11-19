@@ -800,8 +800,8 @@ function installAcpStub(script: AcpScript) {
           return this.respond(id, this.setup())
         const replayFrom = asRecord(params.replayFrom)
         const paged = script.pagedHistory
-        // An older page is its own read: tagged updates and a cursor, with no
-        // resume, so neither the configuration nor the window is restated.
+        // An older page is its own read: tagged updates and a cursor. Its
+        // answer carries the lists as any resume's does; nothing is restated.
         if (paged && replayFrom.type === "_hgw/before") {
           const cursor = String(replayFrom.cursor)
           const offset = Number(cursor.replace("offset-", ""))
