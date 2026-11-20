@@ -56,13 +56,16 @@ function backingHost() {
   const creates: PromiseWithResolvers<{ sessionId: string }>[] = []
   const held = new Set<string>()
   const closed: string[] = []
+  const gone = new Map<string, () => void>()
+  const warn = vi.fn()
   const host: DraftSessionHost = {
     create: () => {
       const created = Promise.withResolvers<{ sessionId: string }>()
       creates.push(created)
       return created.promise
     },
-    hold: (sessionId) => {
+    hold: (sessionId, onGone) => {
+      gone.set(sessionId, onGone)
       held.add(sessionId)
       return () => held.delete(sessionId)
     },
@@ -73,7 +76,15 @@ function backingHost() {
     creates[index]?.resolve({ sessionId })
     await Promise.resolve()
   }
-  return { drafts: new AosDraftRegistry(host), answer, held, closed }
+  return {
+    drafts: new AosDraftRegistry(host, { warn }),
+    answer,
+    held,
+    closed,
+    creates,
+    gone,
+    warn,
+  }
 }
 
 describe("AOS draft backing Sessions", () => {
@@ -100,5 +111,21 @@ describe("AOS draft backing Sessions", () => {
     expect(closed).toEqual(["alpha-session"])
     expect(held.size).toBe(0)
     expect(drafts.sessionFor("local-1")).toBeUndefined()
+  })
+
+  it("gives up on a draft whose replacement Session is lost too", async () => {
+    const { drafts, answer, creates, gone, warn } = backingHost()
+    drafts.record("local-1", "alpha")
+    await answer(0, "first")
+    gone.get("first")!()
+    await answer(1, "second")
+    expect(creates).toHaveLength(2)
+
+    gone.get("second")!()
+
+    expect(creates).toHaveLength(2)
+    expect(drafts.sessionFor("local-1")).toBeUndefined()
+    await expect(drafts.claim("local-1")).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
   })
 })

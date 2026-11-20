@@ -26,7 +26,12 @@ type Backing = {
   claimed: boolean
   /** Let go of: a Session its create answers with afterwards is not held. */
   dropped: boolean
+  /** Sessions this opening of the draft has already lost and replaced. */
+  replaced: number
 }
+
+/** A draft recreates its backing Session at most this often per opening. */
+const MAX_REPLACEMENTS = 1
 
 /**
  * Keeps an AOS-only association between Assistant UI's optimistic local id
@@ -104,7 +109,7 @@ export class AosDraftRegistry {
     return () => this.#listeners.delete(listener)
   }
 
-  #back(localId: string, agentId: string) {
+  #back(localId: string, agentId: string, replaced = 0) {
     const host = this.#host
     if (!host) return
     const backing: Backing = {
@@ -112,6 +117,7 @@ export class AosDraftRegistry {
       failed: false,
       claimed: false,
       dropped: false,
+      replaced,
       session: host.create(agentId).then(
         ({ sessionId }) => {
           if (backing.dropped) {
@@ -139,15 +145,30 @@ export class AosDraftRegistry {
   }
 
   /**
-   * The provider lost an unsent draft's Session, so the draft gets another; a
-   * sent draft's thread reports the loss itself.
+   * The provider lost an unsent draft's Session, so the draft gets another,
+   * once; a second loss ends it as a draft whose create failed. A sent
+   * draft's thread reports the loss itself.
    */
   #lost(localId: string, backing: Backing) {
     if (backing.claimed || this.#backings.get(localId) !== backing) return
     // Nothing is left to close.
     backing.sessionId = undefined
     this.#drop(localId, backing)
-    this.#back(localId, backing.agentId)
+    if (backing.replaced < MAX_REPLACEMENTS) {
+      this.#back(localId, backing.agentId, backing.replaced + 1)
+    } else {
+      this.#logger.warn(
+        { agentId: backing.agentId },
+        "draft.session_replacement_gave_up"
+      )
+      this.#backings.set(localId, {
+        ...backing,
+        session: Promise.resolve(undefined),
+        failed: true,
+        dropped: false,
+        release: undefined,
+      })
+    }
     this.#notify()
   }
 
