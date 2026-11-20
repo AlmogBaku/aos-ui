@@ -811,6 +811,32 @@ describe("useAcpRuntime", () => {
     )
   })
 
+  it("refuses a retry of a turn replayed with nothing to resend, prompting nothing", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit({
+        sessionUpdate: "user_message",
+        messageId: "u1",
+        content: [{ type: "image", data: "AAA", mimeType: "image/png" }],
+      })
+      fake.emit(textUpdate("agent_message", "a1", "Stopped"))
+    })
+    await act(async () => {
+      result.current.thread.startRun({ parentId: "u1" })
+    })
+    await waitFor(() => {
+      expect(
+        result.current.thread.getState().messages[1]?.status
+      ).toMatchObject({
+        type: "incomplete",
+        reason: "error",
+        error: { message: expect.stringContaining("send again") },
+      })
+    })
+    expect(fake.prompt).not.toHaveBeenCalled()
+  })
+
   it("resends an edited turn as its text alone, so the provider keeps the turn's images", async () => {
     const fake = createFakeConnection()
     const stageAttachments = vi.fn(async () => ({

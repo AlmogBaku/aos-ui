@@ -329,6 +329,7 @@ export const he = {
     HGW_REWIND_CONFLICT:
       "לא ניתן עוד לערוך את ההודעה הזו או לנסות אותה שוב כי היסטוריית השיחה השתנתה.",
     HGW_COMMAND_UNSUPPORTED: "הפקודה הזו לא זמינה כאן.",
+    AOS_NOTHING_TO_RESEND: "בפנייה הזו אין טקסט לשליחה חוזרת.",
     temporarily_unavailable: "השירות אינו זמין באופן זמני. נסו שוב.",
     rate_limited: "יותר מדי בקשות. נסו שוב בעוד רגע.",
     request_failed: "לא ניתן היה להשלים את הבקשה.",

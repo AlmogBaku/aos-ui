@@ -225,6 +225,9 @@ function rewound(
   return at < 0 ? state : retainMessages(state, [...ids.slice(0, at), localId])
 }
 
+/** The refusal of a Retry whose turn replayed with no text or link to resend. */
+const NOTHING_TO_RESEND = "This turn has no text to send again."
+
 /** The normalized failure behind a refusal the operator can act on. */
 const REFUSAL_CODES: Readonly<Record<number, string>> = {
   [HGW_JSONRPC_ERRORS.turnInProgress]: "HGW_SESSION_BUSY",
@@ -883,8 +886,19 @@ function createAcpController({
           )
         : []
       const rewound = rewindFor(parentId)
-      if (!parentId || blocks.length === 0)
+      if (!parentId)
         throw new Error("An ACP retry needs the user turn it replaces")
+      // ACP forbids an empty prompt, so a turn replayed with nothing to resend
+      // is refused where the operator sees it, not thrown past a click that
+      // Assistant UI never awaits.
+      if (blocks.length === 0) {
+        refuse(
+          Object.assign(new Error(NOTHING_TO_RESEND), {
+            data: { code: "AOS_NOTHING_TO_RESEND" },
+          })
+        )
+        return
+      }
       sent = undefined
       const sessionId = await boundSession()
       // Assistant UI's Retry is fire-and-forget, so no caller can observe a
