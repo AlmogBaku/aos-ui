@@ -1,4 +1,4 @@
-import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2"
+import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 
 import { AosDraftRegistry } from "../aos-drafts"

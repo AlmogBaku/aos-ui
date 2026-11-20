@@ -8,7 +8,7 @@ import {
   type AssistantState,
   type CompleteAttachment,
 } from "@assistant-ui/react"
-import { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
+import { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import {
   useCallback,
   useEffect,

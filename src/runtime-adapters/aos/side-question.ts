@@ -1,4 +1,4 @@
-import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
+import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { AcpConnection } from "@harness-gw/sdk"
 
 import { sameData } from "@/lib/utils"

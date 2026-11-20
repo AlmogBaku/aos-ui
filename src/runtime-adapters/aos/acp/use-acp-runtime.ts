@@ -3,7 +3,7 @@ import type {
   AvailableCommand,
   ContentBlock,
   SessionConfigOption,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import {
   ExportedMessageRepository,
   MessageNotSentError,
@@ -224,6 +224,9 @@ function rewound(
   const at = ids.indexOf(rewoundFrom)
   return at < 0 ? state : retainMessages(state, [...ids.slice(0, at), localId])
 }
+
+/** The refusal of a Retry whose turn replayed with no text or link to resend. */
+const NOTHING_TO_RESEND = "This turn has no text to send again."
 
 /** The normalized failure behind a refusal the operator can act on. */
 const REFUSAL_CODES: Readonly<Record<number, string>> = {
@@ -872,17 +875,30 @@ function createAcpController({
       }
     },
     reload: async (parentId: string | null) => {
-      // Only the turn's text is resent: its uploads were consumed when it was
-      // first sent, so the provider re-attaches the turn's images itself from
-      // the row the rewind replaces.
+      // The turn's own text and resource links are resent as the gateway
+      // reported them, so an attachments-only turn never sends the empty
+      // prompt ACP forbids. Its uploads were consumed when it was first sent;
+      // the gateway ignores the resent links on a rewind and re-attaches the
+      // files from the row the rewind replaces.
       const blocks = parentId
         ? messageBlocks(shown, parentId).filter(
-            (block) => block.type === "text"
+            (block) => block.type === "text" || block.type === "resource_link"
           )
         : []
       const rewound = rewindFor(parentId)
-      if (!parentId || (blocks.length === 0 && rewound === undefined))
+      if (!parentId)
         throw new Error("An ACP retry needs the user turn it replaces")
+      // ACP forbids an empty prompt, so a turn replayed with nothing to resend
+      // is refused where the operator sees it, not thrown past a click that
+      // Assistant UI never awaits.
+      if (blocks.length === 0) {
+        refuse(
+          Object.assign(new Error(NOTHING_TO_RESEND), {
+            data: { code: "AOS_NOTHING_TO_RESEND" },
+          })
+        )
+        return
+      }
       sent = undefined
       const sessionId = await boundSession()
       // Assistant UI's Retry is fire-and-forget, so no caller can observe a

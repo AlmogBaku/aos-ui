@@ -156,7 +156,38 @@ function ReadyAosRuntimeProvider({
       })
     }
   }, [client])
-  const drafts = useMemo(() => new AosDraftRegistry(), [])
+  // A draft is backed by a Session made as it opens, so the composer offers
+  // its models and commands before the first message. Only this operator
+  // draft code ever closes a Session.
+  const drafts = useMemo(
+    () =>
+      new AosDraftRegistry(
+        {
+          create: (agentId) => client.createSession(agentId),
+          hold(sessionId, gone) {
+            const release = client.subscribeSession(sessionId)
+            const leave = connection.subscribe(sessionId, {
+              state: (state) => {
+                if (state === "gone") gone()
+              },
+            })
+            return () => {
+              leave()
+              release()
+            }
+          },
+          close(sessionId) {
+            client
+              .closeSession(sessionId)
+              .catch((err: unknown) =>
+                compositionLog().warn({ err, sessionId }, "draft.close_failed")
+              )
+          },
+        },
+        compositionLog()
+      ),
+    [client, connection]
+  )
   const threadList = useMemo(
     () =>
       createAcpThreadListAdapter({
@@ -291,6 +322,14 @@ function ReadyAosRuntimeProvider({
       createAosSessionDraft(assistantRuntime, drafts, agentId),
     [assistantRuntime, drafts]
   )
+  // The registry holds only the shown draft's Session, so it hears every move
+  // off a draft, whichever way the workspace makes it.
+  useEffect(() => {
+    const follow = () =>
+      drafts.follow(assistantRuntime.threads.getState().mainThreadId)
+    follow()
+    return assistantRuntime.threads.subscribe(follow)
+  }, [assistantRuntime, drafts])
   const selectedScopeKey = useSyncExternalStore(
     assistantRuntime.threads.subscribe,
     () => {
@@ -401,9 +440,17 @@ function ReadyAosRuntimeProvider({
     : undefined
   const selectedDraftId = selectedDraft?.[0]
   const mediaScopeId = selectedSessionId ?? selectedDraftId
+  const draftSessionId = useSyncExternalStore(
+    useCallback((listener: () => void) => drafts.subscribe(listener), [drafts]),
+    () => (selectedDraftId ? drafts.sessionFor(selectedDraftId) : undefined),
+    () => undefined
+  )
   // Capabilities, config options, and usage are absent until the bound Session
-  // reports them, so the composer reads the selected Session's projection.
-  const capabilities = useAosSessionCapabilities(client, selectedSessionId)
+  // reports them, so the composer reads the selected Session's projection, or
+  // on a draft its backing Session's. Everything else that names the selected
+  // Session leaves a draft's alone, so the draft still looks like one.
+  const composerSessionId = selectedSessionId ?? draftSessionId
+  const capabilities = useAosSessionCapabilities(client, composerSessionId)
   const selectedSessionStatus = useSyncExternalStore(
     useCallback(
       (listener) =>
@@ -442,7 +489,7 @@ function ReadyAosRuntimeProvider({
   const composer = useAosComposerFeatures(
     client,
     config.composerFeatures,
-    selectedSessionId,
+    composerSessionId,
     capabilities
   )
   // ACP's own capability says the gateway forks, which it tells an operator
@@ -523,7 +570,10 @@ function ReadyAosRuntimeProvider({
     artifacts: { resolver: artifacts },
     mcpApps,
     composer,
-    messageRewind: sessionMessageRewind(capabilities?.interactions.rewind),
+    // A draft rewinds nothing, even once its first message is on the way.
+    messageRewind: sessionMessageRewind(
+      selectedSessionId ? capabilities?.interactions.rewind : undefined
+    ),
     media,
     activityCoverage: "workspace",
     push,
