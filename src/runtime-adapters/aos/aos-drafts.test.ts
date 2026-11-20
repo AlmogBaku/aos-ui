@@ -128,4 +128,16 @@ describe("AOS draft backing Sessions", () => {
     await expect(drafts.claim("local-1")).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalledTimes(1)
   })
+
+  it("hands a first message the Session still being made, closing nothing", async () => {
+    const { drafts, answer, creates, closed } = backingHost()
+    drafts.record("local-1", "alpha")
+
+    const claimed = drafts.claim("local-1")
+    await answer(0, "alpha-session")
+
+    await expect(claimed).resolves.toBe("alpha-session")
+    expect(creates).toHaveLength(1)
+    expect(closed).toEqual([])
+  })
 })
