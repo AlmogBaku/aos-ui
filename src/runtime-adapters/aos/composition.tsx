@@ -516,15 +516,29 @@ function ReadyAosRuntimeProvider({
         : undefined,
     [client, connection, forks]
   )
-  // No thread holds the Session: the gateway joins this connection to it for
-  // the prompt and answers at admission, and no projector shows the echo.
+  // No thread holds the Session, and the gateway takes a prompt only of a
+  // Session this connection has opened. The turn holds it through admission,
+  // then lets go: the client parts it after its grace, which leaves the
+  // Session's work running (only `closeSession` would stop it). No projector
+  // listens, so nothing shows the echo and no tab or row follows. It renders
+  // nothing, so it opens without a replay of the Session's history.
   const startTurn = useCallback(
     async (sessionId: string, text: string) => {
-      await connection.prompt(sessionId, [{ type: "text", text }], {
-        clientId: crypto.randomUUID(),
-      })
+      const agentId = client.knownAgentIdOf(sessionId)
+      const leave = connection.subscribe(
+        sessionId,
+        agentId === undefined ? {} : { agentId },
+        { replay: false }
+      )
+      try {
+        await connection.prompt(sessionId, [{ type: "text", text }], {
+          clientId: crypto.randomUUID(),
+        })
+      } finally {
+        leave()
+      }
     },
-    [connection]
+    [client, connection]
   )
   const capabilitiesReady = capabilities !== undefined
   const transcriptionAvailable =

@@ -146,6 +146,7 @@ function createGatewayAgent({
   const prompts: PromptParams[] = []
   const cancelled: string[] = []
   const resumed: string[] = []
+  const resumeParams: { sessionId: string; replayFrom?: unknown }[] = []
   // The gateway keeps each Session's transcript and replays it from the start on
   // every such resume; it streams live updates only to a client that resumed it.
   const history = new Map<string, SessionUpdate[]>()
@@ -160,6 +161,15 @@ function createGatewayAgent({
     value: unknown
   }[] = []
   const closed: string[] = []
+  /**
+   * The Sessions this connection has created, forked, or resumed and not since
+   * closed or parted: ACP v2 refuses a Session-scoped request on any other.
+   */
+  const active = new Set<string>()
+  function requireActive(sessionId: string) {
+    if (!active.has(sessionId))
+      throw new RequestError(-32002, "session_not_active", { sessionId })
+  }
   const parted: string[] = []
   /** The Session each fork copied, in order. */
   const forked: string[] = []
@@ -252,7 +262,9 @@ function createGatewayAgent({
     .onRequest(methods.agent.session.resume, async ({ params }) => {
       const { sessionId } = params
       resumed.push(sessionId)
+      resumeParams.push(params)
       memberships.add(sessionId)
+      active.add(sessionId)
       // The gateway replays inside the resume request, before answering it, so a
       // browser that waits for the response has already seen the history.
       if (params.replayFrom?.type === "start")
@@ -301,6 +313,7 @@ function createGatewayAgent({
       }
       created.push(agentId ?? "")
       const sessionId = `created-${created.length}`
+      active.add(sessionId)
       configs.set(sessionId, createdConfigOptions())
       // ACP v2 answers with the Session's lists; `_meta.hgw` adds what it
       // supports.
@@ -313,6 +326,7 @@ function createGatewayAgent({
     })
     .onRequest(methods.agent.session.setConfigOption, ({ params }) => {
       const { sessionId, configId, value } = params
+      requireActive(sessionId)
       configWrites.push({ sessionId, configId, value })
       const configOptions = (configs.get(sessionId) ?? []).map((option) =>
         option.configId === configId && typeof value === "string"
@@ -324,6 +338,7 @@ function createGatewayAgent({
     })
     .onRequest(methods.agent.session.close, ({ params }) => {
       closed.push(params.sessionId)
+      active.delete(params.sessionId)
       return {}
     })
     .onRequest(
@@ -331,14 +346,17 @@ function createGatewayAgent({
       z.object({ sessionId: z.string() }),
       ({ params }) => {
         parted.push(params.sessionId)
+        active.delete(params.sessionId)
         return {}
       }
     )
     .onRequest(methods.agent.session.fork, ({ params }) => {
       forked.push(params.sessionId)
+      active.add(`forked-${forked.length}`)
       return { sessionId: `forked-${forked.length}` }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
+      requireActive(params.sessionId)
       // Exactly what the gateway refuses a prompt with while a Session is not idle.
       if (busy.has(params.sessionId))
         throw new RequestError(
@@ -397,6 +415,7 @@ function createGatewayAgent({
     prompts,
     cancelled,
     resumed,
+    resumeParams,
     push,
     busy,
     created,
@@ -632,7 +651,7 @@ describe("provider-neutral AOS runtime composition", () => {
     expect(plain.runtime()?.forkSession).toBeUndefined()
   })
 
-  it("starts a turn in a Session the active thread does not show, and rejects its refusal", async () => {
+  it("starts a turn in a Session the active thread does not show, without replay, parts it after the grace, and rejects its refusal", async () => {
     const { gateway, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())
     const supplied = runtime()!
@@ -642,7 +661,11 @@ describe("provider-neutral AOS runtime composition", () => {
     })
     await screen.findByText("Ready")
 
-    await act(() => supplied.startTurn!(SECOND_SESSION_ID, "Check the logs"))
+    const clock = useFakeClock()
+    await act(async () => {
+      await supplied.startTurn!(SECOND_SESSION_ID, "Check the logs")
+      await clock.advance(10)
+    })
 
     expect(gateway.prompts).toMatchObject([
       {
@@ -655,6 +678,16 @@ describe("provider-neutral AOS runtime composition", () => {
       SESSION_ID
     )
     expect(screen.queryByText("Check the logs")).toBeNull()
+    expect(gateway.resumeParams.at(-1)).toMatchObject({
+      sessionId: SECOND_SESSION_ID,
+    })
+    expect(gateway.resumeParams.at(-1)?.replayFrom).toBeUndefined()
+
+    expect(gateway.parted).toEqual([])
+    await act(() => clock.advance(PART_GRACE_MS + 1))
+    expect(gateway.parted).toEqual([SECOND_SESSION_ID])
+    expect(gateway.closed).toEqual([])
+    expect(gateway.cancelled).toEqual([])
 
     gateway.busy.add(SECOND_SESSION_ID)
     await expect(
