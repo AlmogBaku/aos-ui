@@ -4,10 +4,11 @@ import {
   RequestError,
   type AgentApp,
   type AgentContext,
-  type AnyWireMessage,
+  type AnyMessage,
   type PromptRequest,
+  type SessionConfigOption,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -15,6 +16,7 @@ import { lazy, Suspense, type ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
+import { PART_GRACE_MS } from "@harness-gw/sdk"
 import {
   HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
@@ -22,6 +24,7 @@ import {
   HGW_META_KEY,
 } from "@harness-gw/sdk/protocol"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
 import { AosUiWorkspace } from "../../components/aos-ui-workspace"
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
 import { en } from "../../lib/i18n/dictionaries/en"
@@ -62,9 +65,17 @@ const SESSION_TITLES: Readonly<Record<string, string>> = {
   [BOOKMARKED_SESSION_ID]: "Bookmarked",
 }
 
-/** The capability snapshot `session/resume` reports for the opened Session. */
+/** The capability snapshot a Session reports on `session/new` and `session/resume`. */
 function capabilities({ rewind }: { rewind: boolean }) {
   return sessionCapabilities({
+    workspace: {
+      models: {
+        status: "available",
+        scope: "session",
+        selection: "native-session",
+        choices: "provider-reported",
+      },
+    },
     interactions: {
       ...(rewind
         ? { rewind: { status: "available", scope: "user-turn" } as const }
@@ -73,6 +84,41 @@ function capabilities({ rewind }: { rewind: boolean }) {
     },
   })
 }
+
+/** The model and effort a created Session starts on, as `session/new` reports them. */
+function createdConfigOptions(): SessionConfigOption[] {
+  return [
+    {
+      type: "select",
+      configId: "model",
+      name: "Model",
+      category: "model",
+      currentValue: "model-fast",
+      options: [
+        { value: "model-fast", name: "Fast" },
+        { value: "model-deep", name: "Deep" },
+      ],
+    },
+    {
+      type: "select",
+      configId: "effort",
+      name: "Effort",
+      category: "thought_level",
+      currentValue: "medium",
+      options: [
+        { value: "medium", name: "Medium" },
+        { value: "high", name: "High" },
+      ],
+    },
+  ]
+}
+
+/** The Agent's own command, which every Session it creates offers. */
+const AGENT_COMMAND = {
+  type: "command",
+  name: "summarize",
+  description: "Summarize the findings",
+} as const
 
 const sessionInfo = {
   agentId: AGENT_ID,
@@ -106,6 +152,15 @@ function createGatewayAgent({
   const memberships = new Set<string>()
   const busy = new Set<string>()
   const created: string[] = []
+  /** Each created Session's config options as its writes left them. */
+  const configs = new Map<string, SessionConfigOption[]>()
+  const configWrites: {
+    sessionId: string
+    configId: string
+    value: unknown
+  }[] = []
+  const closed: string[] = []
+  const parted: string[] = []
   /** The Session each fork copied, in order. */
   const forked: string[] = []
   /** How many next `session/new` requests the provider refuses as unavailable. */
@@ -206,7 +261,8 @@ function createGatewayAgent({
             sessionId,
             update,
           })
-      // The Session's capabilities and row follow the answer as updates.
+      // The Session's lists ride in the answer; its capabilities and row also
+      // follow it as updates.
       setTimeout(() => {
         for (const update of [
           {
@@ -226,7 +282,11 @@ function createGatewayAgent({
             update,
           })
       }, 0)
-      return { _meta: { [HGW_META_KEY]: {} } }
+      return {
+        configOptions: configs.get(sessionId),
+        availableCommands: [AGENT_COMMAND],
+        _meta: { [HGW_META_KEY]: { capabilities: capabilities({ rewind }) } },
+      }
     })
     .onRequest(methods.agent.session.new, ({ params }) => {
       if (unavailable.creates > 0) {
@@ -240,8 +300,40 @@ function createGatewayAgent({
         agentId?: string
       }
       created.push(agentId ?? "")
-      return { sessionId: `created-${created.length}` }
+      const sessionId = `created-${created.length}`
+      configs.set(sessionId, createdConfigOptions())
+      // ACP v2 answers with the Session's lists; `_meta.hgw` adds what it
+      // supports.
+      return {
+        sessionId,
+        configOptions: configs.get(sessionId),
+        availableCommands: [AGENT_COMMAND],
+        _meta: { [HGW_META_KEY]: { capabilities: capabilities({ rewind }) } },
+      }
     })
+    .onRequest(methods.agent.session.setConfigOption, ({ params }) => {
+      const { sessionId, configId, value } = params
+      configWrites.push({ sessionId, configId, value })
+      const configOptions = (configs.get(sessionId) ?? []).map((option) =>
+        option.configId === configId && typeof value === "string"
+          ? { ...option, currentValue: value }
+          : option
+      ) as SessionConfigOption[]
+      configs.set(sessionId, configOptions)
+      return { configOptions }
+    })
+    .onRequest(methods.agent.session.close, ({ params }) => {
+      closed.push(params.sessionId)
+      return {}
+    })
+    .onRequest(
+      HGW_METHODS.session.part,
+      z.object({ sessionId: z.string() }),
+      ({ params }) => {
+        parted.push(params.sessionId)
+        return {}
+      }
+    )
     .onRequest(methods.agent.session.fork, ({ params }) => {
       forked.push(params.sessionId)
       return { sessionId: `forked-${forked.length}` }
@@ -308,14 +400,23 @@ function createGatewayAgent({
     push,
     busy,
     created,
+    configWrites,
+    closed,
+    parted,
     forked,
     unavailable,
+    /** Reports a Session gone, as the gateway does once its provider lost it. */
+    lose: (sessionId: string) =>
+      peer?.notify(HGW_METHODS.notify.error, {
+        sessionId,
+        code: "not_found",
+        message: "not_found",
+      }),
     /** One question request, exactly as the gateway issues it. */
     ask: (sessionId: string, requestId: string) =>
       peer?.request(methods.client.elicitation.create, {
         mode: "form",
         sessionId,
-        requestId,
         message: "The runtime needs an answer",
         requestedSchema: {
           type: "object",
@@ -349,12 +450,12 @@ const CONFIG = {
 function pipedSocket(app: AgentApp) {
   return class PipedSocket extends EventTarget {
     readyState = 0
-    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
+    readonly #inbound = new TransformStream<AnyMessage, AnyMessage>()
+    readonly #writer: WritableStreamDefaultWriter<AnyMessage>
 
     constructor() {
       super()
-      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
+      const outbound = new TransformStream<AnyMessage, AnyMessage>()
       app.connect({
         readable: this.#inbound.readable,
         writable: outbound.writable,
@@ -367,7 +468,7 @@ function pipedSocket(app: AgentApp) {
       })
     }
 
-    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
+    async #pump(reader: ReadableStreamDefaultReader<AnyMessage>) {
       for (;;) {
         const { value, done } = await reader.read()
         if (done) return
@@ -378,7 +479,7 @@ function pipedSocket(app: AgentApp) {
     }
 
     send(data: string) {
-      void this.#writer.write(JSON.parse(data) as AnyWireMessage)
+      void this.#writer.write(JSON.parse(data) as AnyMessage)
     }
 
     close() {
@@ -573,10 +674,12 @@ describe("provider-neutral AOS runtime composition", () => {
         await new Promise((resolve) => setTimeout(resolve, 0))
       })
     }
+    // The provider refuses both the Session made as the draft opens and the
+    // one its first message then asks for.
+    gateway.unavailable.creates = 2
     await act(async () => {
       await runtime()!.createSessionDraft?.(AGENT_ID)
     })
-    gateway.unavailable.creates = 1
 
     await send("Ship it")
 
@@ -645,6 +748,167 @@ describe("provider-neutral AOS runtime composition", () => {
       _meta: { [HGW_META_KEY]: { attachmentStageId: "stage-1" } },
     })
     expect(screen.queryByText("Session ownership is unknown")).toBeNull()
+  })
+})
+
+/** Types and sends one message from the selected thread's composer. */
+function sendFrom(runtime: () => HarnessRuntime | undefined, text: string) {
+  const composer = runtime()!.assistantRuntime.thread.composer
+  composer.setText(text)
+  composer.send()
+}
+
+describe("a draft backed by the Session made as it opens", () => {
+  it("offers the Session's models, efforts, and Agent commands before the first message, and stays a draft", async () => {
+    const { gateway, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+
+    await waitFor(() => expect(runtime()!.composer?.model).toBeDefined())
+    const { composer, messageRewind, sessionStatus, assistantRuntime } =
+      runtime()!
+    expect(composer?.model).toMatchObject({
+      selectedId: "model-fast",
+      effortId: "medium",
+      options: [
+        {
+          id: "model-fast",
+          efforts: [{ id: "medium" }, { id: "high" }],
+        },
+        { id: "model-deep" },
+      ],
+    })
+    expect(composer?.slashCommands).toEqual([
+      { name: AGENT_COMMAND.name, description: AGENT_COMMAND.description },
+    ])
+    expect(gateway.prompts).toEqual([])
+    // Only the composer reads the Session: the thread names none, so the
+    // workspace shows no tab, row, or URL for it.
+    expect(
+      assistantRuntime.threads.mainItem.getState().remoteId
+    ).toBeUndefined()
+    expect(messageRewind).toBe(false)
+    expect(sessionStatus).toBeUndefined()
+  })
+
+  it("keeps the Session past the client's grace, so the model picked on the draft is the one its first message runs on", async () => {
+    const clock = useFakeClock()
+    const { gateway, runtime } = mount()
+    await act(() => clock.advance(10))
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+      await clock.advance(10)
+    })
+
+    // The client parts a Session nothing holds once its grace ends. The
+    // gateway's own idle window, which this fake does not model, discards
+    // such a Session later still.
+    await act(() => clock.advance(PART_GRACE_MS + 1))
+    expect(gateway.parted).toEqual([])
+    await act(async () => {
+      await runtime()!.composer!.model!.update({ selectedId: "model-deep" })
+    })
+    await act(async () => {
+      sendFrom(runtime, "Ship it")
+      await clock.advance(10)
+    })
+
+    expect(gateway.created).toEqual([AGENT_ID])
+    expect(gateway.configWrites).toEqual([
+      { sessionId: "created-1", configId: "model", value: "model-deep" },
+    ])
+    expect(gateway.prompts).toMatchObject([{ sessionId: "created-1" }])
+  })
+
+  it("sends the first message in a Session it creates then, when none was made as the draft opened", async () => {
+    const { gateway, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    gateway.unavailable.creates = 1
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+    await waitFor(() => expect(gateway.unavailable.creates).toBe(0))
+
+    await act(async () => sendFrom(runtime, "Ship it"))
+
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
+    expect(gateway.created).toEqual([AGENT_ID])
+    expect(gateway.prompts[0]).toMatchObject({ sessionId: "created-1" })
+  })
+
+  it("replaces the Session when the provider loses it before the first message", async () => {
+    const { gateway, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+    await waitFor(() => expect(runtime()!.composer?.model).toBeDefined())
+
+    await act(async () => {
+      await gateway.lose("created-1")
+    })
+    await waitFor(() => expect(gateway.created).toHaveLength(2))
+    await act(async () => sendFrom(runtime, "Ship it"))
+
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
+    expect(gateway.prompts[0]).toMatchObject({ sessionId: "created-2" })
+  })
+
+  it("returns a second New Session on the same Agent to the unsent draft and its Session", async () => {
+    const { gateway, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    let first: string | undefined
+    await act(async () => {
+      first = await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+    await waitFor(() => expect(runtime()!.composer?.model).toBeDefined())
+
+    let second: string | undefined
+    await act(async () => {
+      second = await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+    await settle()
+
+    expect(second).toBe(first)
+    expect(gateway.created).toEqual([AGENT_ID])
+    expect(gateway.closed).toEqual([])
+    expect(runtime()!.composer?.model).toBeDefined()
+  })
+
+  it("closes an unsent draft's Session once when the operator leaves it, and never a sent one's", async () => {
+    const { gateway, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    const threads = () => runtime()!.assistantRuntime.threads
+    await threads().getLoadThreadsPromise()
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+    await waitFor(() => expect(runtime()!.composer?.model).toBeDefined())
+
+    await act(async () => {
+      await threads().switchToThread(SESSION_ID)
+    })
+    await act(async () => {
+      await threads().switchToThread(SECOND_SESSION_ID)
+    })
+    await settle()
+    expect(gateway.closed).toEqual(["created-1"])
+
+    await act(async () => {
+      await runtime()!.createSessionDraft?.(AGENT_ID)
+    })
+    await waitFor(() => expect(gateway.created).toHaveLength(2))
+    await act(async () => sendFrom(runtime, "Ship it"))
+    await waitFor(() => expect(gateway.prompts).toHaveLength(1))
+    await act(async () => {
+      await threads().switchToThread(SESSION_ID)
+    })
+    await settle()
+
+    expect(gateway.prompts[0]).toMatchObject({ sessionId: "created-2" })
+    expect(gateway.closed).toEqual(["created-1"])
   })
 })
 

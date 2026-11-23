@@ -5,7 +5,7 @@ import {
   type AgentContext,
   type PromptRequest,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import {
   act,
   cleanup,
@@ -188,7 +188,8 @@ function createGuestGatewayAgent(options: GuestGatewayOptions = {}) {
       calls.push(methods.agent.session.resume)
       redeemedOrThrow()
       if (options.gone) throw RequestError.resourceNotFound(params.sessionId)
-      // What the invited Session supports follows the answer as an update.
+      // What the invited Session supports rides in the answer, and follows it
+      // as an update.
       queueMicrotask(() => {
         resumed = true
         for (const update of [
@@ -204,7 +205,10 @@ function createGuestGatewayAgent(options: GuestGatewayOptions = {}) {
             update,
           })
       })
-      return { _meta: { [HGW_META_KEY]: {} } }
+      return {
+        availableCommands: [],
+        _meta: { [HGW_META_KEY]: { capabilities: capabilities(options) } },
+      }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
       calls.push(methods.agent.session.prompt)

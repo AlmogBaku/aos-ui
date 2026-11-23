@@ -2,7 +2,7 @@ import {
   RequestError,
   type RequestPermissionResponse,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 import {
   act,
@@ -190,6 +190,7 @@ function createFakeConnection(
     prompt,
     cancel,
     setConfigOption: unused,
+    closeSession: unused,
     deleteSession: unused,
     updateSession: unused,
     steer: unused,
@@ -776,21 +777,20 @@ describe("useAcpRuntime", () => {
     ])
   })
 
-  it("retries a turn of images alone as the rewind of its source", async () => {
+  it("retries a turn of images alone with its links, never an empty prompt", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
+    const photo = {
+      type: "resource_link" as const,
+      uri: "hgw-attachment:stage-1/att-1",
+      name: "photo.png",
+      mimeType: "image/png",
+    }
     act(() => {
       fake.emit({
         sessionUpdate: "user_message",
         messageId: "u1",
-        content: [
-          {
-            type: "resource_link",
-            uri: "hgw-attachment:stage-1/att-1",
-            name: "photo.png",
-            mimeType: "image/png",
-          },
-        ],
+        content: [photo],
       })
       fake.emit(textUpdate("agent_message", "a1", "Stopped"))
     })
@@ -800,10 +800,41 @@ describe("useAcpRuntime", () => {
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
-        [],
+        [photo],
         expect.objectContaining({ rewindSourceId: "provider-u1" })
       )
     })
+    expect(fake.prompt).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      [],
+      expect.anything()
+    )
+  })
+
+  it("refuses a retry of a turn replayed with nothing to resend, prompting nothing", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit({
+        sessionUpdate: "user_message",
+        messageId: "u1",
+        content: [{ type: "image", data: "AAA", mimeType: "image/png" }],
+      })
+      fake.emit(textUpdate("agent_message", "a1", "Stopped"))
+    })
+    await act(async () => {
+      result.current.thread.startRun({ parentId: "u1" })
+    })
+    await waitFor(() => {
+      expect(
+        result.current.thread.getState().messages[1]?.status
+      ).toMatchObject({
+        type: "incomplete",
+        reason: "error",
+        error: { message: expect.stringContaining("send again") },
+      })
+    })
+    expect(fake.prompt).not.toHaveBeenCalled()
   })
 
   it("resends an edited turn as its text alone, so the provider keeps the turn's images", async () => {

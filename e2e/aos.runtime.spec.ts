@@ -705,8 +705,28 @@ function installAcpStub(script: AcpScript) {
     }
 
     /**
+     * What a setup response carries, as the real gateway always puts it there:
+     * the Session's config options and commands, with its capabilities in
+     * `_meta.hgw`. A client replaces what it holds with these lists.
+     */
+    setup(hgw: Record<string, unknown> = {}) {
+      return {
+        configOptions: script.configOptions,
+        availableCommands: this.commands(),
+        _meta: { hgw: { ...hgw, capabilities: script.restated.capabilities } },
+      }
+    }
+
+    commands() {
+      const { capabilities } = script.restated
+      return capabilities.workspace.slashCommands.commands.map(
+        (command: Record<string, unknown>) => ({ type: "command", ...command })
+      )
+    }
+
+    /**
      * The Session's row, models, and capabilities, which follow a resume's
-     * answer as updates rather than riding in it.
+     * answer as updates as well as riding in it.
      */
     restate() {
       const { session, capabilities } = script.restated
@@ -720,7 +740,7 @@ function installAcpStub(script: AcpScript) {
       })
       this.update({
         sessionUpdate: "available_commands_update",
-        availableCommands: capabilities.workspace.slashCommands.commands,
+        availableCommands: this.commands(),
         _meta: { hgw: { capabilities } },
       })
     }
@@ -777,11 +797,11 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("session/resume", (params, id) => {
         // Any other Session opens with nothing stored.
         if (params.sessionId !== script.sessionId)
-          return this.respond(id, { _meta: { hgw: {} } })
+          return this.respond(id, this.setup())
         const replayFrom = asRecord(params.replayFrom)
         const paged = script.pagedHistory
-        // An older page is its own read: tagged updates and a cursor, with no
-        // resume, so neither the configuration nor the window is restated.
+        // An older page is its own read: tagged updates and a cursor. Its
+        // answer carries the lists as any resume's does; nothing is restated.
         if (paged && replayFrom.type === "_hgw/before") {
           const cursor = String(replayFrom.cursor)
           const offset = Number(cursor.replace("offset-", ""))
@@ -790,13 +810,13 @@ function installAcpStub(script: AcpScript) {
             const history = this.historyPage(paged, offset, {
               historyPage: { cursor },
             })
-            this.respond(id, { _meta: { hgw: { history } } })
+            this.respond(id, this.setup({ history }))
           }
           return
         }
         if (paged && replayFrom.type === "start") {
           const history = this.historyPage(paged, 0)
-          this.respond(id, { _meta: { hgw: { history } } })
+          this.respond(id, this.setup({ history }))
           this.restate()
           return
         }
@@ -816,7 +836,7 @@ function installAcpStub(script: AcpScript) {
               script.recovered.messageId,
               script.recovered.text
             )
-          this.respond(id, { _meta: { hgw: {} } })
+          this.respond(id, this.setup())
           this.restate()
           this.update({ sessionUpdate: "usage_update", ...script.usage })
         }
@@ -970,7 +990,7 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("_hgw/session/focus", (_params, id) =>
         this.respond(id, {})
       )
-      // A new Session's answer carries only its id; the row arrives as
+      // A new Session's answer carries its id and lists; the row arrives as
       // session_info_update so the workspace sees it without a resume.
       this.handlers.set("session/new", (params, id) => {
         const newSessionId = crypto.randomUUID()
@@ -982,7 +1002,7 @@ function installAcpStub(script: AcpScript) {
           typeof hgwMeta === "object" && hgwMeta !== null
             ? String((hgwMeta as Record<string, unknown>).agentId ?? AGENT_ID)
             : AGENT_ID
-        this.respond(id, { sessionId: newSessionId })
+        this.respond(id, { sessionId: newSessionId, ...this.setup() })
         this.notify("session/update", {
           sessionId: newSessionId,
           update: {

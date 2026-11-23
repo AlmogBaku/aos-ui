@@ -62,9 +62,8 @@ Vite forwards only `/api/v1`, only to the gateway `AOS_UI_GATEWAY_TARGET`
 names (unset, it forwards nothing), and keeps the browser's `Origin`, so the
 gateway's `publicOrigin` (or `allowedOrigins`) must list the dev origin,
 such as `http://localhost:3000`. An SDK change is made and tested
-in harness-gw, then consumed here through the `@harness-gw/sdk` package
-(a local tarball until the first release); rerun `bun install` after
-replacing it.
+in harness-gw, then consumed here through the published `@harness-gw/sdk`
+package on npm; bump its version and rerun `bun install` to pick it up.
 
 Open `http://localhost:3000`; compact Agent/Session URLs preserve local EN/HE preference.
 Copy `.env.example` to `.env.local` only for local overrides.

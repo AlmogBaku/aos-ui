@@ -334,6 +334,7 @@ export const en = {
     HGW_REWIND_CONFLICT:
       "This message can no longer be edited or retried because the Session history changed.",
     HGW_COMMAND_UNSUPPORTED: "This command is not available here.",
+    AOS_NOTHING_TO_RESEND: "This turn has no text to send again.",
     temporarily_unavailable:
       "The service is temporarily unavailable. Please try again.",
     rate_limited: "Too many requests. Please try again shortly.",

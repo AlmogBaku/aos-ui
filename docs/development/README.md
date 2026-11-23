@@ -20,8 +20,7 @@ remain in the [operator documentation](../README.md).
   the primary adapter's layout, event sequencing, and upstream pin.
 
 A client change that needs the SDK is made and tested in harness-gw, then
-consumed here through the `@harness-gw/sdk` package (a local tarball until the
-first release).
+consumed here through the published `@harness-gw/sdk` package on npm.
 
 ## AOS UI
 

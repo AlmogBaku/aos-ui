@@ -273,6 +273,7 @@ export type Dictionary = {
     HGW_COMMAND_WITH_ATTACHMENTS: string
     HGW_REWIND_CONFLICT: string
     HGW_COMMAND_UNSUPPORTED: string
+    AOS_NOTHING_TO_RESEND: string
     // Generic codes the guest boundary substitutes for a private failure.
     temporarily_unavailable: string
     rate_limited: string
