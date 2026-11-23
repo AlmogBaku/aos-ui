@@ -520,13 +520,15 @@ function ReadyAosRuntimeProvider({
   // Session this connection has opened. The turn holds it through admission,
   // then lets go: the client parts it after its grace, which leaves the
   // Session's work running (only `closeSession` would stop it). No projector
-  // listens, so nothing shows the echo and no tab or row follows.
+  // listens, so nothing shows the echo and no tab or row follows. It renders
+  // nothing, so it opens without a replay of the Session's history.
   const startTurn = useCallback(
     async (sessionId: string, text: string) => {
       const agentId = client.knownAgentIdOf(sessionId)
       const leave = connection.subscribe(
         sessionId,
-        agentId === undefined ? {} : { agentId }
+        agentId === undefined ? {} : { agentId },
+        { replay: false }
       )
       try {
         await connection.prompt(sessionId, [{ type: "text", text }], {

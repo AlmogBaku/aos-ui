@@ -146,6 +146,7 @@ function createGatewayAgent({
   const prompts: PromptParams[] = []
   const cancelled: string[] = []
   const resumed: string[] = []
+  const resumeParams: { sessionId: string; replayFrom?: unknown }[] = []
   // The gateway keeps each Session's transcript and replays it from the start on
   // every such resume; it streams live updates only to a client that resumed it.
   const history = new Map<string, SessionUpdate[]>()
@@ -261,6 +262,7 @@ function createGatewayAgent({
     .onRequest(methods.agent.session.resume, async ({ params }) => {
       const { sessionId } = params
       resumed.push(sessionId)
+      resumeParams.push(params)
       memberships.add(sessionId)
       active.add(sessionId)
       // The gateway replays inside the resume request, before answering it, so a
@@ -413,6 +415,7 @@ function createGatewayAgent({
     prompts,
     cancelled,
     resumed,
+    resumeParams,
     push,
     busy,
     created,
@@ -648,7 +651,7 @@ describe("provider-neutral AOS runtime composition", () => {
     expect(plain.runtime()?.forkSession).toBeUndefined()
   })
 
-  it("starts a turn in a Session the active thread does not show, and rejects its refusal", async () => {
+  it("starts a turn in a Session the active thread does not show, without replay, parts it after the grace, and rejects its refusal", async () => {
     const { gateway, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())
     const supplied = runtime()!
@@ -658,7 +661,11 @@ describe("provider-neutral AOS runtime composition", () => {
     })
     await screen.findByText("Ready")
 
-    await act(() => supplied.startTurn!(SECOND_SESSION_ID, "Check the logs"))
+    const clock = useFakeClock()
+    await act(async () => {
+      await supplied.startTurn!(SECOND_SESSION_ID, "Check the logs")
+      await clock.advance(10)
+    })
 
     expect(gateway.prompts).toMatchObject([
       {
@@ -671,30 +678,22 @@ describe("provider-neutral AOS runtime composition", () => {
       SESSION_ID
     )
     expect(screen.queryByText("Check the logs")).toBeNull()
+    expect(gateway.resumeParams.at(-1)).toMatchObject({
+      sessionId: SECOND_SESSION_ID,
+    })
+    expect(gateway.resumeParams.at(-1)?.replayFrom).toBeUndefined()
+
+    expect(gateway.parted).toEqual([])
+    await act(() => clock.advance(PART_GRACE_MS + 1))
+    expect(gateway.parted).toEqual([SECOND_SESSION_ID])
+    expect(gateway.closed).toEqual([])
+    expect(gateway.cancelled).toEqual([])
 
     gateway.busy.add(SECOND_SESSION_ID)
     await expect(
       supplied.startTurn!(SECOND_SESSION_ID, "Check again")
     ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.turnInProgress })
     expect(gateway.prompts).toHaveLength(1)
-  })
-
-  it("opens the Session a background turn goes to, and parts it after the grace without stopping its work", async () => {
-    const clock = useFakeClock()
-    const { gateway, runtime } = mount()
-    await act(() => clock.advance(10))
-
-    await act(async () => {
-      await runtime()!.startTurn!(SECOND_SESSION_ID, "Check the logs")
-      await clock.advance(10)
-    })
-    expect(gateway.prompts).toMatchObject([{ sessionId: SECOND_SESSION_ID }])
-    expect(gateway.parted).toEqual([])
-
-    await act(() => clock.advance(PART_GRACE_MS + 1))
-    expect(gateway.parted).toEqual([SECOND_SESSION_ID])
-    expect(gateway.closed).toEqual([])
-    expect(gateway.cancelled).toEqual([])
   })
 
   it("keeps a refused draft's turn in the composer and opens the next draft empty", async () => {
