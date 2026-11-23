@@ -1043,7 +1043,7 @@ test("Gateway restores history, offers commands, streams one turn, stops, and re
   page,
 }) => {
   await serveAcp(page)
-  await page.goto("/")
+  await page.goto(`/${AGENT_ID}/${SESSION_ID}`)
 
   // The replay arrives before the resume answers, so both stored turns render.
   await expect(page.getByText("Restore my research.")).toBeVisible()
@@ -1143,7 +1143,7 @@ test("Gateway at capacity is waited out before the browser reconnects", async ({
 }) => {
   await page.clock.install()
   await serveAcp(page, { holdRejoin: true })
-  await page.goto("/")
+  await page.goto(`/${AGENT_ID}/${SESSION_ID}`)
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
   const full = page.getByText("The AOS server is full. Reconnecting shortly.")
@@ -1173,7 +1173,7 @@ test("AOS shows a reconnecting notice over the conversation while a dropped link
 }) => {
   await page.clock.install()
   await serveAcp(page, { holdRejoin: true })
-  await page.goto("/")
+  await page.goto(`/${AGENT_ID}/${SESSION_ID}`)
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
   const reconnecting = page.getByText("Reconnecting this Session…")
@@ -1225,7 +1225,7 @@ test("Gateway loads a long Session's earlier messages as the reader scrolls up, 
       })),
     },
   })
-  await page.goto("/")
+  await page.goto(`/${AGENT_ID}/${SESSION_ID}`)
 
   // The Session opens at its latest message, not at its first.
   const newest = page.getByText(text(length - 1), { exact: true })
@@ -1284,7 +1284,7 @@ test("Gateway renders a turn's tools, diff, terminal, compaction, subagent, stop
   page,
 }) => {
   await serveAcp(page)
-  await page.goto("/")
+  await page.goto(`/${AGENT_ID}/${SESSION_ID}`)
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await collapseInspector(page)
   const model = page.getByRole("combobox", { name: "Choose model" })
@@ -1377,7 +1377,7 @@ test("Gateway answers a permission request on the tool call it guards, and one t
   page,
 }) => {
   await serveAcp(page)
-  await page.goto("/")
+  await page.goto(`/${AGENT_ID}/${SESSION_ID}`)
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   const input = page.getByRole("textbox", { name: "Message input" })
   const card = page.getByRole("heading", { name: "Permission request" })
@@ -1446,7 +1446,7 @@ test("Gateway search adds a Session the provider matched by content to the title
     ],
     sessionContent: { "session-notes": "The pricing page converts poorly." },
   })
-  await page.goto("/")
+  await page.goto(`/${AGENT_ID}/${SESSION_ID}`)
 
   const inspector = page.getByRole("complementary", { name: "Agent details" })
   const searchBox = inspector.getByRole("searchbox", {

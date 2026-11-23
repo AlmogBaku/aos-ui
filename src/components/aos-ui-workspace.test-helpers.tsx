@@ -4,8 +4,8 @@ import {
   useLocalRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react"
-import { cleanup, render } from "@testing-library/react"
-import { afterEach, beforeEach } from "vitest"
+import { cleanup, render, waitFor } from "@testing-library/react"
+import { afterEach, beforeEach, expect } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
@@ -61,10 +61,13 @@ export function asHarnessRuntime(runtime: TestRuntime): HarnessRuntime {
   }
 }
 
-/** Resets the route and local preferences around every test in a suite. */
+/**
+ * Resets local preferences around every test in a suite, and opens each one on
+ * Aster's running Session. A test about where the workspace opens sets `/`.
+ */
 export function resetWorkspaceBetweenTests() {
   beforeEach(() => {
-    window.history.replaceState({}, "", "/")
+    window.history.replaceState({}, "", "/agent-aster/thread-aster-market")
     window.localStorage.clear()
   })
   afterEach(cleanup)
@@ -151,6 +154,22 @@ export function renderNavigation<Runtime extends TestRuntime>(
     },
     rerender: rendered.rerender,
   }
+}
+
+/**
+ * Waits for the URL to read `path` with `sessionId` on screen. A null
+ * `sessionId` is the selected Agent's New session.
+ */
+export async function expectWorkspaceAt(
+  view: { nav: WorkspaceNavigation },
+  path: string,
+  sessionId: string | null
+) {
+  await waitFor(() => {
+    expect(window.location.pathname).toBe(path)
+    expect(view.nav.visibleThreadId).toBe(sessionId)
+    expect(renderedConversation(view.nav)).toBeTruthy()
+  })
 }
 
 /** The ids of the Session tabs navigation shows. */

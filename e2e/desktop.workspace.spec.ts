@@ -26,7 +26,7 @@ const hebrew = {
 } as const
 
 async function openWorkspace(page: Page, locale: "en" | "he" = "en") {
-  await page.goto(`/${locale}`)
+  await page.goto(`/${locale}/agent-aster/thread-aster-market`)
   await collapseInspector(page)
 }
 
@@ -80,7 +80,9 @@ test("Hebrew launches as a fully localized RTL workspace", async ({ page }) => {
 test("the language control preserves URL context and the selected Session", async ({
   page,
 }) => {
-  await page.goto("/en?view=compact#thread-market")
+  await page.goto(
+    "/en/agent-aster/thread-aster-market?view=compact#thread-market"
+  )
   await collapseInspector(page)
   await page.getByRole("tab", { name: "Launch review" }).click()
   const workspaceUrl = page.url()
@@ -100,8 +102,9 @@ test("browser history restores Agent and Session selection", async ({
 }) => {
   await openWorkspace(page)
   await expect(page).toHaveURL(/\/agent-aster\/thread-aster-market$/)
+  // Another Agent opens at its New session; Back leaves it for the Session.
   await agentButton(page, "Mica").click()
-  await expect(page).toHaveURL(/\/agent-mica\/thread-mica-quarterly$/)
+  await expect(page).toHaveURL(/\/agent-mica$/)
 
   await page.goBack()
   await expect(page).toHaveURL(/\/agent-aster\/thread-aster-market$/)

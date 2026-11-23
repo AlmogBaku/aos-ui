@@ -54,7 +54,7 @@ for (const [locale, sessions] of [
   test(`mobile Agents drawer follows a swipe in from the inline-start edge in ${locale}`, async ({
     page,
   }) => {
-    await page.goto(`/${locale}`)
+    await page.goto(`/${locale}/agent-aster/thread-aster-market`)
     await expect(page.getByRole("group", { name: /^Aster,/ })).toBeVisible()
     const { width, height } = page.viewportSize()!
     // The inline-start edge is the left one in LTR and the right one in RTL.
@@ -86,7 +86,7 @@ async function expectTranscriptFocus(page: Page) {
 test("expanded reasoning remains independently scrollable", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   // At 200% text scale the reasoning outgrows its capped panel.
   await page.locator("html").evaluate((element) => {
     element.style.fontSize = "200%"
@@ -138,7 +138,7 @@ test("expanded reasoning remains independently scrollable", async ({
 test("mobile F6 skips CSS-hidden Agents and inspector panes", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await expect(page.getByRole("tablist")).toBeHidden()
   await expect(page.getByRole("complementary", { name: "Agents" })).toBeHidden()
   await expect(
@@ -158,7 +158,7 @@ test("mobile F6 skips CSS-hidden Agents and inspector panes", async ({
 test("mobile Return inserts a newline until Send is tapped", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   const input = page.getByRole("textbox", { name: "Message input" })
 
   await input.focus()
@@ -177,7 +177,7 @@ test("mobile Return inserts a newline until Send is tapped", async ({
 test("F6 reaches the remounted composer after a question resolves", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.focus()
   await page.keyboard.type("Ask me a question")

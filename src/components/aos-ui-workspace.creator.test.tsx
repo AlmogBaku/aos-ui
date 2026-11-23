@@ -18,6 +18,7 @@ import {
 
 import {
   deferred,
+  expectWorkspaceAt,
   draftAgents,
   FIXTURE_NOW,
   FixtureAosUiApp,
@@ -286,6 +287,7 @@ describe("AosUiApp fixture composition", () => {
   })
 
   it("never treats a draft as the default Agent", async () => {
+    window.history.replaceState({}, "", "/")
     const view = renderNavigation(
       creatorFixture(interviewWorkspace(0)),
       fixtureClock
@@ -309,7 +311,12 @@ describe("AosUiApp fixture composition", () => {
     )
     await waitFor(() => expect(draftAgents(view.nav)).toHaveLength(1))
     await act(() => view.nav.selectAgent(draftId))
-    await waitFor(() => expect(view.nav.selectedAgentId).toBe(draftId))
+    // A draft row opens its one interview, never a New session of its own.
+    await expectWorkspaceAt(
+      view,
+      "/draft%3Ainterview-thread/interview-thread",
+      "interview-thread"
+    )
 
     holding = true
     await act(async () => {
@@ -366,6 +373,24 @@ describe("AosUiApp fixture composition", () => {
     await waitFor(() => expect(agentIds(view.nav)).toContain("agent-sora"))
     expect(view.nav.selectedAgentId).toBe("agent-aster")
     expect(draftAgents(view.nav)).toEqual([])
+  })
+
+  it("keeps the operator in an interview while another Agent is hidden", async () => {
+    const view = renderNavigation(creatorFixture(), fixtureClock)
+    const interview = await openInterview(
+      view,
+      () => view.runtime.workspace as FixtureWorkspace
+    )
+    const interviewPath = `/${encodeURIComponent(draftAgentId(interview.sessionId))}/${interview.sessionId}`
+    await expectWorkspaceAt(view, interviewPath, interview.sessionId)
+
+    await act(() => view.nav.hideAgent("agent-mica"))
+
+    const provider = view.runtime.workspace as FixtureWorkspace
+    expect(
+      (await provider.listAgents()).find(({ id }) => id === "agent-mica")
+    ).toMatchObject({ visibility: "hidden" })
+    await expectWorkspaceAt(view, interviewPath, interview.sessionId)
   })
 
   // Full mount: the Activity row reaches the rail's own selection only
@@ -507,7 +532,8 @@ describe("AosUiApp fixture composition", () => {
   })
 
   // The provider's stamp is all a reload has: nothing in the browser
-  // remembers that the interview made its Agent.
+  // remembers that the interview made its Agent. The `/` row opens where this
+  // browser has no stored place, as another device or a later visit does.
   it.each([
     { opens: "the workspace", path: () => "/", draftRow: false },
     {
@@ -527,6 +553,7 @@ describe("AosUiApp fixture composition", () => {
       await waitFor(() => expect(agentIds(view.nav)).toContain("agent-sora"))
 
       cleanup()
+      window.localStorage.clear()
       window.history.replaceState({}, "", path(interview.sessionId))
       const reloaded = renderNavigation(
         creatorFixture(workspace, interview.sessionId),

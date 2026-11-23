@@ -12,7 +12,7 @@ const copy = {
  */
 export async function exerciseAgentManagement(page: Page) {
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await page.getByRole("button", { name: copy.open }).click()
   const back = page.getByRole("button", { name: copy.back })
   if (await back.isVisible()) await back.click()

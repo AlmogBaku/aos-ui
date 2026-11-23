@@ -29,6 +29,7 @@ import {
   asHarnessRuntime,
   registeredDraftRuntime,
   deferred,
+  expectWorkspaceAt,
   FIXTURE_NOW,
   FixtureThreadListAdapter,
   openTabIds,
@@ -39,6 +40,11 @@ import {
   useDraftPromotionRaceRuntime,
   useFixtureBundle,
 } from "./aos-ui-workspace.test-helpers"
+import {
+  LAST_LOCATION_TTL_MS,
+  readLastLocation,
+  writeLastLocation,
+} from "./workspace/last-location"
 
 vi.mock("react-router", () => import("./test-utils/window-router"))
 
@@ -99,6 +105,50 @@ it("renders pending provider interactions through the unified runtime and submit
   expect(respond).toHaveBeenCalledWith(request, {
     kind: "question",
     answers: [["continue"]],
+  })
+})
+
+describe("where the workspace opens", () => {
+  const pricing = "/agent-aster/thread-aster-pricing"
+
+  it.each([
+    {
+      used: "within 6 h",
+      ageMs: 0,
+      path: pricing,
+      sessionId: "thread-aster-pricing",
+    },
+    {
+      used: "6 h ago",
+      ageMs: LAST_LOCATION_TTL_MS,
+      path: "/agent-aster",
+      sessionId: null,
+    },
+  ])(
+    "opens / where this browser was used $used, else at the first Agent's New session",
+    async ({ ageMs, path, sessionId }) => {
+      window.history.replaceState({}, "", "/")
+      vi.spyOn(Date, "now").mockReturnValueOnce(Date.now() - ageMs)
+      writeLastLocation(pricing)
+
+      const view = renderNavigation(usePublicFixture, fixtureClock)
+
+      await expectWorkspaceAt(view, path, sessionId)
+    }
+  )
+
+  it("opens the Session a URL names over the stored one, and stores it instead", async () => {
+    writeLastLocation(pricing)
+    window.history.replaceState({}, "", "/agent-mica/thread-mica-quarterly")
+
+    const view = renderNavigation(usePublicFixture, fixtureClock)
+
+    await expectWorkspaceAt(
+      view,
+      "/agent-mica/thread-mica-quarterly",
+      "thread-mica-quarterly"
+    )
+    expect(readLastLocation()).toBe("/agent-mica/thread-mica-quarterly")
   })
 })
 
@@ -205,7 +255,7 @@ describe("reversible local Session tabs", () => {
     })
 
     try {
-      act(() => void view.nav.selectAgent("agent-mica"))
+      act(() => void view.nav.openSession("thread-mica-quarterly"))
       await waitFor(() =>
         expect(openTabIds(view.nav)).toContain("thread-mica-quarterly")
       )
@@ -220,6 +270,26 @@ describe("reversible local Session tabs", () => {
     }
     expect(view.nav.visibleThreadId).toBe("thread-aster-market")
     expect(window.location.pathname).toBe("/agent-aster/thread-aster-market")
+  })
+
+  it("returns to the previous Session on Back from another Agent's New session", async () => {
+    const view = renderNavigation(usePublicFixture, fixtureClock)
+    await expectWorkspaceAt(
+      view,
+      "/agent-aster/thread-aster-market",
+      "thread-aster-market"
+    )
+    await act(() => view.nav.selectAgent("agent-mica"))
+    await expectWorkspaceAt(view, "/agent-mica", null)
+
+    window.history.replaceState({}, "", "/agent-aster/thread-aster-market")
+    view.rerender()
+
+    await expectWorkspaceAt(
+      view,
+      "/agent-aster/thread-aster-market",
+      "thread-aster-market"
+    )
   })
 
   it("keeps the resolved conversation mounted during a background Session reload", async () => {
@@ -303,23 +373,23 @@ describe("reversible local Session tabs", () => {
     expect(window.location.pathname).toBe("/agent-aster/thread-aster-pricing")
   })
 
-  it("normalizes a stale route to an available Agent and Session", async () => {
-    window.history.replaceState({}, "", "/missing-agent/missing-session")
-    const replaceState = vi.spyOn(window.history, "replaceState")
+  it.each([
+    { route: "an unknown Agent and Session", path: "/missing-agent/gone" },
+    { route: "a Session its Agent no longer has", path: "/agent-aster/gone" },
+    { route: "an Agent alone", path: "/agent-aster" },
+    { route: "the pending New Agent draft", path: "/draft-pending" },
+  ])(
+    "opens the Agent's New session for $route, adding no history entry",
+    async ({ path }) => {
+      window.history.replaceState({}, "", path)
+      const pushState = vi.spyOn(window.history, "pushState")
 
-    const view = renderNavigation(usePublicFixture, fixtureClock)
+      const view = renderNavigation(usePublicFixture, fixtureClock)
 
-    await waitFor(() =>
-      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
-    )
-    await waitFor(() =>
-      expect(replaceState).toHaveBeenCalledWith(
-        null,
-        "",
-        "/agent-aster/thread-aster-market"
-      )
-    )
-  })
+      await expectWorkspaceAt(view, "/agent-aster", null)
+      expect(pushState).not.toHaveBeenCalled()
+    }
+  )
 
   it("leaves no selected Session after the last open tab closes, even with older history", async () => {
     const view = renderNavigation(usePublicFixture, fixtureClock)
