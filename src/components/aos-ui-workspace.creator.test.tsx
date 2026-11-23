@@ -375,8 +375,6 @@ describe("AosUiApp fixture composition", () => {
     expect(draftAgents(view.nav)).toEqual([])
   })
 
-  // Full mount: the Activity row reaches the rail's own selection only
-  // through the workspace.
   it("keeps the operator in an interview while another Agent is hidden", async () => {
     const view = renderNavigation(creatorFixture(), fixtureClock)
     const interview = await openInterview(
@@ -395,6 +393,8 @@ describe("AosUiApp fixture composition", () => {
     await expectWorkspaceAt(view, interviewPath, interview.sessionId)
   })
 
+  // Full mount: the Activity row reaches the rail's own selection only
+  // through the workspace.
   it("opens a created Agent from its ready row in Activity", async () => {
     const view = renderWorkspace(creatorFixture(), fixtureClock)
     const provider = view.runtime.workspace as FixtureWorkspace
