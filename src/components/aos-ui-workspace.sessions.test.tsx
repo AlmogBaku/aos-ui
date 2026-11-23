@@ -129,7 +129,7 @@ describe("where the workspace opens", () => {
     async ({ ageMs, path, sessionId }) => {
       window.history.replaceState({}, "", "/")
       vi.spyOn(Date, "now").mockReturnValueOnce(Date.now() - ageMs)
-      writeLastLocation(window.localStorage, pricing)
+      writeLastLocation(pricing)
 
       const view = renderNavigation(usePublicFixture, fixtureClock)
 
@@ -138,7 +138,7 @@ describe("where the workspace opens", () => {
   )
 
   it("opens the Session a URL names over the stored one, and stores it instead", async () => {
-    writeLastLocation(window.localStorage, pricing)
+    writeLastLocation(pricing)
     window.history.replaceState({}, "", "/agent-mica/thread-mica-quarterly")
 
     const view = renderNavigation(usePublicFixture, fixtureClock)
@@ -148,9 +148,7 @@ describe("where the workspace opens", () => {
       "/agent-mica/thread-mica-quarterly",
       "thread-mica-quarterly"
     )
-    expect(readLastLocation(window.localStorage)).toBe(
-      "/agent-mica/thread-mica-quarterly"
-    )
+    expect(readLastLocation()).toBe("/agent-mica/thread-mica-quarterly")
   })
 })
 

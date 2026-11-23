@@ -13,6 +13,12 @@ export const LAST_LOCATION_TOUCH_MS = 60 * 1000
 const lastLocationKey = "aos_ui:workspace:last-location"
 
 type LocationStorage = Pick<Storage, "getItem" | "setItem">
+/**
+ * Reaches the browser's storage. Reading `window.localStorage` itself throws
+ * where the browser blocks site data, so every use calls this inside a `try`.
+ */
+type StorageSource = () => LocationStorage
+const browserStorage: StorageSource = () => window.localStorage
 type LastLocation = { path: string; usedAt: number }
 
 /** Only a path that names an Agent, in the form the router writes, is a place. */
@@ -25,10 +31,10 @@ function isWorkspacePlace(path: string) {
   )
 }
 
-function readEntry(storage: LocationStorage): LastLocation | null {
+function readEntry(storage: StorageSource): LastLocation | null {
   try {
     const value: unknown = JSON.parse(
-      storage.getItem(lastLocationKey) ?? "null"
+      storage().getItem(lastLocationKey) ?? "null"
     )
     if (typeof value !== "object" || value === null) return null
     const { path, usedAt } = value as Record<string, unknown>
@@ -48,17 +54,20 @@ function ageOf({ usedAt }: LastLocation) {
 }
 
 /** The stored workspace path, while it is younger than the inactivity window. */
-export function readLastLocation(storage: LocationStorage) {
+export function readLastLocation(storage: StorageSource = browserStorage) {
   const entry = readEntry(storage)
   if (!entry) return null
   const age = ageOf(entry)
   return age >= 0 && age < LAST_LOCATION_TTL_MS ? entry.path : null
 }
 
-export function writeLastLocation(storage: LocationStorage, path: string) {
+export function writeLastLocation(
+  path: string,
+  storage: StorageSource = browserStorage
+) {
   if (!isWorkspacePlace(path)) return
   try {
-    storage.setItem(
+    storage().setItem(
       lastLocationKey,
       JSON.stringify({ path, usedAt: Date.now() } satisfies LastLocation)
     )
@@ -74,17 +83,16 @@ export function writeLastLocation(storage: LocationStorage, path: string) {
  */
 export function useRememberLocation(path: string) {
   useEffect(() => {
-    if (document.visibilityState === "visible")
-      writeLastLocation(window.localStorage, path)
+    if (document.visibilityState === "visible") writeLastLocation(path)
   }, [path])
 
   const touch = useEffectEvent(() => {
-    const stored = readEntry(window.localStorage)
+    const stored = readEntry(browserStorage)
     if (stored?.path === path) {
       const age = ageOf(stored)
       if (age >= 0 && age < LAST_LOCATION_TOUCH_MS) return
     }
-    writeLastLocation(window.localStorage, path)
+    writeLastLocation(path)
   })
 
   useEffect(() => {

@@ -176,7 +176,7 @@ export function useWorkspaceNavigation({
   // A tab opened at `/` reopens where this browser was last used, for its
   // first route only.
   const [restoredPathname] = useState(() =>
-    pathname === "/" ? readLastLocation(window.localStorage) : null
+    pathname === "/" ? readLastLocation() : null
   )
   const restorePending = useRef(restoredPathname !== null)
   useRememberLocation(pathname)
@@ -1585,7 +1585,10 @@ export function useWorkspaceNavigation({
   async function refreshAfterVisibilityChange() {
     const nextAgents = await workspace.refreshAgents()
     setAgents(nextAgents)
+    // An interview is never left for a roster change; neither is an Agent
+    // that stays.
     if (
+      selectedAgentIsDraft ||
       nextAgents.some(
         (agent) => agent.id === selectedAgentId && isRosterAgent(agent)
       )

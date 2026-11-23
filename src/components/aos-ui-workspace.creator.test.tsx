@@ -18,6 +18,7 @@ import {
 
 import {
   deferred,
+  expectWorkspaceAt,
   draftAgents,
   FIXTURE_NOW,
   FixtureAosUiApp,
@@ -310,7 +311,12 @@ describe("AosUiApp fixture composition", () => {
     )
     await waitFor(() => expect(draftAgents(view.nav)).toHaveLength(1))
     await act(() => view.nav.selectAgent(draftId))
-    await waitFor(() => expect(view.nav.selectedAgentId).toBe(draftId))
+    // A draft row opens its one interview, never a New session of its own.
+    await expectWorkspaceAt(
+      view,
+      "/draft%3Ainterview-thread/interview-thread",
+      "interview-thread"
+    )
 
     holding = true
     await act(async () => {
@@ -371,6 +377,24 @@ describe("AosUiApp fixture composition", () => {
 
   // Full mount: the Activity row reaches the rail's own selection only
   // through the workspace.
+  it("keeps the operator in an interview while another Agent is hidden", async () => {
+    const view = renderNavigation(creatorFixture(), fixtureClock)
+    const interview = await openInterview(
+      view,
+      () => view.runtime.workspace as FixtureWorkspace
+    )
+    const interviewPath = `/${encodeURIComponent(draftAgentId(interview.sessionId))}/${interview.sessionId}`
+    await expectWorkspaceAt(view, interviewPath, interview.sessionId)
+
+    await act(() => view.nav.hideAgent("agent-mica"))
+
+    const provider = view.runtime.workspace as FixtureWorkspace
+    expect(
+      (await provider.listAgents()).find(({ id }) => id === "agent-mica")
+    ).toMatchObject({ visibility: "hidden" })
+    await expectWorkspaceAt(view, interviewPath, interview.sessionId)
+  })
+
   it("opens a created Agent from its ready row in Activity", async () => {
     const view = renderWorkspace(creatorFixture(), fixtureClock)
     const provider = view.runtime.workspace as FixtureWorkspace

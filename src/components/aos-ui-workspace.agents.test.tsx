@@ -87,6 +87,7 @@ describe("Agent management", () => {
     expect(
       switches.some((item) => item.getAttribute("aria-checked") === "false")
     ).toBe(true)
+    const pushState = vi.spyOn(window.history, "pushState")
     await user.click(
       within(dialog).getByRole("switch", { name: "Show in workspace: Aster" })
     )
@@ -100,6 +101,8 @@ describe("Agent management", () => {
     expect(screen.queryByRole("button", { name: /^Aster,/ })).toBeNull()
     // Losing the Agent on screen opens the next one at its New session.
     await waitFor(() => expect(window.location.pathname).toBe("/agent-mica"))
+    // In place of the hidden Agent, so Back never returns to it.
+    expect(pushState).not.toHaveBeenCalled()
     await user.click(screen.getByRole("button", { name: "Manage Agents" }))
     const reopened = await screen.findByRole("dialog", {
       name: "Manage Agents",
