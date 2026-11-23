@@ -19,7 +19,7 @@ const copy = {
 
 export async function exerciseSessionTabs(page: Page, mobile: boolean) {
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   if (mobile) {
     await expect(
       page.getByRole("tablist", { name: copy.sessions })

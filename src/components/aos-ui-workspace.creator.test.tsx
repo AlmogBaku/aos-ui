@@ -286,6 +286,7 @@ describe("AosUiApp fixture composition", () => {
   })
 
   it("never treats a draft as the default Agent", async () => {
+    window.history.replaceState({}, "", "/")
     const view = renderNavigation(
       creatorFixture(interviewWorkspace(0)),
       fixtureClock
@@ -507,7 +508,8 @@ describe("AosUiApp fixture composition", () => {
   })
 
   // The provider's stamp is all a reload has: nothing in the browser
-  // remembers that the interview made its Agent.
+  // remembers that the interview made its Agent. The `/` row opens where this
+  // browser has no stored place, as another device or a later visit does.
   it.each([
     { opens: "the workspace", path: () => "/", draftRow: false },
     {
@@ -527,6 +529,7 @@ describe("AosUiApp fixture composition", () => {
       await waitFor(() => expect(agentIds(view.nav)).toContain("agent-sora"))
 
       cleanup()
+      window.localStorage.clear()
       window.history.replaceState({}, "", path(interview.sessionId))
       const reloaded = renderNavigation(
         creatorFixture(workspace, interview.sessionId),

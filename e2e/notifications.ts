@@ -92,7 +92,7 @@ async function installNotificationMock(
 
 /** The Activity bell is the one control both layouts always render. */
 async function openWorkspace(page: Page) {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await expect(
     page.getByRole("button", { name: english.activityBell })
   ).toBeVisible()

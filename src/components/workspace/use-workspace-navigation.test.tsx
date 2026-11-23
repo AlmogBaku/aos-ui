@@ -12,7 +12,10 @@ import { useWorkspaceNavigation } from "./use-workspace-navigation"
 
 vi.mock("react-router", () => import("../test-utils/window-router"))
 
-beforeEach(() => window.history.replaceState({}, "", "/"))
+beforeEach(() => {
+  window.history.replaceState({}, "", "/")
+  window.localStorage.clear()
+})
 afterEach(cleanup)
 
 const NOW = new Date("2026-09-08T10:00:00.000Z")
@@ -168,6 +171,7 @@ async function mountNavigation(
 ) {
   const threadList = createFakeThreadList(threadIds)
   const workspace = createWorkspace(sessions, overrides)
+  window.history.replaceState({}, "", "/agent-a/s-recent")
   const { result } = renderHook(() =>
     useWorkspaceNavigation({
       bundle: { assistantRuntime: threadList.runtime, workspace },

@@ -16,6 +16,7 @@ import { AosUiWorkspace } from "./aos-ui-workspace"
 import {
   asHarnessRuntime,
   deferred,
+  expectWorkspaceAt,
   FIXTURE_NOW,
   fixtureSessions,
   openTabIds,
@@ -172,6 +173,7 @@ describe("AosUiApp fixture composition", () => {
   // separate parts that only the workspace joins.
   it("joins provider Agents, Session tabs, the thread, and explicit todos", async () => {
     const user = userEvent.setup()
+    window.history.replaceState({}, "", "/agent-primary/session-primary")
     render(
       <ControlledWorkspaceFixture
         initialThreadId="session-primary"
@@ -260,21 +262,22 @@ describe("AosUiApp fixture composition", () => {
     expect(screen.queryByRole("button", { name: /^Secondary,/ })).toBeNull()
   })
 
-  it("restores the last valid Session when switching Agents", async () => {
+  it("opens another Agent at its New session, and leaves the Agent on screen where it is", async () => {
     const view = renderNavigation(usePublicFixture, fixtureClock)
-    await waitFor(() =>
-      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
-    )
-
-    await act(() => view.nav.selectAgent("agent-mica"))
-    await waitFor(() =>
-      expect(view.nav.visibleThreadId).toBe("thread-mica-quarterly")
+    await expectWorkspaceAt(
+      view,
+      "/agent-aster/thread-aster-market",
+      "thread-aster-market"
     )
 
     await act(() => view.nav.selectAgent("agent-aster"))
-    await waitFor(() =>
-      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
-    )
+    expect(window.location.pathname).toBe("/agent-aster/thread-aster-market")
+    expect(view.nav.visibleThreadId).toBe("thread-aster-market")
+
+    await act(() => view.nav.selectAgent("agent-mica"))
+    await expectWorkspaceAt(view, "/agent-mica", null)
+    // Mica's open Session stays one click away in the tab strip.
+    expect(openTabIds(view.nav)).toContain("thread-mica-quarterly")
   })
 
   it("opens an older Session from Agent history as a closable tab, and reopens a closed recent tab from its row", async () => {
@@ -314,28 +317,20 @@ describe("AosUiApp fixture composition", () => {
     expect(openTabIds(view.nav)).toContain("thread-aster-market")
   })
 
-  // Nori owns one stale Session that is neither live nor pinned, so only the
-  // history fallback can put it in the tab strip.
-  it("shows the fallback history Session as a tab for an Agent with only old history, and lets that sole tab close", async () => {
+  // Nori owns one stale Session that is neither live nor pinned, so it stays
+  // in History rather than the tab strip.
+  it("opens an Agent with only old history at its New session, with no tab", async () => {
     const view = renderNavigation(usePublicFixture, fixtureClock)
-    await waitFor(() =>
-      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
+    await expectWorkspaceAt(
+      view,
+      "/agent-aster/thread-aster-market",
+      "thread-aster-market"
     )
 
     await act(() => view.nav.selectAgent("agent-nori"))
-    await waitFor(() =>
-      expect(view.nav.visibleThreadId).toBe("thread-nori-copy")
-    )
-    expect(view.nav.shellOpenSessions).toEqual([
-      expect.objectContaining({
-        sessionId: "thread-nori-copy",
-        title: "Launch copy",
-        unread: true,
-      }),
-    ])
 
-    await act(() => view.nav.closeSession("thread-nori-copy"))
-    await waitFor(() => expect(openTabIds(view.nav)).toEqual([]))
+    await expectWorkspaceAt(view, "/agent-nori", null)
+    expect(openTabIds(view.nav)).toEqual([])
   })
 
   // Full mount: which of the conversation, the empty-Session welcome, and the
@@ -645,7 +640,7 @@ describe("AosUiApp fixture composition", () => {
       ])
     )
 
-    await act(() => view.nav.selectAgent("agent-mica"))
+    await act(() => view.nav.openSession("thread-mica-quarterly"))
     await waitFor(() =>
       expect(view.nav.visibleThreadId).toBe("thread-mica-quarterly")
     )

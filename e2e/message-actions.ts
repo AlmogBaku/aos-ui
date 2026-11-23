@@ -156,7 +156,7 @@ async function exerciseMobile(page: Page, copy: MessageActionsCopy) {
 export async function exerciseMessageActions(page: Page, mobile: boolean) {
   const copy = english
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await expect(turn(page, ASSISTANT_TURN)).toBeVisible()
   // A following thread returns to its end whenever content grows, and only the
   // reader's own scroll leaves it, so the press waits for the lazily loaded

@@ -3,7 +3,7 @@ import { holdsFocus } from "./support/focus"
 import { collapseInspector, expandInspector } from "./support/inspector"
 
 async function openWorkspace(page: Page) {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await collapseInspector(page)
   await expect(page.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
     "aria-selected",
@@ -179,17 +179,18 @@ test("Session and Agent switches retain the unsent draft in its owning Session",
   await runCommand(page, "Open Session: Market brief")
   await expect(input).toHaveValue("Draft that must stay with Market brief")
 
+  // Another Agent opens at its New session, with an empty composer of its own.
   await runCommand(page, "Select next Agent")
   await expect(page.getByRole("button", { name: /^Mica,/ })).toHaveAttribute(
     "aria-label",
     /Selected Agent/
   )
-  await expect(
-    page.getByRole("tab", { name: "Quarterly synthesis" })
-  ).toHaveAttribute("aria-selected", "true")
+  await expect(page).toHaveURL(/\/agent-mica$/)
   await expect(input).toHaveValue("")
 
   await runCommand(page, "Select previous Agent")
+  await expect(page).toHaveURL(/\/agent-aster$/)
+  await runCommand(page, "Open Session: Market brief")
   await expect(page.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
     "aria-selected",
     "true"
@@ -201,7 +202,7 @@ test("wrapped history navigation restores a nonempty draft at both visual bounda
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await page.getByRole("button", { name: "Open Agents" }).click()
   const navigator = page.getByRole("dialog", { name: "Sessions" })
   await navigator

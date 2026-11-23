@@ -216,7 +216,7 @@ async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
 
 export async function exerciseSessionActions(page: Page, mobile: boolean) {
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   if (mobile) await exerciseMobile(page, english)
   else await exerciseDesktop(page, english)
 }

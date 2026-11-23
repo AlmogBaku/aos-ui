@@ -13,7 +13,7 @@ test("an MCP App renders through the double frame on its sandbox origin, talks t
     if (new URL(request.url()).hostname === "files.invalid")
       reached.push(request.url())
   })
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await ready(page)
   await page
     .getByRole("textbox", { name: "Message input" })
@@ -112,7 +112,7 @@ const panelView = (page: import("./test").Page, filename: string) =>
 test("the artifact view shows report.pdf as a card that downloads, opens the side panel, and goes full screen", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await ready(page)
 
   await send(page, "Publish an artifact")
@@ -180,7 +180,7 @@ test("the artifact view shows report.pdf as a card that downloads, opens the sid
 test("the artifact view shows preview.png alone in its message", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await ready(page)
 
   await send(page, "Show a png artifact")
@@ -196,7 +196,7 @@ test("the artifact view shows preview.png alone in its message", async ({
 test("the artifact view reads crm-pipeline.xlsx in its worker and shows its sheet as a grid in the side panel", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await ready(page)
 
   await send(page, "Show a spreadsheet artifact")
@@ -217,7 +217,7 @@ test("the artifact view reads crm-pipeline.xlsx in its worker and shows its shee
 test("the artifact view draws sales-proposal.docx as pages in a frame that runs no script of the document's own and never leaves it", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await ready(page)
 
   await send(page, "Show a word document artifact")
@@ -270,7 +270,7 @@ test("the artifact view draws sales-proposal.docx as pages in a frame that runs 
 test("the artifact view runs test.html sandboxed with storage, opening its link in a new tab and refusing its fetch and its navigation", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await ready(page)
 
   await send(page, "Show an html artifact")

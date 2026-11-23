@@ -28,6 +28,7 @@ const expectCreatorConversation = (nav: WorkspaceNavigation) => {
 
 describe("Agent management", () => {
   it("defaults to an ordinary Agent when the creator is listed first", async () => {
+    window.history.replaceState({}, "", "/")
     const view = renderNavigation(() =>
       useCatalogRuntime({ creatorFirst: true })
     )
@@ -97,6 +98,8 @@ describe("Agent management", () => {
       )
     )
     expect(screen.queryByRole("button", { name: /^Aster,/ })).toBeNull()
+    // Losing the Agent on screen opens the next one at its New session.
+    await waitFor(() => expect(window.location.pathname).toBe("/agent-mica"))
     await user.click(screen.getByRole("button", { name: "Manage Agents" }))
     const reopened = await screen.findByRole("dialog", {
       name: "Manage Agents",

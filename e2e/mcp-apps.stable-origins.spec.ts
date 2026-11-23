@@ -7,7 +7,7 @@ import { expect, test } from "./test"
 test("the artifact view loads from its own stable origin, shows its file there, and keeps test.html's storage from one preview to the next", async ({
   page,
 }) => {
-  await page.goto("/en")
+  await page.goto("/en/agent-aster/thread-aster-market")
   await expect(
     page.getByRole("complementary", { name: "Agent details" })
   ).toBeVisible()

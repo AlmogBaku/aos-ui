@@ -4,13 +4,15 @@ AOS is organized around provider-owned Agents and Sessions. The selected runtime
 
 ## Choose an Agent and Session
 
-Select an Agent from the roster, then open one of its Sessions. Desktop layouts show Sessions as tabs. Narrow layouts place Agent and Session navigation in a focus-managed drawer: open it with the menu button or by swiping in from the left edge (the right edge in Hebrew), and swipe it back to close it.
+Selecting an Agent from the roster opens its New session; its open Sessions stay one click away. Desktop layouts show Sessions as tabs. Narrow layouts place Agent and Session navigation in a focus-managed drawer: open it with the menu button or by swiping in from the left edge (the right edge in Hebrew), and swipe it back to close it.
 
 A pinned Session is always open: it leads Open sessions and the tab strip however old it is, and never appears in History. Closing a pinned tab removes only the tab; its Open sessions row stays, and the tab returns the next time the Session is active. The pin is stored by the runtime, not the browser.
 
 A Session that came from another platform (Buzz, WhatsApp, Slack, Telegram, Discord, or email) shows that platform's icon on its tab and History row, where the runtime reports it (Hermes and OpenClaw).
 
-Routes use `/{agentId}/{sessionId}`. The `/en/` and `/he/` path prefixes are accepted and stripped, so bookmarked or shared locale-prefixed URLs resolve to the same route. Opening a compact route preserves the locally selected English or Hebrew preference. If an Agent or Session no longer exists, AOS refuses to navigate to stale provider data.
+Routes use `/{agentId}/{sessionId}`. The `/en/` and `/he/` path prefixes are accepted and stripped, so bookmarked or shared locale-prefixed URLs resolve to the same route. Opening a compact route preserves the locally selected English or Hebrew preference. A route to a Session that no longer exists opens its Agent's New session, and one to a missing Agent opens the first Agent's; AOS never navigates to stale provider data.
+
+Opening AOS at `/`, as the installed app does, returns to the Agent and Session you last used in this browser if you used AOS in the last 6 hours. Every navigation, key press, click, or tap counts as use. Otherwise it opens the first Agent's New session. A link or a notification still opens the Session it names, and a tab left open stays where it is.
 
 Creating a Session always creates it for the selected Agent. Provider events remain attached to their originating Agent and Session even if you navigate elsewhere while work is running.
 
@@ -222,7 +224,7 @@ may delay or suppress delivery; Activity remains the place to check.
 
 ## Change language and appearance
 
-AOS supports English LTR and Hebrew RTL. Language, appearance, keyboard settings, inspector state, and manually opened recent tabs are local browser preferences; they do not change native runtime state.
+AOS supports English LTR and Hebrew RTL. Language, appearance, keyboard settings, inspector state, manually opened recent tabs, and the last workspace location (kept for 6 hours of use) are local browser preferences; they do not change native runtime state.
 
 ## Optional workflows
 

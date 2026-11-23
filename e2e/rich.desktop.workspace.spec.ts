@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "./test"
 
 async function openWorkspace(page: Page, locale: "en" | "he" = "en") {
-  await page.goto(`/${locale}`)
+  await page.goto(`/${locale}/agent-aster/thread-aster-market`)
   await expect(
     page.getByRole("complementary", { name: /^(?:Agent details|פרטי הסוכן)$/ })
   ).toBeVisible()

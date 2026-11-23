@@ -46,6 +46,7 @@ import {
   restoreBackgroundLastSelected,
   useSessionTabUndo,
 } from "./session-tab-undo"
+import { readLastLocation, useRememberLocation } from "./last-location"
 import { buildWorkspaceNavigationCatalog } from "./workspace-navigation-catalog"
 import {
   getAgentCreator,
@@ -172,10 +173,17 @@ export function useWorkspaceNavigation({
     sessions: [],
     error: null,
   })
+  // A tab opened at `/` reopens where this browser was last used, for its
+  // first route only.
+  const [restoredPathname] = useState(() =>
+    pathname === "/" ? readLastLocation(window.localStorage) : null
+  )
+  const restorePending = useRef(restoredPathname !== null)
+  useRememberLocation(pathname)
   // A deep link names its Agent before the route applies, so History scopes
   // that Agent's catalog first instead of the default Agent's.
   const [preferredAgentId, setPreferredAgentId] = useState<string | null>(
-    () => parseWorkspacePathname(pathname)?.agentId ?? null
+    () => parseWorkspacePathname(restoredPathname ?? pathname)?.agentId ?? null
   )
   // A notice belongs to the place it was raised.
   const [raisedNotice, setRaisedNotice] = useState<
@@ -618,6 +626,16 @@ export function useWorkspaceNavigation({
     },
     [clearLocalDraft, createSessionDraft, runtime]
   )
+  /** An Agent's default place: its New session, routed the way `mode` says. */
+  const openNewSession = useCallback(
+    async (agentId: string, mode: "push" | "replace") => {
+      lastSelected.current.set(agentId, null)
+      desiredThread.current = null
+      updateRoute({ agentId, sessionId: null }, mode)
+      return switchToNewThread(agentId)
+    },
+    [switchToNewThread, updateRoute]
+  )
 
   useEffect(() => {
     const agentId = localDraftAgent.current
@@ -751,6 +769,16 @@ export function useWorkspaceNavigation({
   useEffect(() => {
     if (readBrowserPathname() !== pathname) return
     if (agentsLoading || threadState.isLoading || sessionsLoading) return
+    if (
+      localDraftAgent.current &&
+      !activeThreadId &&
+      appliedPathname.current !== pathname &&
+      routeTransitionPathname.current !== pathname
+    ) {
+      // Only Back and Forward move the route without `updateRoute`: they
+      // leave the New session for the place they name.
+      clearLocalDraft()
+    }
     const localDraftAgentId = localDraftAgent.current
     if (localDraftAgentId && !activeThreadId) {
       // A pending draft keeps its own row; others keep their own Agent.
@@ -769,7 +797,12 @@ export function useWorkspaceNavigation({
     if (appliedPathname.current !== pathname) {
       if (routeTransitionPathname.current === pathname) return
       routeTransitionPathname.current = pathname
-      const requested = parseWorkspacePathname(pathname)
+      const requested = parseWorkspacePathname(
+        restorePending.current && pathname === "/" && restoredPathname
+          ? restoredPathname
+          : pathname
+      )
+      restorePending.current = false
       const requestedAgent = requested?.agentId
         ? navigableAgents.find(({ id }) => id === requested.agentId)
         : undefined
@@ -788,17 +821,13 @@ export function useWorkspaceNavigation({
       // cannot answer for normalizes below like any stale route.
       const unlistedSession =
         requested?.sessionId && !knownSession ? requested.sessionId : undefined
-      const fallbackThreadId = resolveSessionSelection({
-        agentId,
-        sessions: listedSessions,
-        activeSessions: [],
-      })
+      // A route that names no Session this Agent owns opens its New session.
       const sessionId =
         (knownSession?.agentId === agentId
           ? knownSession.sessionId
           : undefined) ??
         unlistedSession ??
-        fallbackThreadId
+        null
       setPreferredAgentId(agentId)
       if (sessionId) {
         setDismissedTabs((current) => ({
@@ -834,10 +863,12 @@ export function useWorkspaceNavigation({
         .catch((reason: unknown) => {
           if (routeTransitionPathname.current !== pathname) return
           routeTransitionPathname.current = null
-          // A URL can name a Session the provider no longer has. Normalize to
-          // what the Agent does have instead of stranding the operator.
+          // A URL can name a Session the provider no longer has. It opens the
+          // Agent's New session instead of stranding the operator.
           if (sessionId === unlistedSession) {
-            updateRoute({ agentId, sessionId: fallbackThreadId }, "replace")
+            void openNewSession(agentId, "replace").catch((error: unknown) =>
+              setActionError(toError(error))
+            )
             return
           }
           setActionError(toError(reason))
@@ -934,6 +965,9 @@ export function useWorkspaceNavigation({
     runtime,
     scopeSessionCatalog,
     switchToNewThread,
+    clearLocalDraft,
+    openNewSession,
+    restoredPathname,
     pathname,
     updateRoute,
   ])
@@ -1120,55 +1154,13 @@ export function useWorkspaceNavigation({
     // The pending draft owns no Session: reselecting it would replace the
     // interview it is showing with a second empty one.
     if (agentId === PENDING_DRAFT_AGENT_ID) return
+    // Picking the Agent on screen is not a change of Agent.
+    if (agentId === selectedAgentId) return
+    // A draft row's one Session is its interview, never a New session.
+    const interview = draftSessionId(agentId)
+    if (interview) return openSession(interview, agentId)
     setPreferredAgentId(agentId)
-    const manual = new Set([...(manuallyOpened[agentId] ?? [])])
-    const dismissed = new Set(liveDismissedTabs[agentId] ?? [])
-    const rawView = buildAgentSessionView({
-      agentId,
-      sessions,
-      manuallyOpenedThreadIds: manual,
-      titles,
-      now: eligibilityNow,
-      untitledLabel: dictionary.actions.newSession,
-      visibleThreadId,
-    })
-    const view = {
-      ...rawView,
-      openSessions: rawView.openSessions.filter(
-        ({ sessionId }) => !dismissed.has(sessionId)
-      ),
-    }
-    const sessionId =
-      view.openSessions.length === 0 &&
-      lastSelected.current.get(agentId) === null
-        ? null
-        : resolveSessionSelection({
-            agentId,
-            sessions: listedSessions.filter(
-              (session) =>
-                session.agentId === agentId && !dismissed.has(session.sessionId)
-            ),
-            activeSessions: view.openSessions,
-            lastSelectedThreadId: dismissed.has(
-              lastSelected.current.get(agentId) ?? ""
-            )
-              ? undefined
-              : lastSelected.current.get(agentId),
-          })
-    if (!sessionId) {
-      desiredThread.current = null
-      updateRoute({ agentId, sessionId: null }, "push")
-      await switchToNewThread(agentId)
-      return
-    }
-    if (!view.openSessions.some((session) => session.sessionId === sessionId)) {
-      setManuallyOpened((current) => ({
-        ...current,
-        [agentId]: [...new Set([...(current[agentId] ?? []), sessionId])],
-      }))
-    }
-    updateRoute({ agentId, sessionId }, "push")
-    await selectRuntimeThread(sessionId)
+    await openNewSession(agentId, "push")
   }
 
   /**
@@ -1271,10 +1263,7 @@ export function useWorkspaceNavigation({
       await selectRuntimeThread(next)
       return
     }
-    lastSelected.current.set(agentId, null)
-    desiredThread.current = null
-    updateRoute({ agentId, sessionId: null }, "replace")
-    await switchToNewThread(agentId)
+    await openNewSession(agentId, "replace")
   }
 
   async function closeSession(sessionId: string, verifiedAgentId?: string) {
@@ -1575,7 +1564,13 @@ export function useWorkspaceNavigation({
     const sessionId = draftSessionId(agentId)
     if (!sessionId) {
       clearLocalDraft()
-      if (defaultAgentId) await selectAgent(defaultAgentId)
+      // Its first turn may still be creating the interview's Session, and
+      // Assistant UI opens the next New session only once that settles. The
+      // operator moves at once; the discard does not wait for it.
+      if (defaultAgentId)
+        void selectAgent(defaultAgentId).catch((error: unknown) =>
+          setActionError(toError(error))
+        )
       return
     }
     // Leave the interview before deleting it. Deleting the open thread strands
@@ -1590,16 +1585,23 @@ export function useWorkspaceNavigation({
   async function refreshAfterVisibilityChange() {
     const nextAgents = await workspace.refreshAgents()
     setAgents(nextAgents)
-    setPreferredAgentId((current) =>
-      nextAgents.some((agent) => agent.id === current && isRosterAgent(agent))
-        ? current
-        : (nextAgents.find(isRosterAgent)?.id ?? null)
+    if (
+      nextAgents.some(
+        (agent) => agent.id === selectedAgentId && isRosterAgent(agent)
+      )
     )
-    if (!nextAgents.some(isRosterAgent)) {
-      clearLocalDraft()
-      desiredThread.current = null
-      await runtime.threads.switchToNewThread()
+      return
+    const nextAgentId = nextAgents.find(isRosterAgent)?.id ?? null
+    setPreferredAgentId(nextAgentId)
+    // Losing the Agent on screen is a change of Agent, so the next one opens
+    // its New session, in place of the one that left.
+    if (nextAgentId) {
+      await openNewSession(nextAgentId, "replace")
+      return
     }
+    clearLocalDraft()
+    desiredThread.current = null
+    await runtime.threads.switchToNewThread()
   }
 
   /** The rail's way into the visibility rule Agent management already owns. */
