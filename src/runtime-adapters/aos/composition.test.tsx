@@ -160,6 +160,15 @@ function createGatewayAgent({
     value: unknown
   }[] = []
   const closed: string[] = []
+  /**
+   * The Sessions this connection has created, forked, or resumed and not since
+   * closed or parted: ACP v2 refuses a Session-scoped request on any other.
+   */
+  const active = new Set<string>()
+  function requireActive(sessionId: string) {
+    if (!active.has(sessionId))
+      throw new RequestError(-32002, "session_not_active", { sessionId })
+  }
   const parted: string[] = []
   /** The Session each fork copied, in order. */
   const forked: string[] = []
@@ -253,6 +262,7 @@ function createGatewayAgent({
       const { sessionId } = params
       resumed.push(sessionId)
       memberships.add(sessionId)
+      active.add(sessionId)
       // The gateway replays inside the resume request, before answering it, so a
       // browser that waits for the response has already seen the history.
       if (params.replayFrom?.type === "start")
@@ -301,6 +311,7 @@ function createGatewayAgent({
       }
       created.push(agentId ?? "")
       const sessionId = `created-${created.length}`
+      active.add(sessionId)
       configs.set(sessionId, createdConfigOptions())
       // ACP v2 answers with the Session's lists; `_meta.hgw` adds what it
       // supports.
@@ -313,6 +324,7 @@ function createGatewayAgent({
     })
     .onRequest(methods.agent.session.setConfigOption, ({ params }) => {
       const { sessionId, configId, value } = params
+      requireActive(sessionId)
       configWrites.push({ sessionId, configId, value })
       const configOptions = (configs.get(sessionId) ?? []).map((option) =>
         option.configId === configId && typeof value === "string"
@@ -324,6 +336,7 @@ function createGatewayAgent({
     })
     .onRequest(methods.agent.session.close, ({ params }) => {
       closed.push(params.sessionId)
+      active.delete(params.sessionId)
       return {}
     })
     .onRequest(
@@ -331,14 +344,17 @@ function createGatewayAgent({
       z.object({ sessionId: z.string() }),
       ({ params }) => {
         parted.push(params.sessionId)
+        active.delete(params.sessionId)
         return {}
       }
     )
     .onRequest(methods.agent.session.fork, ({ params }) => {
       forked.push(params.sessionId)
+      active.add(`forked-${forked.length}`)
       return { sessionId: `forked-${forked.length}` }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
+      requireActive(params.sessionId)
       // Exactly what the gateway refuses a prompt with while a Session is not idle.
       if (busy.has(params.sessionId))
         throw new RequestError(
@@ -661,6 +677,24 @@ describe("provider-neutral AOS runtime composition", () => {
       supplied.startTurn!(SECOND_SESSION_ID, "Check again")
     ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.turnInProgress })
     expect(gateway.prompts).toHaveLength(1)
+  })
+
+  it("opens the Session a background turn goes to, and parts it after the grace without stopping its work", async () => {
+    const clock = useFakeClock()
+    const { gateway, runtime } = mount()
+    await act(() => clock.advance(10))
+
+    await act(async () => {
+      await runtime()!.startTurn!(SECOND_SESSION_ID, "Check the logs")
+      await clock.advance(10)
+    })
+    expect(gateway.prompts).toMatchObject([{ sessionId: SECOND_SESSION_ID }])
+    expect(gateway.parted).toEqual([])
+
+    await act(() => clock.advance(PART_GRACE_MS + 1))
+    expect(gateway.parted).toEqual([SECOND_SESSION_ID])
+    expect(gateway.closed).toEqual([])
+    expect(gateway.cancelled).toEqual([])
   })
 
   it("keeps a refused draft's turn in the composer and opens the next draft empty", async () => {

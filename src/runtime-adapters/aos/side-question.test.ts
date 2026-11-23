@@ -1,6 +1,7 @@
 import {
   agent,
   methods,
+  RequestError,
   type AgentContext,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
@@ -35,6 +36,8 @@ const turn = (sequence: number) => ({
 function forkingGateway({ holdArchived }: { holdArchived?: boolean } = {}) {
   let peer: AgentContext | undefined
   let releaseArchive = () => {}
+  /** The fork is active from `session/fork` until a part, as ACP v2 has it. */
+  let forkActive = false
   const push = (update: SessionUpdate) =>
     void peer?.notify(methods.client.session.update, {
       sessionId: FORK,
@@ -63,7 +66,10 @@ function forkingGateway({ holdArchived }: { holdArchived?: boolean } = {}) {
         },
       },
     }))
-    .onRequest(methods.agent.session.fork, () => ({ sessionId: FORK }))
+    .onRequest(methods.agent.session.fork, () => {
+      forkActive = true
+      return { sessionId: FORK }
+    })
     .onRequest(HGW_METHODS.session.update, z.unknown(), async ({ params }) => {
       const archived =
         typeof params === "object" && params !== null && "archived" in params
@@ -74,6 +80,10 @@ function forkingGateway({ holdArchived }: { holdArchived?: boolean } = {}) {
       return {}
     })
     .onRequest(methods.agent.session.prompt, () => {
+      if (!forkActive)
+        throw new RequestError(-32002, "session_not_active", {
+          sessionId: FORK,
+        })
       queueMicrotask(() => {
         push({ sessionUpdate: "state_update", state: "running", ...turn(0) })
         push({
@@ -87,7 +97,10 @@ function forkingGateway({ holdArchived }: { holdArchived?: boolean } = {}) {
     })
     .onNotification(methods.agent.session.cancel, () => undefined)
     .onRequest(methods.agent.session.delete, () => ({}))
-    .onRequest(HGW_METHODS.session.part, z.unknown(), () => ({}))
+    .onRequest(HGW_METHODS.session.part, z.unknown(), () => {
+      forkActive = false
+      return {}
+    })
     .onConnect((connection) => {
       peer = connection.client
     })

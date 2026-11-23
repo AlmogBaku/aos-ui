@@ -573,6 +573,27 @@ function installAcpStub(script: AcpScript) {
 
   class AcpStubSocket extends EventTarget {
     readyState = 0
+    /**
+     * The Sessions this connection created or resumed and has not closed or
+     * parted. ACP v2 answers a Session-scoped request on any other with -32002.
+     */
+    active = new Set<string>()
+
+    /** Answers -32002 and returns true when the request's Session is not active. */
+    refusesInactive(params: Record<string, unknown>, id: unknown) {
+      if (this.active.has(String(params.sessionId))) return false
+      this.deliver({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32002,
+          message: "session_not_active",
+          data: { sessionId: params.sessionId },
+        },
+      })
+      return true
+    }
+
     handlers = new Map<
       string,
       (params: Record<string, unknown>, id: unknown) => void
@@ -795,6 +816,7 @@ function installAcpStub(script: AcpScript) {
       // the `_hgw/position` cursor reports only what the dropped transport
       // missed. As the gateway does, any other cursor is invalid params.
       this.handlers.set("session/resume", (params, id) => {
+        this.active.add(String(params.sessionId))
         // Any other Session opens with nothing stored.
         if (params.sessionId !== script.sessionId)
           return this.respond(id, this.setup())
@@ -854,6 +876,7 @@ function installAcpStub(script: AcpScript) {
       // turn streams. The pending prompt stays running until it is cancelled.
       // A prompt sent while a turn is active gets a JSON-RPC error (-31010).
       this.handlers.set("session/prompt", (params, id) => {
+        if (this.refusesInactive(params, id)) return
         if (busy) {
           this.deliver({
             jsonrpc: "2.0",
@@ -952,14 +975,16 @@ function installAcpStub(script: AcpScript) {
         })
       })
       // session/close stops the active work and detaches this connection.
-      this.handlers.set("session/close", (_params, id) => {
+      this.handlers.set("session/close", (params, id) => {
+        this.active.delete(String(params.sessionId))
         busy = false
         this.respond(id, {})
       })
       // _hgw/session/part detaches this connection only; work continues.
-      this.handlers.set("_hgw/session/part", (_params, id) =>
+      this.handlers.set("_hgw/session/part", (params, id) => {
+        this.active.delete(String(params.sessionId))
         this.respond(id, {})
-      )
+      })
       this.handlers.set("_hgw/sessions/search", (params, id) => {
         const meta = asRecord(asRecord(params._meta).hgw)
         const query = String(meta.query ?? "").toLowerCase()
@@ -974,6 +999,7 @@ function installAcpStub(script: AcpScript) {
         this.respond(id, { sessions })
       })
       this.handlers.set("session/set_config_option", (params, id) => {
+        if (this.refusesInactive(params, id)) return
         const configOptions = script.configOptions.map((option) =>
           option.configId === params.configId &&
           typeof params.value === "string"
@@ -1002,6 +1028,7 @@ function installAcpStub(script: AcpScript) {
           typeof hgwMeta === "object" && hgwMeta !== null
             ? String((hgwMeta as Record<string, unknown>).agentId ?? AGENT_ID)
             : AGENT_ID
+        this.active.add(newSessionId)
         this.respond(id, { sessionId: newSessionId, ...this.setup() })
         this.notify("session/update", {
           sessionId: newSessionId,
