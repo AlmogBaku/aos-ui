@@ -141,6 +141,12 @@ export type ProjectorState = {
   /** How deep in child Sessions this projection is: none for the Session's own. */
   readonly depth?: number
   /**
+   * The state snapshot the Session last reported, as ACP's repeat of it says
+   * it again (see `stateSnapshot`). It belongs to the turns it settled, so a
+   * replay that rebuilds them forgets it.
+   */
+  readonly stated?: string
+  /**
    * What reached a child Session no report has announced yet, by its id: an
    * older page announces its children on the page itself.
    */
@@ -1215,6 +1221,29 @@ function noteStreamedTurn(state: ProjectorState, meta: unknown) {
     : { ...state, streamedTurnId: turnId }
 }
 
+type StateMeta = z.infer<typeof HgwStateMetaSchema>
+
+/**
+ * What a state snapshot says, apart from what ACP's repeat of it changes. The
+ * gateway re-sends the state it last reported whenever the Session's
+ * background work starts or ends, with the new `background` list and without
+ * the usage and cost the turn already counted, so the state, its stop reason,
+ * and the rest of its `_meta.hgw` are the snapshot's own.
+ */
+const stateSnapshot = (update: UpdatePayload, aos: StateMeta | undefined) =>
+  JSON.stringify([
+    update.state,
+    update.stopReason,
+    aos === undefined ? null : withoutKey(aos, "cost"),
+  ])
+
+/**
+ * Applies one state snapshot. A snapshot that says again what the Session last
+ * reported is ACP's repeat, which "is not a state transition", and "a repeated
+ * `idle` without a new stop reason is not a new completion": the projection
+ * stays as it is, so no turn settles again, no timing or failure resets, and a
+ * wait the operator already answered stays answered.
+ */
 function applyState(
   state: ProjectorState,
   update: UpdatePayload,
@@ -1222,6 +1251,23 @@ function applyState(
 ): ProjectorState {
   const parsed = HgwStateMetaSchema.safeParse(meta)
   const aos = parsed.success ? parsed.data : undefined
+  const stated = stateSnapshot(update, aos)
+  if (stated === state.stated) return state
+  const next = applyStateChange(state, update, aos)
+  // Any state names the run, so no turn streams ahead of its state any
+  // longer; one this projection does not know changes nothing else.
+  const named =
+    next.streamedTurnId === undefined
+      ? next
+      : { ...next, streamedTurnId: undefined }
+  return named === state ? state : { ...named, stated }
+}
+
+function applyStateChange(
+  state: ProjectorState,
+  update: UpdatePayload,
+  aos: StateMeta | undefined
+): ProjectorState {
   const turnId = aos?.turnId ?? state.execution.turnId
   const carried = turnId === undefined ? {} : { turnId }
   const next = text(update.state)
@@ -1563,10 +1609,8 @@ function settleKind(
   meta: unknown
 ): ProjectorState {
   const next = applyKind(state, update, meta)
-  if (update.sessionUpdate === "state_update")
-    return next.streamedTurnId === undefined
-      ? next
-      : { ...next, streamedTurnId: undefined }
+  // A state streams nothing, and `applyState` keeps its own bookkeeping.
+  if (update.sessionUpdate === "state_update") return next
   return next.messages === state.messages ? next : noteStreamedTurn(next, meta)
 }
 
@@ -1673,8 +1717,10 @@ export function replacedTurns(state: ProjectorState): ReadonlySet<string> {
 /**
  * Drops the turns a replay replaces. The replay's parts arrive as chunks, so
  * the ones already projected would be doubled rather than replaced; the
- * Session's own state stays, because the replay restates that itself. The
- * replay announces every child Session again, with its whole transcript.
+ * Session's own state stays, because the replay restates that itself, and the
+ * snapshot it restates applies to the turns it rebuilt, however like the last
+ * one it is. The replay announces every child Session again, with its whole
+ * transcript.
  */
 export function clearTranscript(
   state: ProjectorState,
@@ -1682,7 +1728,11 @@ export function clearTranscript(
 ): ProjectorState {
   const kept = state.messages.filter((message) => !replaced.has(message.id))
   const bare =
-    !state.terminals && !state.early && !state.children && !state.orphans
+    !state.terminals &&
+    !state.early &&
+    !state.children &&
+    !state.orphans &&
+    state.stated === undefined
   if (kept.length === state.messages.length && bare) return state
   return {
     ...state,
@@ -1692,6 +1742,7 @@ export function clearTranscript(
     early: undefined,
     children: undefined,
     orphans: undefined,
+    stated: undefined,
   }
 }
 

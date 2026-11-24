@@ -36,6 +36,7 @@ import {
   messageBlocks,
   prependMessages,
   renameMessage,
+  resumeWait,
   retainMessages,
   toThreadMessages,
   type ProjectorState,
@@ -1104,6 +1105,78 @@ describe("applyUpdate execution", () => {
     expect(fold([stateUpdate({ state: "_compacting" })], answering)).toBe(
       answering
     )
+  })
+
+  describe("a repeated state", () => {
+    /** A child the run left at work, as a state's `background` lists it. */
+    const BACKGROUND = [{ type: "subagent", sessionId: "child-1" }] as const
+    const USAGE = { inputTokens: 900, outputTokens: 100, totalTokens: 1_000 }
+    const COST = { amount: 0.02, currency: "USD" }
+    const FAILURE = {
+      code: "HGW_INTERACTION_LOST",
+      message: "Stop the turn to continue.",
+    }
+    const ended = stateUpdate(
+      { state: "idle", stopReason: "end_turn", usage: USAGE },
+      { ...TURN_META, cost: COST }
+    )
+    /**
+     * The state said again as the gateway does when background work starts or
+     * ends: the new list, without the usage and cost the turn already counted.
+     */
+    const repeat = (
+      patch: Built<StateUpdate>,
+      meta: Record<string, unknown> = TURN_META
+    ) => stateUpdate({ ...patch, background: [...BACKGROUND] }, meta)
+
+    // "A repeated snapshot is not a state transition, and a repeated `idle`
+    // without a new stop reason is not a new completion."
+    it.each([
+      [
+        "an idle after the turn completed",
+        fold([ended], answering),
+        repeat({ state: "idle", stopReason: "end_turn" }),
+      ],
+      [
+        "an idle after a failure the run reported before its Stop",
+        fold(
+          [
+            stateUpdate({ state: "running" }, { ...TURN_META, ...FAILURE }),
+            stateUpdate({ state: "idle", stopReason: "cancelled" }),
+          ],
+          answering
+        ),
+        repeat({ state: "idle", stopReason: "cancelled" }),
+      ],
+      [
+        "a running state mid-turn",
+        answering,
+        repeat({ state: "running" }, { ...TURN_META, at: STARTED_AT }),
+      ],
+      [
+        "a wait the operator already answered",
+        resumeWait(
+          fold([stateUpdate({ state: "requires_action" })], answering)
+        ),
+        repeat({ state: "requires_action" }),
+      ],
+    ])("changes nothing: %s", (_, settled, repeated) => {
+      expect(fold([repeated], settled)).toBe(settled)
+    })
+
+    it("applies again once a replay rebuilt the turns it settled", () => {
+      // A resume restates the wait the replay rebuilt, whose turn shows it.
+      const rebuilt = fold(
+        [agentChunk("a2", "Which branch?")],
+        clearTranscript(interrupted)
+      )
+      const resumed = fold([stateUpdate({ state: "requires_action" })], rebuilt)
+
+      expect(toThreadMessages(resumed).at(-1)).toMatchObject({
+        id: "a2",
+        status: { type: "requires-action", reason: "interrupt" },
+      })
+    })
   })
 })
 
