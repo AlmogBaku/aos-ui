@@ -793,6 +793,11 @@ function installAcpStub(script: AcpScript) {
       const start = Math.max(0, end - paged.pageSize)
       for (const entry of paged.messages.slice(start, end))
         this.message(entry.role, entry.messageId, entry.text, meta)
+      // A history-bearing replay and every page read end with this marker.
+      this.update({
+        sessionUpdate: "replay_complete",
+        ...(meta ? { _meta: { hgw: meta } } : {}),
+      })
       return start > 0 ? { nextCursor: `offset-${offset + end - start}` } : {}
     }
 
@@ -833,6 +838,8 @@ function installAcpStub(script: AcpScript) {
               historyPage: { cursor },
             })
             this.respond(id, this.setup({ history }))
+            // The Session's current state follows a page read, untagged.
+            this.update({ sessionUpdate: "state_update", state: "idle" })
           }
           return
         }

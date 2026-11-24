@@ -12,6 +12,7 @@ import {
   HGW_PLAN_ID,
   HgwArtifactDescriptorSchema,
   HgwChildSessionMetaSchema,
+  HgwMessageFailureMetaSchema,
   HgwMessageMetaSchema,
   HgwNoticeMetaSchema,
   HgwPlanMetaSchema,
@@ -1391,6 +1392,27 @@ function openingTurn(message: ProjectedMessage, meta: unknown) {
     : appendData(opened, NOTICE_DATA_PART_NAME, notice satisfies AosNotice)
 }
 
+/**
+ * A replayed message the provider stored as failed carries the failure that
+ * ended its turn, since a replay sends no past state. It reads as the live
+ * idle error did: the same incomplete status, ended where the turn failed.
+ * A failure that does not parse is ignored.
+ */
+function failedBy(message: ProjectedMessage, meta: unknown): ProjectedMessage {
+  const parsed = HgwMessageFailureMetaSchema.safeParse(meta)
+  if (!parsed.success) return message
+  const { message: words, code, at } = parsed.data.failure
+  const error: TurnFailure = {
+    ...(code === undefined ? {} : { code }),
+    message: words,
+  }
+  const completedAt = epochOf(at)
+  return withStatus(
+    completedAt === undefined ? message : completeTiming(message, completedAt),
+    { type: "incomplete", reason: "error", error }
+  )
+}
+
 function applyWhole(
   state: ProjectorState,
   kind: string,
@@ -1406,8 +1428,8 @@ function applyWhole(
     const artifact = linkedArtifact(block)
     return artifact ? [artifact] : []
   })
-  return onMessage(state, messageId, roleOf(kind), (message) =>
-    artifacts.reduce(
+  return onMessage(state, messageId, roleOf(kind), (message) => {
+    const whole = artifacts.reduce(
       (next, artifact) =>
         carriesArtifact(next, artifact.id)
           ? next
@@ -1418,7 +1440,8 @@ function applyWhole(
         blocks && blocks.filter((block) => !linkedArtifact(block))
       )
     )
-  )
+    return kind === "agent_message" ? failedBy(whole, meta) : whole
+  })
 }
 
 /**

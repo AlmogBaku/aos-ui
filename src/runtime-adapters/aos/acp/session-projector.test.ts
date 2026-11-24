@@ -373,27 +373,81 @@ describe("applyUpdate messages", () => {
     ).toBe(streamed)
   })
 
-  it("fails a replayed turn as the run that wrote it reported it", () => {
+  describe("a replayed failure", () => {
     const error = { code: "provider_error", message: "Broke" }
     const history = { sequence: 0, turnId: "history" }
-    const replayed = fold([
-      stateUpdate({ state: "running" }, history),
-      agentChunk("a1", "Half an answer"),
-      stateUpdate(ERROR_STOP, { ...history, ...error }),
-    ])
+    const failedUpsert = (failure: unknown): Entry => [
+      { sessionUpdate: "agent_message", messageId: "a1" },
+      { ...history, failure },
+    ]
 
-    expect(toThreadMessages(replayed)[0]?.status).toEqual({
-      type: "incomplete",
-      reason: "error",
-      error,
+    it("fails the message it ends, keeping what it streamed", () => {
+      const replayed = fold([
+        userChunk("u1", "Go"),
+        agentChunk("a1", "Half an answer"),
+        failedUpsert({ ...error, at: "2026-09-22T10:00:00.000Z" }),
+      ])
+
+      const [, reply] = toThreadMessages(replayed)
+      expect(reply?.status).toEqual({
+        type: "incomplete",
+        reason: "error",
+        error,
+      })
+      expect(reply?.content).toEqual([{ type: "text", text: "Half an answer" }])
+      // A replay sends no state, so the Session is not left failed by it.
+      expect(replayed.execution.status).not.toBe("failed")
     })
-    // A replay brackets each turn with its own state updates, so the Session is
-    // left in the state the last one reported.
-    expect(replayed.execution).toEqual({
-      status: "failed",
-      turnId: "history",
-      stopReason: "error",
-      error,
+
+    it("fails a message that streamed nothing, with its own words", () => {
+      const replayed = fold([
+        userChunk("u1", "Go"),
+        [
+          { sessionUpdate: "agent_message", messageId: "a1", content: [] },
+          { ...history, failure: { message: "Public words" } },
+        ],
+      ])
+
+      expect(toThreadMessages(replayed)[1]?.status).toEqual({
+        type: "incomplete",
+        reason: "error",
+        error: { message: "Public words" },
+      })
+    })
+
+    it("ignores a failure that does not parse", () => {
+      const replayed = fold([
+        agentChunk("a1", "Fine"),
+        failedUpsert({ code: 7 }),
+      ])
+
+      expect(toThreadMessages(replayed)[0]?.status).not.toMatchObject({
+        reason: "error",
+      })
+    })
+
+    it("shows once a failure that arrives as upsert and as live state", () => {
+      // The turn failed while the resume was in flight: the replay's upsert is
+      // keyed by message, the live state by the turn's real id.
+      const live = { ...TURN_META, ...error }
+      const both = fold([
+        userChunk("u1", "Go"),
+        stateUpdate({ state: "running" }),
+        agentChunk("a1", "Half"),
+        failedUpsert(error),
+        stateUpdate(ERROR_STOP, live),
+      ])
+
+      const replies = toThreadMessages(both).filter(
+        ({ role }) => role === "assistant"
+      )
+      expect(replies).toHaveLength(1)
+      expect(replies[0]?.status).toEqual({
+        type: "incomplete",
+        reason: "error",
+        error,
+      })
+      expect(both.execution).toMatchObject({ status: "failed", error })
     })
   })
 

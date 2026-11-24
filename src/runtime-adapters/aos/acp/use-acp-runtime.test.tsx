@@ -130,7 +130,13 @@ function createFakeConnection(
       const hgw: unknown = isRecord(update._meta) ? update._meta.hgw : undefined
       return isRecord(hgw) ? hgw : TURN_META
     }
-    for (const update of replayedTurns)
+    const sent = fake.history
+      ? [
+          ...replayedTurns,
+          { sessionUpdate: "replay_complete" } as SessionUpdate,
+        ]
+      : replayedTurns
+    for (const update of sent)
       for (const listener of updates.get(sessionId) ?? [])
         listener(update, metaOf(update))
     for (const [childId, update] of replayedChildren)
@@ -962,6 +968,12 @@ describe("useAcpRuntime", () => {
       textUpdate("agent_message", "a1", "On it"),
     ]
     const FAILURE = { code: "HGW_PROVIDER_RUN_FAILED", message: "Broke" }
+    /** A replayed failure, as the gateway sends it: on the message it ended. */
+    const failedUpsert = (messageId: string): SessionUpdate => ({
+      sessionUpdate: "agent_message",
+      messageId,
+      _meta: { hgw: { sequence: 0, turnId: "history", failure: FAILURE } },
+    })
 
     /** A thread holding the history the provider saved, and replays again. */
     async function mountWithHistory() {
@@ -1107,20 +1119,28 @@ describe("useAcpRuntime", () => {
       }
     )
 
-    it("does not reload a failure the replay itself restates", async () => {
+    it("does not reload a failure that ends a turn the replay is restating", async () => {
       const fake = createFakeConnection()
       fake.replayOnResume([
         ...HISTORY,
+        failedUpsert("a1"),
         { sessionUpdate: "state_update", state: "running" },
         {
           sessionUpdate: "state_update",
           state: "idle",
           stopReason: "error",
+          _meta: { hgw: { ...TURN_META, ...FAILURE } },
         },
       ])
-      await mount(fake)
+      const { result } = await mount(fake)
       await act(async () => {})
       expect(fake.replay).toHaveBeenCalledTimes(1)
+      // Both forms of one failure show on the message once.
+      expect(statusOf(result.current, 1)).toEqual({
+        type: "incomplete",
+        reason: "error",
+        error: FAILURE,
+      })
     })
 
     it("does not reload an unknown state restated after the replay", async () => {
@@ -1860,10 +1880,18 @@ const pageOf = (
   updates: readonly SessionUpdate[],
   history: HgwHistoryCursor
 ): AcpHistoryPage => ({
-  updates: updates.map((update) => ({
-    update,
-    meta: { ...TURN_META, historyPage: { cursor: "tag" } },
-  })),
+  updates: updates.map((update) => {
+    // Like the connection, each update's own `_meta.hgw` rides in its meta.
+    const hgw: unknown = isRecord(update._meta) ? update._meta.hgw : undefined
+    return {
+      update,
+      meta: {
+        ...TURN_META,
+        ...(isRecord(hgw) ? hgw : {}),
+        historyPage: { cursor: "tag" },
+      },
+    }
+  }),
   history,
 })
 
@@ -1977,22 +2005,35 @@ describe("useAcpRuntime older history", () => {
         0,
         pageOf(
           [
-            { sessionUpdate: "state_update", state: "running" },
             textUpdate("agent_message", "a1", "First answer"),
             {
-              sessionUpdate: "state_update",
-              state: "idle",
-              stopReason: "end_turn",
+              sessionUpdate: "agent_message",
+              messageId: "a1",
+              _meta: {
+                hgw: {
+                  sequence: 0,
+                  turnId: "history",
+                  failure: { message: "Broke" },
+                },
+              },
             },
+            { sessionUpdate: "replay_complete" },
           ],
           {}
         )
       )
+      // The read ends with the Session's current state, which is not the
+      // page's: it reaches the live view as any current state does.
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
     })
 
     // The running turn's own reply stays last, after the page and its question.
     expect(ids(result.current).slice(0, 2)).toEqual(["a1", "u2"])
     expect(ids(result.current)).toHaveLength(3)
+    expect(result.current.thread.getState().messages[0]?.status).toMatchObject({
+      type: "incomplete",
+      reason: "error",
+    })
     expect(result.current.thread.getState().isRunning).toBe(true)
   })
 
