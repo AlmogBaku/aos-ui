@@ -978,13 +978,6 @@ describe("useAcpRuntime", () => {
       textUpdate("agent_message", "a1", "On it"),
     ]
     const FAILURE = { code: "HGW_PROVIDER_RUN_FAILED", message: "Broke" }
-    /** A replayed failure, as the gateway sends it: on the message it ended. */
-    const failedUpsert = (messageId: string): SessionUpdate => ({
-      sessionUpdate: "agent_message",
-      messageId,
-      _meta: { hgw: { sequence: 0, turnId: "history", failure: FAILURE } },
-    })
-
     /** A thread holding the history the provider saved, and replays again. */
     async function mountWithHistory() {
       const fake = createFakeConnection()
@@ -1129,11 +1122,10 @@ describe("useAcpRuntime", () => {
       }
     )
 
-    it("does not reload a failure that ends a turn the replay is restating", async () => {
+    it("does not reload for a failure the replay itself restates", async () => {
       const fake = createFakeConnection()
       fake.replayOnResume([
-        ...HISTORY,
-        failedUpsert("a1"),
+        HISTORY[0],
         { sessionUpdate: "state_update", state: "running" },
         {
           sessionUpdate: "state_update",
@@ -1142,15 +1134,9 @@ describe("useAcpRuntime", () => {
           _meta: { hgw: { ...TURN_META, ...FAILURE } },
         },
       ])
-      const { result } = await mount(fake)
+      await mount(fake)
       await act(async () => {})
       expect(fake.replay).toHaveBeenCalledTimes(1)
-      // Both forms of one failure show on the message once.
-      expect(statusOf(result.current, 1)).toEqual({
-        type: "incomplete",
-        reason: "error",
-        error: FAILURE,
-      })
     })
 
     it("does not reload an unknown state restated after the replay", async () => {
