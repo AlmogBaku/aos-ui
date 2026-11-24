@@ -1,5 +1,6 @@
 import {
   RequestError,
+  type BackgroundWork,
   type RequestPermissionResponse,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
@@ -130,7 +131,13 @@ function createFakeConnection(
       const hgw: unknown = isRecord(update._meta) ? update._meta.hgw : undefined
       return isRecord(hgw) ? hgw : TURN_META
     }
-    for (const update of replayedTurns)
+    const sent = fake.history
+      ? [
+          ...replayedTurns,
+          { sessionUpdate: "replay_complete" } as SessionUpdate,
+        ]
+      : replayedTurns
+    for (const update of sent)
       for (const listener of updates.get(sessionId) ?? [])
         listener(update, metaOf(update))
     for (const [childId, update] of replayedChildren)
@@ -404,14 +411,23 @@ const running = (fake: Fake, meta = TURN_META) => {
   })
 }
 
-/** The Session reports its run ended normally, and the queue gets a tick. */
-const ends = async (fake: Fake, meta = TURN_META) => {
+/**
+ * The Session reports its run ended normally, and the queue gets a tick. With
+ * a `background` list it can be the gateway saying that idle again as the
+ * Session's background work starts or ends.
+ */
+const ends = async (
+  fake: Fake,
+  meta = TURN_META,
+  background?: BackgroundWork[]
+) => {
   await act(async () => {
     fake.emit(
       {
         sessionUpdate: "state_update",
         state: "idle",
         stopReason: "end_turn",
+        ...(background && { background }),
       },
       meta
     )
@@ -962,7 +978,6 @@ describe("useAcpRuntime", () => {
       textUpdate("agent_message", "a1", "On it"),
     ]
     const FAILURE = { code: "HGW_PROVIDER_RUN_FAILED", message: "Broke" }
-
     /** A thread holding the history the provider saved, and replays again. */
     async function mountWithHistory() {
       const fake = createFakeConnection()
@@ -1107,15 +1122,16 @@ describe("useAcpRuntime", () => {
       }
     )
 
-    it("does not reload a failure the replay itself restates", async () => {
+    it("does not reload for a failure the replay itself restates", async () => {
       const fake = createFakeConnection()
       fake.replayOnResume([
-        ...HISTORY,
+        HISTORY[0],
         { sessionUpdate: "state_update", state: "running" },
         {
           sessionUpdate: "state_update",
           state: "idle",
           stopReason: "error",
+          _meta: { hgw: { ...TURN_META, ...FAILURE } },
         },
       ])
       await mount(fake)
@@ -1389,6 +1405,11 @@ describe("useAcpRuntime", () => {
     await ends(fake)
     expect(fake.prompt).toHaveBeenCalledTimes(1)
     await queue(result.current, "Second")
+    // A child the earlier turn left at work finishes meanwhile, so the gateway
+    // says that turn's idle again, its list now empty: the turn just sent has
+    // not ended.
+    await ends(fake, TURN_META, [])
+    expect(fake.prompt).toHaveBeenCalledTimes(1)
 
     const accepted = { sequence: 0, turnId: "run-2" }
     running(fake, accepted)
@@ -1860,10 +1881,18 @@ const pageOf = (
   updates: readonly SessionUpdate[],
   history: HgwHistoryCursor
 ): AcpHistoryPage => ({
-  updates: updates.map((update) => ({
-    update,
-    meta: { ...TURN_META, historyPage: { cursor: "tag" } },
-  })),
+  updates: updates.map((update) => {
+    // Like the connection, each update's own `_meta.hgw` rides in its meta.
+    const hgw: unknown = isRecord(update._meta) ? update._meta.hgw : undefined
+    return {
+      update,
+      meta: {
+        ...TURN_META,
+        ...(isRecord(hgw) ? hgw : {}),
+        historyPage: { cursor: "tag" },
+      },
+    }
+  }),
   history,
 })
 
@@ -1977,22 +2006,35 @@ describe("useAcpRuntime older history", () => {
         0,
         pageOf(
           [
-            { sessionUpdate: "state_update", state: "running" },
             textUpdate("agent_message", "a1", "First answer"),
             {
-              sessionUpdate: "state_update",
-              state: "idle",
-              stopReason: "end_turn",
+              sessionUpdate: "agent_message",
+              messageId: "a1",
+              _meta: {
+                hgw: {
+                  sequence: 0,
+                  turnId: "history",
+                  failure: { message: "Broke" },
+                },
+              },
             },
+            { sessionUpdate: "replay_complete" },
           ],
           {}
         )
       )
+      // The read ends with the Session's current state, which is not the
+      // page's: it reaches the live view as any current state does.
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
     })
 
     // The running turn's own reply stays last, after the page and its question.
     expect(ids(result.current).slice(0, 2)).toEqual(["a1", "u2"])
     expect(ids(result.current)).toHaveLength(3)
+    expect(result.current.thread.getState().messages[0]?.status).toMatchObject({
+      type: "incomplete",
+      reason: "error",
+    })
     expect(result.current.thread.getState().isRunning).toBe(true)
   })
 
