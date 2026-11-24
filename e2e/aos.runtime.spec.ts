@@ -837,9 +837,10 @@ function installAcpStub(script: AcpScript) {
             const history = this.historyPage(paged, offset, {
               historyPage: { cursor },
             })
-            this.respond(id, this.setup({ history }))
-            // The Session's current state follows a page read, untagged.
+            // The Session's current state closes a page read, untagged, ahead
+            // of the answer, as the gateway sends it.
             this.update({ sessionUpdate: "state_update", state: "idle" })
+            this.respond(id, this.setup({ history }))
           }
           return
         }
