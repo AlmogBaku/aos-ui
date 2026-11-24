@@ -1,5 +1,6 @@
 import {
   RequestError,
+  type BackgroundWork,
   type RequestPermissionResponse,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
@@ -410,14 +411,23 @@ const running = (fake: Fake, meta = TURN_META) => {
   })
 }
 
-/** The Session reports its run ended normally, and the queue gets a tick. */
-const ends = async (fake: Fake, meta = TURN_META) => {
+/**
+ * The Session reports its run ended normally, and the queue gets a tick. With
+ * a `background` list it can be the gateway saying that idle again as the
+ * Session's background work starts or ends.
+ */
+const ends = async (
+  fake: Fake,
+  meta = TURN_META,
+  background?: BackgroundWork[]
+) => {
   await act(async () => {
     fake.emit(
       {
         sessionUpdate: "state_update",
         state: "idle",
         stopReason: "end_turn",
+        ...(background && { background }),
       },
       meta
     )
@@ -1409,6 +1419,11 @@ describe("useAcpRuntime", () => {
     await ends(fake)
     expect(fake.prompt).toHaveBeenCalledTimes(1)
     await queue(result.current, "Second")
+    // A child the earlier turn left at work finishes meanwhile, so the gateway
+    // says that turn's idle again, its list now empty: the turn just sent has
+    // not ended.
+    await ends(fake, TURN_META, [])
+    expect(fake.prompt).toHaveBeenCalledTimes(1)
 
     const accepted = { sequence: 0, turnId: "run-2" }
     running(fake, accepted)
