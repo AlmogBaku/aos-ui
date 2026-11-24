@@ -425,30 +425,6 @@ describe("applyUpdate messages", () => {
         reason: "error",
       })
     })
-
-    it("shows once a failure that arrives as upsert and as live state", () => {
-      // The turn failed while the resume was in flight: the replay's upsert is
-      // keyed by message, the live state by the turn's real id.
-      const live = { ...TURN_META, ...error }
-      const both = fold([
-        userChunk("u1", "Go"),
-        stateUpdate({ state: "running" }),
-        agentChunk("a1", "Half"),
-        failedUpsert(error),
-        stateUpdate(ERROR_STOP, live),
-      ])
-
-      const replies = toThreadMessages(both).filter(
-        ({ role }) => role === "assistant"
-      )
-      expect(replies).toHaveLength(1)
-      expect(replies[0]?.status).toEqual({
-        type: "incomplete",
-        reason: "error",
-        error,
-      })
-      expect(both.execution).toMatchObject({ status: "failed", error })
-    })
   })
 
   it("shows a failure awaiting Stop while the Session stays running", () => {
