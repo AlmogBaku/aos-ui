@@ -1,0 +1,8 @@
+{
+  "_edit_me": "This is the ONE file to edit. Fill in identifier, productName and appleTeamId, then run: bun run configure",
+  "identifier": "com.example.aosprobe",
+  "productName": "AOS Probe",
+  "appleTeamId": "XXXXXXXXXX",
+  "_optional": "Only for the Developer ID signed macOS push build: absolute path to its provisioning profile, kept OUTSIDE this directory. Leave empty otherwise.",
+  "macosProvisioningProfile": ""
+}

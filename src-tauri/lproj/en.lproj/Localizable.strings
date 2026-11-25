@@ -1,0 +1,3 @@
+/* ALM-109 probe: English. Used by APNs loc-key while the app is closed. */
+"push.input.title" = "Needs your input";
+"push.input.body" = "%1$@ · %2$@: %3$@";

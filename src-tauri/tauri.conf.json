@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AOS Probe",
+  "version": "0.1.0",
+  "identifier": "com.example.aosprobe",
+  "build": {
+    "beforeDevCommand": { "script": "bun run build", "wait": true },
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "AOS Probe",
+        "width": 1000,
+        "height": 860,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; connect-src ipc: http://ipc.localhost data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; frame-src https:",
+      "dangerousDisableAssetCspModification": true,
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "lproj/en.lproj/Localizable.strings": "en.lproj/Localizable.strings",
+      "lproj/he.lproj/Localizable.strings": "he.lproj/Localizable.strings"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.macos.plist"
+    },
+    "iOS": {
+      "minimumSystemVersion": "15.0",
+      "developmentTeam": "XXXXXXXXXX"
+    }
+  },
+  "plugins": {
+    "http": { "scopeRedirects": true },
+    "deep-link": {
+      "mobile": [{ "scheme": ["aosprobe"], "appLink": false }],
+      "desktop": { "schemes": ["aosprobe"] }
+    }
+  }
+}

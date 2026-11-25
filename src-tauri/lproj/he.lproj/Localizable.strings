@@ -1,0 +1,3 @@
+/* ALM-109 probe: Hebrew. Used by APNs loc-key while the app is closed. */
+"push.input.title" = "נדרשת תשובה שלך";
+"push.input.body" = "%1$@ · %2$@: %3$@";

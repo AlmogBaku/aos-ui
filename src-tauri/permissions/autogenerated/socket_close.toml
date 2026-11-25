@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-socket-close"
+description = "Enables the socket_close command without any pre-configured scope."
+commands.allow = ["socket_close"]
+
+[[permission]]
+identifier = "deny-socket-close"
+description = "Denies the socket_close command without any pre-configured scope."
+commands.deny = ["socket_close"]

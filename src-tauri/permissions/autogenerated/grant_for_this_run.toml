@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-grant-for-this-run"
+description = "Enables the grant_for_this_run command without any pre-configured scope."
+commands.allow = ["grant_for_this_run"]
+
+[[permission]]
+identifier = "deny-grant-for-this-run"
+description = "Denies the grant_for_this_run command without any pre-configured scope."
+commands.deny = ["grant_for_this_run"]

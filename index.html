@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>ALM-109 device probe</title>
+    <link rel="stylesheet" href="/src/style.css" />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <div class="drag" data-tauri-drag-region></div>
+    <div id="safe-area-probe" aria-hidden="true"></div>
+    <main>
+      <h1>ALM-109 device probe</h1>
+      <p class="muted" id="where"></p>
+
+      <section>
+        <label for="address">Listener address (https origin on your tailnet)</label>
+        <div class="row">
+          <input id="address" type="url" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://your-mac.your-tailnet.ts.net:8443" />
+          <button id="connect">Connect</button>
+          <button id="run-all" class="primary">Run all</button>
+        </div>
+        <p class="muted" id="connect-status"></p>
+      </section>
+
+      <section>
+        <h2>Results</h2>
+        <div class="row">
+          <button id="copy-report" class="primary">Copy results</button>
+          <button id="show-report">Show results as text</button>
+          <button id="clear-results">Clear all results</button>
+        </div>
+        <textarea id="report-text" rows="12" readonly hidden></textarea>
+        <table id="results">
+          <thead><tr><th>#</th><th>Measurement</th><th>Result</th><th>Observed</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Interactive tests</h2>
+        <div id="interactive"></div>
+      </section>
+
+      <section>
+        <h2>Frames (measurements 12–14)</h2>
+        <div id="frames"></div>
+      </section>
+    </main>
+  </body>
+</html>

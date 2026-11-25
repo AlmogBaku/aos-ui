@@ -1,0 +1,35 @@
+{
+  "name": "alm-109-probe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "configure": "bun scripts/configure.ts",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "tauri": "tauri",
+    "mac:dev": "tauri dev --no-dev-server",
+    "mac:app": "tauri build --debug --bundles app",
+    "mac:push-app": "tauri build --bundles app --config src-tauri/tauri.macos-push.conf.json",
+    "ios:init": "tauri ios init",
+    "ios:after-init": "bash scripts/ios-after-init.sh",
+    "ios:dev": "tauri ios dev --no-dev-server",
+    "ios:open": "tauri ios dev --no-dev-server --open",
+    "listener": "bun listener/listener.ts",
+    "listener:selftest": "bun listener/selftest.ts"
+  },
+  "dependencies": {
+    "@choochmeque/tauri-plugin-notifications-api": "0.5.0-rc.17",
+    "@tauri-apps/api": "2.12.5",
+    "@tauri-apps/plugin-deep-link": "2.6.3",
+    "@tauri-apps/plugin-http": "2.9.0",
+    "@tauri-apps/plugin-opener": "2.7.3",
+    "@tauri-apps/plugin-process": "2.4.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.6",
+    "@types/bun": "1.4.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
+  }
+}

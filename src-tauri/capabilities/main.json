@@ -1,0 +1,33 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The bundled page in the main window only (local content; no remote entry). There is deliberately no http permission or scope here: connect(address) grants exactly one origin at run time. The websocket plugin's connect permission is deliberately absent: the page opens sockets only through the shell's socket_* commands.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-start-dragging",
+    "allow-connect",
+    "allow-grant-for-this-run",
+    "allow-shell-status",
+    "allow-socket-open",
+    "allow-socket-send",
+    "allow-socket-close",
+    "allow-state-load",
+    "allow-state-save",
+    "deep-link:allow-get-current",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://example.com/" }]
+    },
+    "process:allow-restart",
+    "notifications:allow-is-permission-granted",
+    "notifications:allow-request-permission",
+    "notifications:allow-check-permissions",
+    "notifications:allow-permission-state",
+    "notifications:allow-register-for-push-notifications",
+    "notifications:allow-register-listener",
+    "notifications:allow-remove-listener",
+    "notifications:allow-set-click-listener-active"
+  ]
+}
