@@ -9,14 +9,14 @@ import { grantForThisRun, ShellSocket, textEvents } from "./shell";
 import { errText, saveState, setResult, state } from "./state";
 
 export const EXAMPLE = "https://example.com";
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export const ctx = {
   origin: "" as string,
   granted: [] as string[],
 };
 
-function requireOrigin(): string {
+export function requireOrigin(): string {
   if (!ctx.origin) throw new Error("not connected: enter the listener address and press Connect");
   return ctx.origin;
 }
@@ -24,7 +24,7 @@ function requireOrigin(): string {
 const wss = (path: string): string => requireOrigin().replace(/^https:/, "wss:") + path;
 const extraGrantActive = (): boolean => ctx.granted.includes(EXAMPLE);
 
-async function timeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+export async function timeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -38,7 +38,7 @@ async function timeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> 
   }
 }
 
-function hex(buf: ArrayBuffer): string {
+export function hex(buf: ArrayBuffer): string {
   return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -393,57 +393,7 @@ export function t10Page(): void {
   );
 }
 
-// --- 11 (interactive) ------------------------------------------------------
-export async function t11Mic(): Promise<void> {
-  const run = state.micRuns.length + 1;
-  let permissionBefore = "unsupported";
-  try {
-    permissionBefore = (await navigator.permissions.query({ name: "microphone" as PermissionName })).state;
-  } catch (e) {
-    permissionBefore = `query failed (${errText(e)})`;
-  }
-  const supported = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"].filter(
-    (t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t),
-  );
-  const t0 = performance.now();
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const gumMs = Math.round(performance.now() - t0);
-    const recorder = new MediaRecorder(stream);
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (e) => chunks.push(e.data);
-    const stopped = new Promise<void>((r) => (recorder.onstop = () => r()));
-    recorder.start();
-    await sleep(2000);
-    recorder.stop();
-    await timeout(stopped, 5000, "MediaRecorder stop");
-    for (const track of stream.getTracks()) track.stop();
-    const blob = new Blob(chunks, { type: recorder.mimeType });
-    state.micRuns.push({ run, launch: state.launchCount, mime: recorder.mimeType, bytes: blob.size, gumMs, permissionBefore });
-    writeMicResult(supported, blob.size > 0);
-  } catch (e) {
-    setResult("11", "fail", `run ${run}: getUserMedia/MediaRecorder failed after ${Math.round(performance.now() - t0)} ms: ${errText(e)}; permission state before: ${permissionBefore}; supported types: ${supported.join(", ") || "none"}`);
-  }
-}
-
-function writeMicResult(supported: string[] | null, ok: boolean): void {
-  const runs = state.micRuns
-    .map(
-      (r) =>
-        `run ${r.run} (launch #${r.launch}): ${r.mime || "(empty mimeType)"}, ${r.bytes} bytes, getUserMedia ${r.gumMs} ms, permission before ${r.permissionBefore}, prompt ${r.prompt ?? "not marked"}`,
-    )
-    .join("\n");
-  const types = supported ? `\nisTypeSupported: ${supported.join(", ") || "none"}` : "";
-  setResult("11", ok ? "pass" : "fail", `${runs}${types}`);
-}
-
-export function t11MarkPrompt(prompt: "yes" | "no"): void {
-  const last = state.micRuns[state.micRuns.length - 1];
-  if (!last) return;
-  last.prompt = prompt;
-  const prev = state.results["11"];
-  writeMicResult(null, prev ? prev.status === "pass" : last.bytes > 0);
-}
+// --- 11 / 11b are in more.ts ----------------------------------------------
 
 // --- 12, 13, 14 ------------------------------------------------------------
 interface FrameMessage {

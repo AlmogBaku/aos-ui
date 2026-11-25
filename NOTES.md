@@ -18,13 +18,16 @@ Rust (`src-tauri/Cargo.toml`, exact `=` pins; full tree in `src-tauri/Cargo.lock
 | tauri-plugin-websocket | 2.5.0 | registered, permission never granted |
 | tauri-plugin-deep-link | 2.6.3 | `aosprobe://` |
 | tauri-plugin-opener | 2.7.3 | measurement 19 |
-| tauri-plugin-process | 2.4.0 | relaunch for measurement 9 |
+| tauri-plugin-process | 2.4.0 | relaunch for measurement 9 and the handler-mode switch |
+| tauri-plugin-dialog | 2.8.4 | 15c save dialog, used from Rust only (no page permission) |
+| tauri-plugin-fs | 2.7.1 | 15c write/read-back via its Rust `Fs::open`, Rust only (no page permission); already in the lock through the http plugin |
 | tauri-plugin-notifications | 0.5.0-rc.17 | `default-features = false`, feature `push-notifications` |
 | tokio-tungstenite | 0.29.0 | the websocket plugin's own client library and version |
 | rustls | 0.23.46 | `ring` provider, as the websocket plugin installs |
 | tokio | 1.54.1 | |
 | futures-util | 0.3.34 | |
 | serde / serde_json / url | 1.0.229 / 1.0.154 / 2.5.9 | |
+| sha2 | 0.11.1 | 15c read-back hash (already in the lock) |
 
 Resolved in the lock: wry 0.57.3, tauri-runtime-wry 2.12.5, tauri-utils 2.10.4,
 tauri-codegen 2.7.6, tungstenite 0.29.0, reqwest 0.12.28 (http plugin).
@@ -35,7 +38,8 @@ npm (`package.json`, exact pins; full tree in `bun.lock`):
 `@tauri-apps/plugin-process` 2.4.0, `@choochmeque/tauri-plugin-notifications-api`
 0.5.0-rc.17, `vite` 8.3.8, `typescript` 7.0.2, `@types/bun` 1.4.5.
 `@tauri-apps/plugin-websocket` is deliberately not installed: the page must not
-use the plugin.
+use the plugin. No npm package was added for dialog/fs: the page never calls
+them.
 
 The notifications plugin is a pre-release: crates.io/npm `latest` is
 0.5.0-rc.17 and the current README documents `0.5` with APNs behind
@@ -181,6 +185,132 @@ only top-level string values of `userInfo` on a tap
 - `registerForPushNotifications` requests permission, then waits up to 10 s for
   the token (`NotificationPlugin.swift:163`).
 
+## Fix-path rows (added 2026-11-25)
+
+Requirement: everything the web app does (microphone, uploads, downloads, …)
+must work in the app, so where Tauri's default fails the probe also measures
+the fix. Rows now: 37 (22 original measurements + 9r + 14 new).
+
+**Shell handler mode.** A webview download handler and a media permission
+handler change Tauri's default, which rows 11 and 15 measure. So they are
+installed only when `probe-shell-mode.json` (app config dir) says
+`{"handlers": true}`; the "Shell handlers" card writes it (`set_handlers`) and
+relaunches. To make this possible the main window has `"create": false` and is
+built in `setup` with `WebviewWindowBuilder::from_config`
+(<https://docs.rs/tauri/2.12.7/tauri/webview/struct.WebviewWindowBuilder.html#method.from_config>;
+`create` documented in `tauri-utils-2.10.4/src/config.rs`, WindowConfig). Rows
+that need the other mode report N/A instead of measuring the wrong thing.
+
+**11b — media permission handler.** `WebviewWindowBuilder::on_permission_request`
+(<https://docs.rs/tauri/2.12.7/tauri/webview/struct.WebviewWindowBuilder.html#method.on_permission_request>):
+"macOS / iOS: Fully supported via WKUIDelegate's requestMediaCapturePermission".
+The shell answers `Microphone`/`Camera` with `Allow`, everything else
+`Default`, and logs each call (`shell_log`), so 11b says whether it was asked.
+Note the baseline: with no handler wry already answers `Grant`
+(`wry-0.57.3/src/wkwebview/class/wry_web_view_ui_delegate.rs:173`), and a
+handler returning `Default` maps to WebKit's own prompt; the doc also says the
+handler only fires for requests WebKit has not already decided. 11 and 11b now
+also report `navigator.mediaDevices`, `enumerateDevices()` counts before and
+after, `MediaRecorder.isTypeSupported` for `audio/mp4`, `audio/webm`,
+`audio/webm;codecs=opus`, and a playback the person marks heard / not heard.
+
+**15c — native save (the path the real app will use).** One app command,
+`save_native`: the page sends the bytes as the raw IPC body with a `file-name`
+header; the shell shows the save dialog (`tauri-plugin-dialog`
+`FileDialogBuilder::blocking_save_file`,
+<https://docs.rs/tauri-plugin-dialog/2.8.4/tauri_plugin_dialog/struct.FileDialogBuilder.html#method.blocking_save_file>,
+<https://v2.tauri.app/plugin/dialog/>: "On iOS, a `file://<path>` URIs are
+returned"), writes with the fs plugin's Rust `Fs::open`
+(<https://docs.rs/tauri-plugin-fs/2.7.1/tauri_plugin_fs/struct.Fs.html#method.open>;
+its iOS doc: "will automatically start accessing a security-scoped resource if
+the path is a file URL", `tauri-plugin-fs-2.7.1/src/ios.rs`), reads the same
+path back (size + sha256), then on iOS calls
+`stop_accessing_security_scoped_resource`. Why Rust and not the page's
+`dialog.save` + `fs.writeFile`: both use the same fs code on iOS, but the JS
+route needs `dialog:allow-save` and `fs:allow-write-file` (plus the dialog's
+runtime scope grant, `tauri-plugin-dialog-2.8.4/src/commands.rs:252`), and the
+read-back would need `fs:allow-read-file`. Here the page gets neither a write
+nor a read primitive, only "save these bytes where the person chooses".
+Source detail that matters on iOS: the save dialog is
+`UIDocumentPickerViewController(url:in: .exportToService)` of an empty
+placeholder it first writes to the app's Documents folder
+(`ios/Sources/DialogPlugin.swift:138-176`), so the returned URL is the
+exported copy and the probe measures whether a later write to it lands. The
+placeholder stays in Documents. The two cases are a deterministic 1 MiB
+binary (15c1) and a short UTF-8 text with non-Latin characters (15c2); the
+person also marks whether the file is really there.
+
+**15d — download handler.** `WebviewWindowBuilder::on_download`
+(<https://docs.rs/tauri/2.12.7/tauri/webview/struct.WebviewWindowBuilder.html#method.on_download>;
+`DownloadEvent` docs: "macOS: The second parameter indicating the path the
+file was saved to is always empty, due to API limitations"). wry's WKWebView
+download delegate is not macOS-only (`wry-0.57.3/src/wkwebview/mod.rs:623-641`,
+WKDownload needs iOS 14.5+ / macOS 11.3+, `navigation.rs:71`), so iOS is
+measured, not marked N/A. On `Requested` the shell sets the destination to the
+app's location (iOS: `document_dir()`; elsewhere: `download_dir()`), records it,
+and on `Finished` checks the file on disk itself, because the reported path may
+be empty. Three cases: blob `<a download>`, data `<a download>`, and a plain
+link to the listener's new `/attachment` endpoint (`Content-Disposition:
+attachment`; with a handler wry turns that response into a download,
+`navigation.rs`, `navigation_policy_response`). Without a handler the
+attachment would be displayed in place of the app page, so it is only in 15d.
+
+**15e — share sheet.** Measured through the Web Share API
+(`navigator.canShare({files})`, `navigator.share`,
+<https://developer.mozilla.org/en-US/docs/Web/API/Navigator/share>). A
+native share-sheet plugin is N/A: Tauri has no official one.
+
+**23a–d — uploads.** `<input type="file">` single, `multiple`,
+`accept="image/*"` (the person marks which sources the iOS sheet offers), and
+on the Mac an HTML5 drop with `dragDropEnabled: false` (the page prevents the
+default drop elsewhere so a missed drop cannot navigate away). Each file is
+read with both `Blob.arrayBuffer()` and `FileReader`, then POSTed through the
+native http path to the listener, which answers with byte count + sha256
+(`/upload`). wry implements the macOS open panel
+(`wry_web_view_ui_delegate.rs`, `runOpenPanelWithParameters`); on iOS WebKit
+presents its own picker.
+
+**24 playback, 25 clipboard, 26 wake lock.** A generated 0.8 s WAV from a blob
+URL played via `new Audio()` right after a tap and 3 s after it (new element,
+no new gesture), plus `AudioContext` state at load and after a tap +
+`resume()`. Clipboard: `writeText` + `readText` round trip, a PNG through
+`ClipboardItem` (promise form, which WebKit accepts inside the gesture), and
+`document.execCommand('copy')`, each on its own button so a consumed gesture
+cannot hide which one fails
+(<https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API>). Wake lock:
+`navigator.wakeLock.request('screen')`
+(<https://developer.mozilla.org/en-US/docs/Web/API/Screen_Wake_Lock_API>).
+
+**Permissions added** (capability `main`, local, window `main`):
+`allow-set-handlers` (write the mode file), `allow-shell-log` (read the
+handlers' call log), `allow-save-native` (15c). No `dialog:*` and no `fs:*`
+permission, so no standing fs path scope and no read permission; the dialog
+and fs plugins are registered for the shell's own Rust use only.
+
+**Info.plist keys added.** Shared (`src-tauri/Info.plist`):
+`NSCameraUsageDescription` — "required if your app uses APIs that access the
+device's camera"
+(<https://developer.apple.com/documentation/bundleresources/information-property-list/nscamerausagedescription>);
+the "Take Photo" option of a file input is such an API and the app is
+terminated without the key. `NSPhotoLibraryUsageDescription`
+(<https://developer.apple.com/documentation/bundleresources/information-property-list/nsphotolibraryusagedescription>)
+— possibly unnecessary because WebKit's photo picker runs out of process, but
+added so a missing key cannot crash 23c; the device run shows whether a prompt
+appears. iOS only (`src-tauri/Info.ios.plist`, merged after Info.plist by the
+CLI, `tauri-cli-2.12.6/src/mobile/ios/build.rs:252`): `UIFileSharingEnabled`
+and `LSSupportsOpeningDocumentsInPlace`
+(<https://developer.apple.com/documentation/bundleresources/information-property-list/uifilesharingenabled>,
+<https://developer.apple.com/documentation/bundleresources/information-property-list/lssupportsopeningdocumentsinplace>),
+so the app's Documents folder, where 15d saves on iOS, shows up in the Files
+app for the person to check. (The fs plugin docs also ask for a
+`PrivacyInfo.xcprivacy` file-timestamp declaration, which matters for App
+Store submission only, not for these dev builds:
+<https://v2.tauri.app/plugin/file-system/>.)
+
+**Listener.** New `/attachment?run=` (text body, `Content-Disposition:
+attachment; filename="alm109-probe-attachment.txt"`), counted per run in
+`/hits`; the selftest checks both.
+
 ## Deviations from the brief
 
 1. **Websocket wrapping**: not possible (above); same library instead.
@@ -191,10 +321,11 @@ only top-level string values of `userInfo` on a tap
    to `true` (the secure setting the real design needs), so measurement 5
    tests that configuration. It also records what `maxRedirections: 0` returns.
    Without this setting 5 would be expected to FAIL.
-3. **Downloads (15)** keep Tauri's default: no `on_download` handler. wry then
-   cancels `<a download>` navigations (`wry-0.57.3/src/wkwebview/navigation.rs:87`),
-   so "nothing happened" is the expected answer. If downloads matter, the real
-   shell needs an `on_download` handler; the probe does not add one.
+3. **Downloads (15)** keep Tauri's default as the baseline: no `on_download`
+   handler, and wry then cancels `<a download>` navigations
+   (`wry-0.57.3/src/wkwebview/navigation.rs:87`), so "nothing happened" is the
+   expected answer. 15c (native save) and 15d (download handler, handlers ON)
+   measure the paths that can work.
 4. **IPv6 literal listener addresses are rejected** by the strict parser (the
    http scope is a URLPattern, where `[` `]` are syntax). Tailnet names and
    IPv4 work.
@@ -203,9 +334,9 @@ only top-level string values of `userInfo` on a tap
 6. **Results persistence**: results live in `probe-state.json` in the app
    config dir (via two extra shell commands), not in WebKit storage, so a
    storage failure (measurement 16) cannot erase the report.
-7. **rsync**: the README adds `--exclude` for `node_modules`, `dist`,
-   `src-tauri/target`, `src-tauri/gen` (Linux build output) and runs
-   `bun install` on the Mac.
+7. **Getting the probe**: the README now clones the probe branch instead of
+   rsync; `node_modules`, `dist`, `src-tauri/target` and `src-tauri/gen` are
+   git-ignored, and `bun install` runs on the Mac.
 8. **Report privacy**: besides the token rule, the report replaces the
    listener's tailnet host name with `<listener-host>`, hides any 32+ char hex
    run, and records header *names* only (Tailscale Serve adds
@@ -226,15 +357,15 @@ only top-level string values of `userInfo` on a tap
 | JS install | `bun install` | exit 0 |
 | typecheck | `bun run typecheck` (page, listener, scripts) | exit 0 |
 | web build | `bun run build` | exit 0, one external module script, no inline script |
-| listener | `bun run listener:selftest` | exit 0, 26/26 checks (25 MiB upload hash, stream 20 reads over ~3.8 s, CSP per variant, ws hello/tick/status/close 4001, leak log) |
+| listener | `bun run listener:selftest` | exit 0, 28/28 checks (25 MiB upload hash, stream 20 reads over ~3.8 s, CSP per variant, ws hello/tick/status/close 4001, leak log, attachment header + count) |
 | Rust | `cargo check` | fails as expected: no `pkg-config`/webkit2gtk on this host (not installed, per brief) |
-| Rust | `PKG_CONFIG=<stub that answers yes> cargo check` | exit 0. A check does not link, so this type-checks `lib.rs`, `origin.rs`, `build.rs`, `generate_context!` and the capability file against the real crates (Linux cfg only; iOS/macOS-only code paths of plugins are not compiled). Proven able to fail: an injected type error and a misspelt permission both make it exit 101. |
+| Rust | `PKG_CONFIG=<stub that answers yes> cargo check` | exit 0. A check does not link, so this type-checks `lib.rs`, `native.rs`, `origin.rs`, `build.rs`, `generate_context!` and the capability file against the real crates (Linux cfg only; iOS/macOS-only code paths of plugins are not compiled). Proven able to fail: an injected type error and a misspelt permission both make it exit 101. |
 | origin rules | `origin.rs` tests in a standalone harness (url 2.5.9) | 3/3 pass; a mutation (scheme check disabled) makes them fail |
 | config | `tauri.conf.json` (+ push overlay) against the CLI 2.12.6 schema | valid |
 | send-push.sh | throwaway P-256 key, fake `curl` on PATH | 60/60 JWTs verify with WebCrypto (ES256, kid/iss/iat), URL/topic/push-type right; token and JWT never on stdout; key inside the probe dir refused |
 | configure.ts | scratch copy | placeholders refused; values written; push files only with a profile |
 | frame script | sandbox.html top-level in WebKit and Chromium (Playwright Docker image) | both run; outer + inner srcdoc report; no bridge objects; `ipc://` fetch fails |
-| page | built page in WebKit and Chromium with a mocked Tauri bridge | renders 23 rows and 9 cards, no page errors, report text builds |
+| page | built page in WebKit and Chromium with a mocked Tauri bridge | renders 37 rows, 18 cards and 3 file inputs, no page errors; clicking 11, 15c1, 15d1, 24a, 25c and 26 records results (15d1 correctly N/A with handlers OFF); report text builds |
 
 The stub was a 15-line `/bin/sh` script that prints `-l<name>` for every package and exits 0; the origin harness was a scratch crate with `#[path = "…/src-tauri/src/origin.rs"] mod origin;` and `url = "=2.5.9"`. Both lived in /tmp and are deleted.
 
@@ -275,6 +406,19 @@ full crate (needs linking), and every measurement itself.
   `UNUserNotificationCenter.delegate` when the plugin object is created during
   Tauri setup (`ios/Sources/NotificationManager.swift`), and whether that is
   before `didFinishLaunching` returns is not visible from source.
+- 11b: whether WebKit asks the shell at all for a `tauri://localhost` page,
+  and whether `Allow` changes anything compared with wry's built-in `Grant`.
+- 15c on iOS: whether writing to the URL returned by the export picker
+  succeeds after the export (the plugin returns the exported copy's URL and
+  the fs plugin starts security-scoped access on open); and whether a read
+  back of that URL is allowed. On macOS the save panel returns a plain path.
+- 15d: whether `Finished` reports a path on iOS (the doc says macOS never
+  does), and whether WebKit calls the handler for `blob:` and `data:` URLs.
+- 23c: whether the photo picker needs `NSPhotoLibraryUsageDescription` at all.
+- 24: whether WKWebView under Tauri requires a gesture for `<audio>` playback
+  (wry's media playback settings were not traced in source).
+- 25/26: clipboard read prompts and Screen Wake Lock availability inside
+  WKWebView (MDN documents them for Safari, not for embedded WKWebView).
 - `xcodegen` installation: the CLI calls `xcodegen` but no install step was
   found in tauri-cli; the README installs it with Homebrew.
 - Apple pages are script-rendered; their content was read through Apple's
@@ -283,7 +427,5 @@ full crate (needs linking), and every measurement itself.
 ## Decisions for the person
 
 - Keep `scopeRedirects: true` (deviation 2) or measure the default too?
-- Should the probe add an `on_download` handler to test whether downloads
-  *can* work (deviation 3)?
 - The notifications plugin is a release candidate; acceptable for the real
   design, or wait for 0.5.0?

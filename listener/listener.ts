@@ -17,6 +17,7 @@ const SANDBOX_VARIANTS: Record<string, string> = {
 interface RunHits {
   sandbox: Record<string, number>;
   leaks: string[];
+  attachments: number;
 }
 
 interface WsData {
@@ -162,7 +163,7 @@ export function startListener(port: number, quiet = false): Server<WsData> {
   const hits = new Map<string, RunHits>();
   const hitsFor = (run: string): RunHits => {
     let h = hits.get(run);
-    if (!h) hits.set(run, (h = { sandbox: {}, leaks: [] }));
+    if (!h) hits.set(run, (h = { sandbox: {}, leaks: [], attachments: 0 }));
     return h;
   };
   const log = (line: string) => {
@@ -226,6 +227,19 @@ export function startListener(port: number, quiet = false): Server<WsData> {
           h.sandbox[variant] = (h.sandbox[variant] ?? 0) + 1;
           return new Response(sandboxPage(variant, run), {
             headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": csp, "cache-control": "no-store" },
+          });
+        }
+
+        case "/attachment": {
+          // 15d: a file the webview must download, not display.
+          const run = (url.searchParams.get("run") ?? "").slice(0, 40);
+          hitsFor(run).attachments += 1;
+          return new Response(`ALM-109 probe attachment for run ${run}\n`, {
+            headers: {
+              "content-type": "text/plain; charset=utf-8",
+              "content-disposition": 'attachment; filename="alm109-probe-attachment.txt"',
+              "cache-control": "no-store",
+            },
           });
         }
 

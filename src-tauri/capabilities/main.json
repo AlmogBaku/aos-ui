@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The bundled page in the main window only (local content; no remote entry). There is deliberately no http permission or scope here: connect(address) grants exactly one origin at run time. The websocket plugin's connect permission is deliberately absent: the page opens sockets only through the shell's socket_* commands.",
+  "description": "The bundled page in the main window only (local content; no remote entry). There is deliberately no http permission or scope here: connect(address) grants exactly one origin at run time. The websocket plugin's connect permission is deliberately absent: the page opens sockets only through the shell's socket_* commands. The dialog and fs plugins get no permission either: native save (15c) is the shell's save_native command, which shows the dialog and writes in Rust.",
   "local": true,
   "windows": ["main"],
   "permissions": [
@@ -15,6 +15,9 @@
     "allow-socket-close",
     "allow-state-load",
     "allow-state-save",
+    "allow-set-handlers",
+    "allow-shell-log",
+    "allow-save-native",
     "deep-link:allow-get-current",
     {
       "identifier": "opener:allow-open-url",

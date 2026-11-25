@@ -14,6 +14,8 @@ export interface Result {
 }
 
 export interface MicRun {
+  /** "11" = Tauri default, "11b" = with the shell's permission handler. Older saved runs have none (= "11"). */
+  row?: "11" | "11b";
   run: number;
   launch: number;
   mime: string;
@@ -21,6 +23,8 @@ export interface MicRun {
   gumMs: number;
   permissionBefore: string;
   prompt?: "yes" | "no";
+  heard?: "yes" | "no";
+  context?: string;
 }
 
 export interface DeepLinkSeen {
@@ -59,6 +63,8 @@ export interface ProbeState {
   pushTaps: PushTap[];
   downloads: { blob?: string; data?: string };
   pushText?: { verdict: string; seen: string };
+  /** Sub-results of the multi-part rows (11b, 15c, 15d, 15e, 23, 24, 25, 26), keyed by row then part. */
+  parts?: Record<string, Record<string, string>>;
 }
 
 export interface Measurement {
@@ -78,11 +84,18 @@ export const MEASUREMENTS: Measurement[] = [
   { id: "9", name: "Runtime grant does not survive a restart" },
   { id: "9r", name: "Process plugin relaunch works on this OS" },
   { id: "10", name: "isSecureContext, crypto.subtle, navigator.clipboard" },
-  { id: "11", name: "Microphone: getUserMedia + MediaRecorder 2 s" },
+  { id: "11", name: "Microphone: getUserMedia + MediaRecorder 2 s (Tauri default)" },
+  { id: "11b", name: "Microphone with the shell permission handler" },
   { id: "12", name: "Framing under frame-ancestors (3 variants)" },
   { id: "13", name: "postMessage both ways with the frame" },
   { id: "14", name: "Bridge isolation inside frames" },
-  { id: "15", name: "Downloads: blob URL and data URL" },
+  { id: "15", name: "Downloads: blob URL and data URL (Tauri default, no handler)" },
+  { id: "15c1", name: "Native save: 1 MiB binary via save dialog + write in the shell" },
+  { id: "15c2", name: "Native save: small text file via save dialog + write in the shell" },
+  { id: "15d1", name: "Download handler: blob URL <a download>" },
+  { id: "15d2", name: "Download handler: data URL <a download>" },
+  { id: "15d3", name: "Download handler: listener file with Content-Disposition: attachment" },
+  { id: "15e", name: "Share sheet with a file (Web Share API)" },
   { id: "16", name: "localStorage and document.cookie survive a restart" },
   { id: "17", name: "Safe-area insets (viewport-fit=cover)" },
   { id: "18", name: "Deep link aosprobe:// (running and cold start)" },
@@ -90,6 +103,13 @@ export const MEASUREMENTS: Measurement[] = [
   { id: "20", name: "Push permission + APNs device token" },
   { id: "21", name: "Closed-app localized push text" },
   { id: "22", name: "Tap from closed delivers the payload" },
+  { id: "23a", name: "Upload: <input type=file> single pick, read, send, compare" },
+  { id: "23b", name: "Upload: <input type=file multiple> pick, read, send, compare" },
+  { id: "23c", name: "Upload: accept=image/* picker options and a photo end to end" },
+  { id: "23d", name: "Upload: drag a file from Finder onto the page (Mac)" },
+  { id: "24", name: "Playback: tone after a tap, and 3 s later without a new tap" },
+  { id: "25", name: "Clipboard: text round trip, PNG via ClipboardItem, execCommand copy" },
+  { id: "26", name: "Screen wake lock" },
 ];
 
 export function freshState(): ProbeState {
@@ -146,6 +166,13 @@ export function setResult(id: string, status: Status, detail: string): void {
   for (const fn of listeners) fn();
 }
 
+export function setPart(row: string, key: string, value: string): Record<string, string> {
+  state.parts ??= {};
+  const parts = (state.parts[row] ??= {});
+  parts[key] = value;
+  return parts;
+}
+
 export function errText(e: unknown): string {
   if (e instanceof Error) return `${e.name}: ${e.message}`;
   if (typeof e === "string") return e;
@@ -168,6 +195,9 @@ export function setListenerHost(host: string): void {
 export function scrub(text: string): string {
   let out = text;
   if (listenerHost) out = out.split(listenerHost).join("<listener-host>");
+  out = out
+    .replace(/\/(Users|home)\/[^/\s"]+/g, "/$1/<user>")
+    .replace(/\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g, "<uuid>");
   return out.replace(/\b[0-9a-fA-F]{32,}\b/g, (m) => `<hex ${m.length} chars hidden>`);
 }
 

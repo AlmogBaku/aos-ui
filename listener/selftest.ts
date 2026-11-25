@@ -104,9 +104,21 @@ try {
   }
   check("GET /sandbox.html unknown variant is 400", (await fetch(`${base}/sandbox.html?fa=other`)).status === 400);
 
+  // 15d. attachment download
+  const attachment = await fetch(`${base}/attachment?run=selftest`);
+  const attachmentBody = await attachment.text();
+  check(
+    "GET /attachment is a Content-Disposition attachment",
+    attachment.status === 200 &&
+      attachment.headers.get("content-disposition") === 'attachment; filename="alm109-probe-attachment.txt"' &&
+      attachmentBody === "ALM-109 probe attachment for run selftest\n",
+    attachment.headers.get("content-disposition") ?? "no header",
+  );
+
   // 14. leaks and hits
   await fetch(`${base}/leak?from=selftest-http&run=selftest`);
-  const hits = (await (await fetch(`${base}/hits?run=selftest`)).json()) as { sandbox: Record<string, number>; leaks: string[] };
+  const hits = (await (await fetch(`${base}/hits?run=selftest`)).json()) as { sandbox: Record<string, number>; leaks: string[]; attachments: number };
+  check("GET /hits counts attachment downloads", hits.attachments === 1, String(hits.attachments));
   check("GET /hits counts sandbox loads", hits.sandbox["tauri-localhost"] === 1 && hits.sandbox.nothing === 1, JSON.stringify(hits.sandbox));
   check("GET /hits lists leaks", hits.leaks.length === 1 && hits.leaks[0].includes("selftest-http"), JSON.stringify(hits.leaks));
   const otherRun = (await (await fetch(`${base}/hits?run=other`)).json()) as { leaks: string[] };

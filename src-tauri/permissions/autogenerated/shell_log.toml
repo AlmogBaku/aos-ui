@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shell-log"
+description = "Enables the shell_log command without any pre-configured scope."
+commands.allow = ["shell_log"]
+
+[[permission]]
+identifier = "deny-shell-log"
+description = "Denies the shell_log command without any pre-configured scope."
+commands.deny = ["shell_log"]

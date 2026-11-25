@@ -24,6 +24,13 @@ tauri-plugin-websocket = "=2.5.0"
 tauri-plugin-deep-link = "=2.6.3"
 tauri-plugin-opener = "=2.7.3"
 tauri-plugin-process = "=2.4.0"
+# 15c: the save dialog and the write/read-back run in Rust (save_native); the
+# page gets no dialog or fs permission. The fs plugin's Rust `Fs::open` is the
+# documented way to open the dialog's file:// URL on iOS (it starts the
+# security-scoped access). tauri-plugin-fs 2.7.1 was already in the lock via
+# the http plugin.
+tauri-plugin-dialog = "=2.8.4"
+tauri-plugin-fs = "=2.7.1"
 # `default-features = false` turns off `notify-rust`, which is what selects the
 # native macOS backend (the only macOS backend with APNs); `push-notifications`
 # enables APNs on iOS and macOS. Linux always uses notify-rust regardless.
@@ -38,3 +45,4 @@ futures-util = { version = "=0.3.34", default-features = false, features = ["sin
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 url = "=2.5.9"
+sha2 = "=0.11.1"

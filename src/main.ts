@@ -20,6 +20,7 @@ import {
   state,
   statusLabel,
 } from "./state";
+import * as M from "./more";
 import * as T from "./tests";
 
 const $ = <E extends HTMLElement>(id: string) => document.getElementById(id) as E;
@@ -61,6 +62,7 @@ function reportHeader(): string[] {
     `language: ${navigator.language}`,
     `listener: ${listener}`,
     `launches recorded: ${state.launchCount}`,
+    `shell handlers this launch: ${status?.handlers ? "ON (on_download + on_permission_request)" : "OFF (Tauri defaults)"}`,
   ];
 }
 
@@ -135,14 +137,35 @@ function buildInteractive(): void {
     ],
     true,
   );
-  const c11 = card(
-    "11. Microphone",
-    "Press Record; it records 2 s. Then mark whether a permission prompt appeared. Repeat once in this launch and once after a restart.",
+  const mode = card(
+    "Shell handlers (needed by 11b and 15d; rows 11 and 15 need them OFF)",
+    `This launch: ${status?.handlers ? "ON: the shell answers microphone/camera requests and saves downloads" : "OFF: Tauri defaults, no download handler, no permission handler"}. Switching restarts the app.`,
     [
-      ["Record 2 s", () => T.t11Mic()],
-      ["A prompt appeared", () => T.t11MarkPrompt("yes")],
-      ["No prompt", () => T.t11MarkPrompt("no")],
+      ["Restart with handlers ON", () => M.switchHandlers(true, (t) => (mode.log.textContent = t))],
+      ["Restart with handlers OFF", () => M.switchHandlers(false, (t) => (mode.log.textContent = t))],
     ],
+    true,
+  );
+  const micCard = (row: "11" | "11b", title: string, text: string) => {
+    const c: Card = card(title, text, [
+      ["Record 2 s", () => M.micRecord(row)],
+      ["A prompt appeared", () => M.micMark(row, "prompt", "yes")],
+      ["No prompt", () => M.micMark(row, "prompt", "no")],
+      ["Play last recording", async () => (c.log.textContent = await M.micPlay(row))],
+      ["Heard it", () => M.micMark(row, "heard", "yes")],
+      ["Did not hear it", () => M.micMark(row, "heard", "no")],
+    ], true);
+    return c;
+  };
+  const c11 = micCard(
+    "11",
+    "11. Microphone, Tauri default (handlers OFF)",
+    "Record, mark the prompt, play it back and mark whether you heard it. Repeat once in this launch and once after a restart.",
+  );
+  const c11b = micCard(
+    "11b",
+    "11b. Microphone with shell permission handler (handlers ON)",
+    "Same as 11, in a launch with handlers ON. The row also says whether the shell's permission handler was asked.",
   );
   const c15 = card(
     "15. Downloads",
@@ -158,6 +181,39 @@ function buildInteractive(): void {
       ["data: other", () => T.t15Mark("data", "something else happened")],
     ],
   );
+  const c15c = card(
+    "15c. Native save (the path the real app will use)",
+    "Each button builds a known file in the page and hands it to the shell, which shows the system save dialog, writes the bytes there and reads them back. Save somewhere you can check (Mac: Desktop; iPhone: On My iPhone), then mark.",
+    [
+      ["15c1. Save 1 MiB binary", () => M.nativeSave("15c1")],
+      ["15c1: file is there", () => M.saveMark("15c1", true)],
+      ["15c1: missing/wrong", () => M.saveMark("15c1", false)],
+      ["15c2. Save small text", () => M.nativeSave("15c2")],
+      ["15c2: file is there", () => M.saveMark("15c2", true)],
+      ["15c2: missing/wrong", () => M.saveMark("15c2", false)],
+    ],
+  );
+  const c15d = card(
+    "15d. Download handler (handlers ON)",
+    "Each button starts a download the shell's download handler should accept and save (Mac: Downloads folder; iPhone: Files > On My iPhone > the app). The row records what the handler saw; then mark whether the file is really there.",
+    [
+      ["15d1. blob URL", () => M.handlerDownload("blob")],
+      ["15d1: there", () => M.downloadMark("blob", true)],
+      ["15d1: not there", () => M.downloadMark("blob", false)],
+      ["15d2. data URL", () => M.handlerDownload("data")],
+      ["15d2: there", () => M.downloadMark("data", true)],
+      ["15d2: not there", () => M.downloadMark("data", false)],
+      ["15d3. listener attachment", () => M.handlerDownload("attachment")],
+      ["15d3: there", () => M.downloadMark("attachment", true)],
+      ["15d3: not there", () => M.downloadMark("attachment", false)],
+    ],
+  );
+  const c15e = card("15e. Share sheet with a file", "Press Share; if a sheet appears, try Save to Files, then mark.", [
+    ["Share a file", () => M.shareFile()],
+    ["Sheet appeared, Save to Files worked", () => M.shareMark("sheet appeared and Save to Files worked")],
+    ["Sheet appeared, could not save", () => M.shareMark("sheet appeared but saving did not work")],
+    ["No sheet", () => M.shareMark("no sheet appeared")],
+  ]);
   const c18 = card(
     "18. Deep link",
     `While the app is open, open ${T.EXPECTED_DEEP_LINK} (iPhone: type it into Safari's address bar; Mac: run  open '${T.EXPECTED_DEEP_LINK}'  in Terminal). Then quit the app fully and open the same link again. Both deliveries are recorded automatically.`,
@@ -197,7 +253,64 @@ function buildInteractive(): void {
     "With the app quit, tap the notification from 21. The app records the payload it receives at launch.",
     [],
   );
-  root.append(...[c6, c9, c11, c15, c18, c19, c20, c21, c22].map((c) => c.el));
+  const fileInput = (row: "23a" | "23b" | "23c", attrs: Record<string, string>) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    for (const [k, v] of Object.entries(attrs)) input.setAttribute(k, v);
+    input.addEventListener("change", () => void M.uploadPicked(row, input.files).finally(() => (input.value = "")));
+    return input;
+  };
+  const c23 = card(
+    "23. Uploads (connect first)",
+    "23a: pick one file. 23b: pick two or more. 23c (iPhone): note which options the sheet offers, mark them, then pick a photo. Each pick is read and sent to the listener, which checks the hash.",
+    [
+      ["23c offered: Photo Library", () => M.pickerOption("Photo Library")],
+      ["23c offered: Take Photo", () => M.pickerOption("Take Photo")],
+      ["23c offered: Choose File", () => M.pickerOption("Choose File")],
+      ["23c offered: none of these", () => M.pickerOption("none of these")],
+    ],
+  );
+  for (const [label, input] of [
+    ["23a single file:", fileInput("23a", {})],
+    ["23b multiple files:", fileInput("23b", { multiple: "" })],
+    ["23c image (accept=image/*):", fileInput("23c", { accept: "image/*" })],
+  ] as const) {
+    const row = document.createElement("div");
+    row.className = "row";
+    const l = document.createElement("span");
+    l.textContent = label;
+    row.append(l, input);
+    c23.el.append(row);
+  }
+  const drop = document.createElement("div");
+  drop.className = "dropzone";
+  drop.textContent = "23d (Mac): drag a file from Finder and drop it here";
+  drop.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    drop.classList.add("over");
+  });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    void M.dropped(e);
+  });
+  c23.el.append(drop);
+  const c24 = card("24. Playback", "Press 24a and mark; then press 24b, wait 3 s for the tone, and mark.", [
+    ["24a. Play tone now", () => M.playTone(false)],
+    ["24a: heard", () => M.playbackMark(false, true)],
+    ["24a: not heard", () => M.playbackMark(false, false)],
+    ["24b. Play tone 3 s after this tap", () => M.playTone(true)],
+    ["24b: heard", () => M.playbackMark(true, true)],
+    ["24b: not heard", () => M.playbackMark(true, false)],
+  ]);
+  const c25 = card("25. Clipboard", "Press each button once (iPhone may show a Paste button for 25a: tap it).", [
+    ["25a. writeText + readText", () => M.clipText()],
+    ["25b. Write PNG", () => M.clipPng()],
+    ["25c. execCommand copy", () => M.clipExec()],
+  ]);
+  const c26 = card("26. Screen wake lock", "Press once.", [["Request wake lock", () => M.wakeLock()]]);
+  root.append(...[mode, c6, c9, c11, c11b, c15, c15c, c15d, c15e, c18, c19, c20, c21, c22, c23, c24, c25, c26].map((c) => c.el));
 
   function markPushText(verdict: string): void {
     const text = seen.value.trim().slice(0, 200);
@@ -296,7 +409,6 @@ async function runAll(): Promise<void> {
 
 async function start(): Promise<void> {
   renderResults();
-  buildInteractive();
   const loadError = await loadState();
   try {
     status = await shellStatus();
@@ -316,6 +428,13 @@ async function start(): Promise<void> {
     $("connect-status").textContent = `Stored origin ${status.stored} was granted again at launch.`;
   }
   T.ctx.granted = status?.granted ?? [];
+  M.shell.handlers = status?.handlers ?? false;
+  M.shell.os = status?.os ?? "";
+  buildInteractive();
+  M.initPlayback();
+  M.markDropIosNa();
+  // A file dropped outside the drop zone must not navigate the app away.
+  for (const type of ["dragover", "drop"]) document.addEventListener(type, (e) => e.preventDefault());
   const off = location.origin !== "tauri://localhost" ? ` WARNING: page origin is ${location.origin}, not tauri://localhost; use the --no-dev-server commands from the README.` : "";
   $("where").textContent = `Launch #${state.launchCount} · ${status?.os ?? "?"} · page ${location.origin}${off}${loadError ? ` · ${loadError}` : ""}`;
 
@@ -387,6 +506,7 @@ async function start(): Promise<void> {
     state.pushTaps = [];
     state.downloads = {};
     state.pushText = undefined;
+    state.parts = {};
     state.test9 = undefined;
     state.launchCount = 1;
     void saveState();

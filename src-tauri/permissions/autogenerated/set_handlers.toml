@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-handlers"
+description = "Enables the set_handlers command without any pre-configured scope."
+commands.allow = ["set_handlers"]
+
+[[permission]]
+identifier = "deny-set-handlers"
+description = "Denies the set_handlers command without any pre-configured scope."
+commands.deny = ["set_handlers"]

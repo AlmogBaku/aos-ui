@@ -146,3 +146,15 @@ textarea {
 code {
   font: 0.85rem ui-monospace, monospace;
 }
+
+.dropzone {
+  border: 2px dashed #8888;
+  border-radius: 8px;
+  padding: 1.2rem;
+  margin-top: 0.5rem;
+  text-align: center;
+}
+
+.dropzone.over {
+  border-color: #2563eb;
+}

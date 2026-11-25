@@ -8,7 +8,11 @@
 //! - the page never gets the websocket plugin's `connect` permission; the
 //!   `socket_*` commands below are the only way it opens a socket, and they dial
 //!   only `wss://<stored host:port>/...`.
+//!
+//! `native.rs` holds the fix-path pieces (download handler, media permission
+//! handler, native save); see the comment there for the shell mode.
 
+mod native;
 mod origin;
 
 use std::{
@@ -69,6 +73,8 @@ struct ShellStatus {
     identifier: String,
     config_dir: Option<String>,
     process_started_ms: u64,
+    /// Whether this process runs with the webview handlers (11b, 15d).
+    handlers: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -148,7 +154,11 @@ fn grant_for_this_run<R: Runtime>(
 }
 
 #[tauri::command]
-fn shell_status<R: Runtime>(app: AppHandle<R>, shell: State<'_, Shell>) -> ShellStatus {
+fn shell_status<R: Runtime>(
+    app: AppHandle<R>,
+    shell: State<'_, Shell>,
+    mode: State<'_, native::HandlerMode>,
+) -> ShellStatus {
     ShellStatus {
         stored: shell.stored.lock().ok().and_then(|s| s.clone()),
         granted: shell.granted.lock().map(|g| g.clone()).unwrap_or_default(),
@@ -159,6 +169,7 @@ fn shell_status<R: Runtime>(app: AppHandle<R>, shell: State<'_, Shell>) -> Shell
         identifier: app.config().identifier.clone(),
         config_dir: config_dir(&app).ok().map(|p| p.display().to_string()),
         process_started_ms: PROCESS_STARTED_MS.get().copied().unwrap_or_default(),
+        handlers: mode.0,
     }
 }
 
@@ -304,8 +315,34 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notifications::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .manage(native::HandlerLog::default())
         .setup(|app| {
             restore_stored_origin(app.handle());
+            // The main window has `"create": false` in tauri.conf.json and is
+            // built here, so the webview handlers can be attached or not.
+            let handlers = native::handlers_enabled(app.handle());
+            app.manage(native::HandlerMode(handlers));
+            let config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|w| w.label == MAIN_WINDOW)
+                .cloned()
+                .ok_or("tauri.conf.json has no main window")?;
+            let mut window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+            if handlers {
+                let for_downloads = app.handle().clone();
+                let for_permissions = app.handle().clone();
+                window = window
+                    .on_download(move |_webview, event| native::on_download(&for_downloads, event))
+                    .on_permission_request(move |_webview, kind| {
+                        native::on_permission(&for_permissions, kind)
+                    });
+            }
+            window.build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -317,6 +354,9 @@ pub fn run() {
             socket_close,
             state_load,
             state_save,
+            native::set_handlers,
+            native::shell_log,
+            native::save_native,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the probe");

@@ -5,6 +5,10 @@
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>The probe records two seconds of audio to measure the recorder in this app. Nothing is uploaded.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>The probe checks whether the photo picker of a file input can take a picture. Nothing is uploaded except to your own listener.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>The probe checks whether a picked photo can be read and sent to your own listener.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>CFBundleDevelopmentRegion</key>

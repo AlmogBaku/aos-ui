@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-native"
+description = "Enables the save_native command without any pre-configured scope."
+commands.allow = ["save_native"]
+
+[[permission]]
+identifier = "deny-save-native"
+description = "Denies the save_native command without any pre-configured scope."
+commands.deny = ["save_native"]

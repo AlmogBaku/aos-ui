@@ -13,6 +13,9 @@ fn main() {
             "socket_close",
             "state_load",
             "state_save",
+            "set_handlers",
+            "shell_log",
+            "save_native",
         ]),
     ))
     .expect("tauri-build failed");

@@ -12,6 +12,7 @@ export interface ShellStatus {
   identifier: string;
   configDir: string | null;
   processStartedMs: number;
+  handlers: boolean;
 }
 
 export type SocketEvent =
